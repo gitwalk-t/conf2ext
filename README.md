@@ -1,7 +1,9 @@
 # Конвертер файлов 1С в *.cfe
 
+[![Stars](https://img.shields.io/github/stars/firstBitSportivnaya/files-converter.svg?label=Github%20%E2%98%85&a)](https://github.com/firstBitSportivnaya/files-converter/stargazers)
 [![GitHub issues](https://img.shields.io/github/issues-raw/firstBitSportivnaya/files-converter?style=badge)](https://github.com/firstBitSportivnaya/files-converter/issues)
 [![License](https://img.shields.io/github/license/firstBitSportivnaya/files-converter?style=badge)](https://github.com/firstBitSportivnaya/files-converter/blob/main/LICENSE)
+[![OpenYellow](https://img.shields.io/endpoint?url=https://openyellow.org/data/badges/4/802046415.json)](https://openyellow.org/grid?data=top&repo=802046415)
 
 ## Обзор
 
