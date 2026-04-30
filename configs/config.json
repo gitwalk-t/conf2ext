@@ -1,8 +1,60 @@
 {
-    "platform_version": "8.3.23",
-    "extension": "ПроектнаяБиблиотекаПодсистем",
-    "prefix": "пбп_",
-    "input_path": "C:/path/to/source",
-    "output_path": "C:/path/to/output",
+    "platform_version": "8.3.27",
+    "keep_xml_dump": true,
+    "stop_after_xml_dump": true,
+    "enable_form_validation": false,
+    "AdditionalProcessing": {
+        "Use_MetaDataFile": true,
+        "Use_упо_SearchResult": false
+    },
+    "extension": "УправлениеПроектами",
+    "prefix": "упо_",
+    "native_prefixes": [
+        "упо_",
+        "слк",
+        "упф",
+        "pm"
+    ],
+    "excluded_subsystems": [
+        "упо_УправлениеПроектамиPM.РаспределениеЗаработнойПлаты",
+        "упо_УправлениеПроектамиPM.Интеграция.ИнтеграцияERP"
+    ],
+    "excluded_objects": [
+        "EventSubscription.упо_ОбъектСинхронизацииПередЗаписью"      
+    ],
+    "included_Native_objects": [
+        "Catalog.Партнеры",
+        "Catalog.УпаковкиЕдиницыИзмерения",
+        "Catalog.НаборыУпаковок",
+        "Catalog.ВидыНоменклатуры",
+        "Catalog.ПравилаПолученияФактаПоСтатьямБюджетов",
+        "ChartOfCharacteristicTypes.СтатьиДоходов",
+        "ChartOfCharacteristicTypes.СтатьиРасходов",
+        "StyleItem.ОплатаСервисаБудущиеПодпискиЦвет",
+        "CommonPicture.Элемент",
+        "CommonPicture.Информация33",
+        "CommonPicture.Информация34",
+        "CommonModule.упо_ИнтеграцияERP",
+        "CommonModule.упо_ИнтеграцияERPКлиентСервер"
+    ],
+    "included_AdoptedStub_objects": [
+        "CommandGroup.Информация"
+
+    ],
+    "forbidden_AdoptedStub_objects": [
+        "InformationRegister.ОтражениеДокументовВМеждународномУчете",
+        "DefinedType.БизнесПроцессОбъект",
+        "CommonAttribute.ОбластьДанныхВспомогательныеДанные",
+        "CommonAttribute.ОбластьДанныхОсновныеДанные",
+        "CommonAttribute.упо_ДатаСоздания",
+        "CommonAttribute.упо_СлужебнаяГруппаОтветственные",
+        "CommonAttribute.упо_СлужебнаяГруппаПолномочия",
+        "CommonAttribute.упо_СлужебнаяГруппаПроверкаНаличияПолномочий",
+        "CommonTemplate.ИзображенияМетаданных",
+        "Enum.ХозяйственныеОперации",
+        "DataProcessor.упо_ОграничениеДоступаПоОбъектамPM"
+    ],
+    "input_path": "D:/Codex/files-converter_ver2/input",
+    "output_path": "D:/Codex/files-converter_ver2/output/demo.cfe",
     "conversion_type": "srcConvert"
-    }
+}

@@ -1,5 +1,39 @@
 {
-    "platform_version": "8.3.23",
+    "platform_version": "8.3.27",
+    "keep_xml_dump": false,
+    "stop_after_xml_dump": false,
+    "enable_form_validation": true,
+    "AdditionalProcessing": {
+        "Use_MetaDataFile": false,
+        "Use_упо_SearchResult": false
+    },
+    "native_prefixes": [
+        "упо_",
+        "слк",
+        "упф"
+    ],
+    "excluded_subsystems": [
+        "упо_УправлениеПроектамиPM.РаспределениеЗаработнойПлаты",
+        "упо_УправлениеПроектамиPM.Интеграция.ИнтеграцияERP"
+    ],
+    "excluded_objects": [
+        "Обработка.упо_СопоставлениеФинансовыхСтатейСтатьямБюджетов",
+        "Подписка.упо_ОбработкаПроведенияДокументыERP",
+        "Подписка.упо_ОбработкаЗаполненияДокументыERP",
+        "упо_ОбъектСинхронизацииПередЗаписью",
+        "ОбщийРеквизит.ОбластьДанныхВспомогательныеДанные",
+        "ОбщийРеквизит.ОбластьДанныхОсновныеДанные"
+    ],
+    "included_Native_objects": [],
+    "included_AdoptedStub_objects": [
+        "CommandGroup.Информация",
+        "Справочник.Номенклатура",
+        "Справочник.НаправленияДеятельности"
+    ],
+    "forbidden_AdoptedStub_objects": [
+        "InformationRegister.ОтражениеДокументовВМеждународномУчете",
+        "Catalog.ИсторияПроверкиИКорректировкиДанных"
+    ],
     "xml_file_changes": [
         {
             "file_name": "Configuration.xml",
@@ -88,11 +122,12 @@
                 },
                 {
                     "element_name": "CompatibilityMode",
-                    "operation": "delete"
+                    "value": "Version8_3_27",
+                    "operation": "modify"
                 },
                 {
                     "element_name": "ConfigurationExtensionCompatibilityMode",
-                    "value": "Version8_3_21",
+                    "value": "Version8_3_27",
                     "operation": "modify"
                 }
             ]

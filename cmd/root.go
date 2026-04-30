@@ -7,7 +7,8 @@ import (
 	"os"
 
 	"github.com/firstBitSportivnaya/files-converter/internal/config"
-	"github.com/firstBitSportivnaya/files-converter/internal/converter"
+	publicconfig "github.com/firstBitSportivnaya/files-converter/pkg/config"
+	publicconverter "github.com/firstBitSportivnaya/files-converter/pkg/converter"
 	"github.com/spf13/cobra"
 )
 
@@ -42,11 +43,15 @@ func init() {
 }
 
 func runMain(cmd *cobra.Command, args []string) {
-	defaultCfg := config.LoadDefaultConfig()
+	effectiveConfigPath := configPath
+	if effectiveConfigPath == "" {
+		effectiveConfigPath = "./configs/config.json"
+	}
 
-	cfg := config.LoadConfig(configPath)
-
-	mergeConfigs(defaultCfg, cfg)
+	defaultCfg, err := publicconfig.Load(effectiveConfigPath)
+	if err != nil {
+		log.Fatalf("не удалось загрузить конфигурацию: %v", err)
+	}
 
 	changeXmlFiles(defaultCfg)
 
@@ -73,29 +78,20 @@ func setNamePrefix(file *config.FileOperation, prefix string) {
 	file.ElementOperations = append(file.ElementOperations, element)
 }
 
-func mergeConfigs(defaultCfg, cfg *config.Configuration) {
-	if cfg.PlatformVersion != "" {
-		defaultCfg.PlatformVersion = cfg.PlatformVersion
-	}
-
-	defaultCfg.Extension = cfg.Extension
-	defaultCfg.Prefix = cfg.Prefix
-	defaultCfg.InputPath = cfg.InputPath
-	defaultCfg.OutputPath = cfg.OutputPath
-	defaultCfg.ConversionType = cfg.ConversionType
-
-	defaultCfg.XMLFiles = append(defaultCfg.XMLFiles, cfg.XMLFiles...)
-}
-
 func runConvert(cfg *config.Configuration) {
 	defer pressAnyKeyToExit()
 
-	if err := converter.RunConversion(cfg); err != nil {
+	if err := publicconverter.RunConversion(cfg); err != nil {
 		log.Fatalf("не удалось конвертировать файлы: %v", err)
 	}
 }
 
 func pressAnyKeyToExit() {
+	info, err := os.Stdin.Stat()
+	if err != nil || (info.Mode()&os.ModeCharDevice) == 0 {
+		return
+	}
+
 	fmt.Println("Press any key to exit...")
 	bufio.NewReader(os.Stdin).ReadBytes('\n')
 }

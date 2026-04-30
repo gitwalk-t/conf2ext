@@ -1,118 +1,78 @@
-# Конвертер файлов 1С в *.cfe
+# files-converter
 
-[![Stars](https://img.shields.io/github/stars/firstBitSportivnaya/files-converter.svg?label=Github%20%E2%98%85&a)](https://github.com/firstBitSportivnaya/files-converter/stargazers)
-[![GitHub issues](https://img.shields.io/github/issues-raw/firstBitSportivnaya/files-converter?style=badge)](https://github.com/firstBitSportivnaya/files-converter/issues)
-[![License](https://img.shields.io/github/license/firstBitSportivnaya/files-converter?style=badge)](https://github.com/firstBitSportivnaya/files-converter/blob/main/LICENSE)
-[![OpenYellow](https://img.shields.io/endpoint?url=https://openyellow.org/data/badges/4/802046415.json)](https://openyellow.org/grid?data=top&repo=802046415)
+Go CLI-инструмент для конвертации исходников конфигурации 1С или файла `*.cf` в пакет расширения `*.cfe`. В этой рабочей копии основной активный сценарий — `cfConvert`: загрузить `1Cv8.cf`, выгрузить метаданные в XML, переписать XML по правилам расширения и собрать `*.cfe`.
 
-## Обзор
+## Запуск
 
-**files-converter** - это инструмент для конвертации исходных файлов конфигурации или *.cf файла в *.cfe файл и обратно.
+Основная CLI-точка входа:
 
-## Функциональность
-
-- Реализована конвертация из *.cf файла в *.cfe файл.
-- Реализована конвертация из исходных файлов (конфигурация) в *.cfe файл.
-- Не реализована конвертация из *.cfe файла в *.cf файл.
-- Не реализована конвертация из исходных файлов (расширение) в *.cf файл.
-
-## Использование файла настроек
-
-**files-converter** поддерживает файл настроек по умолчанию, который расположен в `$HOME/.files-converter/pkg/config/default.json`. Файл содержит настройки необходимые для конвертации в расширение (*.cfe).
-Чтобы использовать свой конфигурационный файл, укажите путь к файлу с помощью флага `--config`. Если флаг не задан, приложение попытается использовать путь из переменной окружения **`CONFIG_PATH`**. Если путь не указан ни во флаге, ни в переменной окружения, программа завершится с ошибкой.
-
-**Пример использования:**
-
-1. Укажите путь с помощью флага:
-```shell
-files-converter --config="pathToConfig/config.json"
+```powershell
+go run . --config .\configs\config.json
 ```
 
-2. Если путь не указан во флаге, задайте переменную окружения:
-```shell
-export CONFIG_PATH="pathToConfig/config.json"
+Упрощенный пример без паузы на TTY:
+
+```powershell
+go run .\cmd\app\main.go
 ```
 
-### Параметры конфигурационного файла
+Сборка:
 
-У проекта есть два файла настроек:
-- default.json - содержит основные настройки для автоматической конвертации. Пример использования: [default.json](pkg/config/default.json)
-- config.json  - пользовательский файл, где можно указать такие параметры, как пути, префикс, имя конфигурации, а также дополнительные XML-файлы для изменения определенных элементов, если требуется что-то дополнительно настроить поверх стандартной конвертации. Пример использования: [PSSL/cfe-converter-config.json](https://github.com/firstBitSportivnaya/PSSL/blob/develop/cfe-converter-config.json)
-
-#### Обязательные
-
-- **`platform_version`**: *(строка)* - версия платформы. (Обязательный параметр для `conversion_type`: `"cfConvert"`)
-  - **Пример**: `"platform_version": "8.3.23"`
-
-- **`extension`**: *(строка)* - имя расширения.
-  - **Example**: `"extension": "PSSL"`
-
-- **`prefix`**: *(строка)* - префикс, который используется для имени объектов метаданных.
-  - **Example**: `"prefix": "пбп_"`
-
-- **`input_path`**: *(строка)* - путь к каталогу или файлу для конвертации.
-  - **Example**: `"input_path": "C:/path/to/input"`
-
-- **`output_path`**: *(строка)* - путь, по которому будут сохранены преобразованные файлы.
-  - **Example**: `"output_path": "C:/path/to/output"`
-
-- **`conversion_type`**: *(строка)* - тип выполняемой конвертации. Поддерживаемые значения:
-  - `"srcConvert"` - конвертация исходных файлов в *.cfe.
-  - `"cfConvert"`  - конвертация конфигурационного файла *.cf в *.cfe.
-  - **Example**: `"conversion_type": "srcConvert"`
-
-#### Необязательные
-
-- **`xml_files`**: *(массив)* - список файлов XML, в которые необходимо внести изменения. Это полезно, если требуется автоматически изменить конкретные элементы в XML-файлах, соответствующих настройкам конфигурации, без ручного редактирования. Например, можно добавить, изменить или удалить элементы, что делает процесс конвертации гибким и подстраиваемым под нужды проекта. Пример использования: [xml_files](pkg/config/default.json#3)
-  - **`file_name`**: *(строка)* - имя XML-файла который нужно изменить.
-    - **Example**: `"file_name": "example.xml"`
-  - **`element_operations`**: *(массив)* - список операций, которые необходимо выполнить над элементами в XML-файле.
-    - **`element_name`**: *(строка)* - имя элемента XML, который нужно изменить.
-      - **Example**: `"element_name": "Global"`
-    - **`operation`**: *(строка)* - тип операции. Поддерживаемые значения: 
-      - `"add"`    - добавление элемента.
-      - `"delete"` - удаление элемента.
-      - `"modify"` - изменение элемента.
-      - **Example**: `"operation": "modify"`
-    - **`value`**: *(строка, опционально)* - новое значение, которое нужно установить для элемента. (используется с операциями: `add` и `modify`).
-      - **Example**: `"value": "false"`
-
-## Автоматическое определение версии платформы
-
-Для типа конвертации (`conversion_type: "srcConvert"`) будет предпринята попытка определить версию платформы на основе **версии формата выгрузки**, указанной в файле `"Configuration.xml"`. Например для версии формата выгрузки `2.16` будет установлена версия платформы `8.3.23`. Подробнее см. файл соответствия [export_format_versions.json](pkg/export_format/export_format_versions.json). 
-
-## Использование
-
-Инструмент можно установить, запустив:
-
-```shell
-go install github.com/firstBitSportivnaya/files-converter@latest
+```powershell
+go build ./...
 ```
 
-**Примечание:** Для использования этой программы требуется соответствующая версия платформы (8.3.23).
+Тесты:
 
-## Справочная информация:
-
-Для получения информации о доступных командах и параметрах:
-
-```shell
-files-converter --help
+```powershell
+go test ./...
 ```
 
-## Примеры
+Примечания:
+- в [go.mod](D:\Codex\files-converter_ver2\go.mod) зафиксирован Go `1.23` и `toolchain go1.23.12`
+- для реальной конвертации нужна локально доступная платформа 1С нужной версии
+- если `--config` не передан, CLI по умолчанию берет `./configs/config.json`
 
-Использование конфигурационного файла:
+## Основные модули
 
-```shell
-files-converter --config="path/config.json"
-```
+- [main.go](D:\Codex\files-converter_ver2\main.go): корневой исполняемый файл
+- [cmd/root.go](D:\Codex\files-converter_ver2\cmd\root.go): Cobra CLI, загрузка конфига, пауза в интерактивном терминале
+- [cmd/app/main.go](D:\Codex\files-converter_ver2\cmd\app\main.go): минимальный пример запуска без интерактивной паузы
+- [pkg/config/config.go](D:\Codex\files-converter_ver2\pkg\config\config.go): публичная обертка загрузки конфига
+- [pkg/converter/converter.go](D:\Codex\files-converter_ver2\pkg\converter\converter.go): публичная обертка запуска конвертации
+- [internal/converter/converter.go](D:\Codex\files-converter_ver2\internal\converter\converter.go): оркестрация конвертации, временные каталоги, вызовы 1С
+- [internal/config](D:\Codex\files-converter_ver2\internal\config): схема конфига, значения по умолчанию, нормализация путей, объединение настроек
+- [internal/utils/xmlutil/change.go](D:\Codex\files-converter_ver2\internal\utils\xmlutil\change.go): движок переписывания XML и текущая горячая точка
+- [configs/config.json](D:\Codex\files-converter_ver2\configs\config.json): текущий рабочий локальный конфиг
 
-Если флаг --config не указан, программа использует конфигурационный файл по умолчанию, расположенный в $HOME/.files-converter/configs/config.json:
+## Обязательные документы для агента
 
-```shell
-files-converter
-```
+1. [AGENTS.md](D:\Codex\files-converter_ver2\AGENTS.md)
+2. [.codex/context.md](D:\Codex\files-converter_ver2\.codex\context.md)
+3. [.codex/handoff.md](D:\Codex\files-converter_ver2\.codex\handoff.md)
+4. [docs/architecture.md](D:\Codex\files-converter_ver2\docs\architecture.md)
+5. [docs/conventions.md](D:\Codex\files-converter_ver2\docs\conventions.md)
+6. [docs/debugging.md](D:\Codex\files-converter_ver2\docs\debugging.md)
 
-## Лицензия
+## Переменные окружения
 
-Этот проект лицензирован по лицензии MIT. Подробнее см. файл [LICENSE](LICENSE).
+- `CONFIG_PATH`: запасной путь к конфигу, если `--config` не передан
+- `FILES_CONVERTER_KEEP_TMP=1`: не удалять временную ИБ и выгрузку в `output/_tmp`
+- `FILES_CONVERTER_SNAPSHOT_BEFORE_CHANGE=1`: сохранить снимок XML-выгрузки до `ChangeFiles`
+- `FILES_CONVERTER_DEBUG_DECISIONS=1`: включить выборочный `decision debug` в XML-логике
+
+## Полезный флаг конфига
+
+- `keep_xml_dump`: если `true`, временная XML-выгрузка и временная ИБ не очищаются после прогона
+- при `keep_xml_dump=true` копия XML-дампа сохраняется в `output/_log/xml_dumps/<v8_src*>`
+- `stop_after_xml_dump`: если `true`, программа останавливается после переписывания XML и не переходит к сборке `.cfe`
+- `enable_form_validation`: если `true`, после переписывания XML выполняется проверка form-driven dynamic list contracts; если `false`, этот этап пропускается
+- `AdditionalProcessing.Use_MetaDataFile`: если `true`, `ChangeFiles` читает общий макет `упо_MetaDataFile` и добавляет режим `AdoptedStubMetaData` для перечисленных там объектов
+- `AdditionalProcessing.Use_упо_SearchResult`: зарезервированный флаг; пока не влияет на поведение
+
+## Что важно про текущее состояние репозитория
+
+- HTTP/API слоя в проекте нет
+- CI и линтер-конфига в репозитории нет
+- `go test ./...` сейчас по сути проверяет только сборку, потому что зафиксированных `*_test.go` нет
+- основное место для локальных отладочных логов — `output/_log`; в корне еще лежат старые `run-*.log`

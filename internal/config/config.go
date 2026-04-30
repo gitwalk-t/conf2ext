@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -41,44 +42,64 @@ func (info *DumpInfo) SetConfigName(name string) {
 	}
 }
 
-func LoadConfig(configPath string) *Configuration {
+func LoadConfigE(configPath string) (*Configuration, error) {
 	if configPath == "" {
 		configPath = os.Getenv("CONFIG_PATH")
 	}
 
 	if configPath == "" {
-		panic("не указан путь конфигурации")
+		return nil, errors.New("не указан путь конфигурации")
 	}
 
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		panic("конфигурационный файл не существует: " + err.Error())
+		return nil, fmt.Errorf("конфигурационный файл не существует: %w", err)
 	}
 
 	var cfg Configuration
 
 	if err := cleanenv.ReadConfig(configPath, &cfg); err != nil {
-		panic("ошибка чтения конфигурационного файла: " + err.Error())
+		return nil, fmt.Errorf("ошибка чтения конфигурационного файла: %w", err)
 	}
+
+	normalizeLegacyConfigFields(&cfg)
 
 	if err := normalizeConfigPaths(&cfg); err != nil {
-		panic("ошибка в обработке путей: " + err.Error())
+		return nil, fmt.Errorf("ошибка в обработке путей: %w", err)
 	}
 
-	return &cfg
+	return &cfg, nil
 }
 
-func LoadDefaultConfig() *Configuration {
+func LoadConfig(configPath string) *Configuration {
+	cfg, err := LoadConfigE(configPath)
+	if err != nil {
+		panic(err.Error())
+	}
+	return cfg
+}
+
+func LoadDefaultConfigE() (*Configuration, error) {
 	var cfg Configuration
 
 	if err := json.Unmarshal(defaultConfig, &cfg); err != nil {
-		panic("не удалось прочитать конфигурацию по умолчанию: " + err.Error())
+		return nil, fmt.Errorf("не удалось прочитать конфигурацию по умолчанию: %w", err)
 	}
+
+	normalizeLegacyConfigFields(&cfg)
 
 	if err := normalizeConfigPaths(&cfg); err != nil {
-		panic("ошибка в обработке путей: " + err.Error())
+		return nil, fmt.Errorf("ошибка в обработке путей: %w", err)
 	}
 
-	return &cfg
+	return &cfg, nil
+}
+
+func LoadDefaultConfig() *Configuration {
+	cfg, err := LoadDefaultConfigE()
+	if err != nil {
+		panic(err.Error())
+	}
+	return cfg
 }
 
 func NormalizePath(input string) (string, error) {
@@ -103,6 +124,87 @@ func NewElementOperation(name string, value string, operation OperationType) *El
 		ElementName: name,
 		Value:       value,
 		Operation:   operation,
+	}
+}
+
+func MergeConfigurations(defaultCfg, cfg *Configuration) {
+	if defaultCfg == nil || cfg == nil {
+		return
+	}
+
+	if cfg.PlatformVersion != "" {
+		defaultCfg.PlatformVersion = cfg.PlatformVersion
+	}
+
+	if cfg.Extension != "" {
+		defaultCfg.Extension = cfg.Extension
+	}
+
+	if cfg.Prefix != "" {
+		defaultCfg.Prefix = cfg.Prefix
+	}
+
+	if len(cfg.NativePrefixes) > 0 {
+		defaultCfg.NativePrefixes = append([]string{}, cfg.NativePrefixes...)
+	}
+
+	if len(cfg.IncludedNativeObjects) > 0 {
+		defaultCfg.IncludedNativeObjects = append([]string{}, cfg.IncludedNativeObjects...)
+	}
+
+	if len(cfg.IncludedAdoptedStubObjects) > 0 {
+		defaultCfg.IncludedAdoptedStubObjects = append([]string{}, cfg.IncludedAdoptedStubObjects...)
+	}
+
+	if len(cfg.ForbiddenAdoptedStubObjects) > 0 {
+		defaultCfg.ForbiddenAdoptedStubObjects = append([]string{}, cfg.ForbiddenAdoptedStubObjects...)
+	}
+
+	if cfg.EnableFormValidation != nil {
+		defaultCfg.EnableFormValidation = cfg.EnableFormValidation
+	}
+
+	if cfg.InputPath != "" {
+		defaultCfg.InputPath = cfg.InputPath
+	}
+
+	if cfg.OutputPath != "" {
+		defaultCfg.OutputPath = cfg.OutputPath
+	}
+
+	if cfg.ConversionType != "" {
+		defaultCfg.ConversionType = cfg.ConversionType
+	}
+
+	defaultCfg.KeepXMLDump = cfg.KeepXMLDump
+	defaultCfg.StopAfterXMLDump = cfg.StopAfterXMLDump
+	defaultCfg.AdditionalProcessing = cfg.AdditionalProcessing
+
+	if len(cfg.AdditionalAdoptedObjects) > 0 {
+		defaultCfg.IncludedAdoptedStubObjects = append(defaultCfg.IncludedAdoptedStubObjects, cfg.AdditionalAdoptedObjects...)
+		defaultCfg.AdditionalAdoptedObjects = append(defaultCfg.AdditionalAdoptedObjects, cfg.AdditionalAdoptedObjects...)
+	}
+
+	if len(cfg.IncludedObjects) > 0 {
+		defaultCfg.IncludedAdoptedStubObjects = append(defaultCfg.IncludedAdoptedStubObjects, cfg.IncludedObjects...)
+	}
+
+	defaultCfg.XMLFiles = append(defaultCfg.XMLFiles, cfg.XMLFiles...)
+}
+
+func normalizeLegacyConfigFields(cfg *Configuration) {
+	if cfg == nil {
+		return
+	}
+
+	if len(cfg.IncludedObjects) > 0 {
+		cfg.IncludedAdoptedStubObjects = append(cfg.IncludedAdoptedStubObjects, cfg.IncludedObjects...)
+		cfg.IncludedObjects = nil
+	}
+
+	if len(cfg.AdditionalAdoptedObjects) > 0 {
+		cfg.IncludedAdoptedStubObjects = append(cfg.IncludedAdoptedStubObjects, cfg.AdditionalAdoptedObjects...)
+		cfg.AdditionalAdoptedObjects = nil
 	}
 }
 

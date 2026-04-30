@@ -1,0 +1,34 @@
+{
+    "platform_version": "8.3.27",
+    "extension": "demo",
+    "prefix": "демо_",
+    "native_prefixes": [
+        "упо_",
+        "слк",
+        "упф"
+    ],
+    "excluded_subsystems": [
+        "упо_УправлениеПроектамиPM.РаспределениеЗаработнойПлаты",
+        "упо_УправлениеПроектамиPM.Интеграция.ИнтеграцияERP"
+    ],
+    "excluded_objects": [
+        "Обработка.упо_СопоставлениеФинансовыхСтатейСтатьямБюджетов",
+        "Подписка.упо_ОбработкаПроведенияДокументыERP",
+        "Подписка.упо_ОбработкаЗаполненияДокументыERP",
+        "упо_ОбъектСинхронизацииПередЗаписью",
+        "ОбщийРеквизит.ОбластьДанныхВспомогательныеДанные",
+        "ОбщийРеквизит.ОбластьДанныхОсновныеДанные"
+    ],
+    "included_Native_objects": [],
+    "included_AdoptedStub_objects": [
+        "Справочник.Номенклатура",
+        "Справочник.НаправленияДеятельности"
+    ],
+    "forbidden_AdoptedStub_objects": [
+        "InformationRegister.ОтражениеДокументовВМеждународномУчете",
+        "Catalog.ИсторияПроверкиИКорректировкиДанных"
+    ],
+    "input_path": "D:/Codex/files-converter_ver2/input/1Cv8.cf",
+    "output_path": "D:/Codex/files-converter_ver2/output/demo.cfe",
+    "conversion_type": "cfConvert"
+}
