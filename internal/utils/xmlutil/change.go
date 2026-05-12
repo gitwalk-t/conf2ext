@@ -202,8 +202,9 @@ type subsystemState struct {
 }
 
 type formDynamicListContract struct {
-	RequiredFields map[string]struct{}
-	QueryAliases   map[string]struct{}
+	RequiredFields   map[string]struct{}
+	QueryAliases     map[string]struct{}
+	RequiredCommands map[string]struct{}
 }
 
 type adoptedStubMetaDataRule struct {
@@ -286,6 +287,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 	promoteRegisterDocumentOwnersToNative(contexts, decisions, cfg, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects, collectRegisterDocumentReferences(contexts))
 	applyFormDynamicListContracts(decisions, formDynamicListContracts, forbiddenAdoptedStubObjects)
 	applyAdoptedStubMetaDataRules(decisions, adoptedStubMetaDataRules, excludedObjects, forbiddenAdoptedStubObjects)
+	retainedOwnerCommands := collectRetainedOwnerCommands(contexts, decisions)
 
 	log.Printf("xml step: collect cleanup sets")
 	excludedRefs := collectExcludedReferences(decisions)
@@ -379,6 +381,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 			changed = cleanupNonNativeDynamicListMainTables(ctx.Doc, decisions) || changed
 			changed = normalizeManualQueryWithoutMainTable(ctx.Doc) || changed
 			changed = cleanupMissingFormConstantsSetReferences(ctx.Doc, contexts, decisions) || changed
+			changed = cleanupMissingFormCommonAttributeDynamicListFields(ctx.Doc, contexts, decisions) || changed
 			changed = cleanupMissingFormCommandReferences(ctx.Doc, contexts) || changed
 		}
 
@@ -391,15 +394,16 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 			ctx.OwnerKind != "DefinedType" && ctx.OwnerKind != "EventSubscription" {
 			changed = cleanupAdoptedObjectFormReferences(ctx.Properties) || changed
 			contract, hasContract := formDynamicListContracts[ctx.OwnerKey]
+			retainedCommands := retainedOwnerCommands[ctx.OwnerKey]
 			rule, hasRule := adoptedStubMetaDataRules[ctx.OwnerKey]
 			if hasContract && hasRule {
-				changed = normalizeAdoptedStubExtFormComposition(ctx.Doc, mergeAdoptedStubMetaDataIntoFormContract(contract, rule)) || changed
+				changed = normalizeAdoptedStubExtFormComposition(ctx.Doc, mergeAdoptedStubMetaDataIntoFormContract(contract, rule), retainedCommands) || changed
 			} else if hasRule {
-				changed = normalizeAdoptedStubMetaDataComposition(ctx.Doc, ctx.OwnerKind, rule) || changed
+				changed = normalizeAdoptedStubMetaDataComposition(ctx.Doc, ctx.OwnerKind, rule, retainedCommands) || changed
 			} else if hasContract {
-				changed = normalizeAdoptedStubExtFormComposition(ctx.Doc, contract) || changed
+				changed = normalizeAdoptedStubExtFormComposition(ctx.Doc, contract, retainedCommands) || changed
 			} else {
-				changed = normalizeAdoptedObjectComposition(ctx.Doc, ctx.OwnerKind) || changed
+				changed = normalizeAdoptedObjectComposition(ctx.Doc, ctx.OwnerKind, retainedCommands) || changed
 			}
 		}
 
@@ -3045,6 +3049,145 @@ func shouldRemoveMissingFormConstantsSetReference(el *etree.Element, contexts []
 	return !topLevelMetadataIncluded("Constant."+constantName, contexts, decisions)
 }
 
+func cleanupMissingFormCommonAttributeDynamicListFields(doc *etree.Document, contexts []*FileProcessingContext, decisions map[string]objectDecision) bool {
+	root := doc.Root()
+	if root == nil {
+		return false
+	}
+
+	blockedByAttribute := collectMissingFormCommonAttributeDynamicListFields(root, contexts, decisions)
+	if len(blockedByAttribute) == 0 {
+		return false
+	}
+
+	changed := false
+	for _, attr := range root.FindElements(".//Attribute") {
+		attrName := strings.TrimSpace(attr.SelectAttrValue("name", ""))
+		blockedFields := blockedByAttribute[attrName]
+		if len(blockedFields) == 0 {
+			continue
+		}
+
+		for _, field := range append([]*etree.Element(nil), attr.FindElements(".//Field")...) {
+			if shouldRemoveDynamicListDeclaredField(field, blockedFields) {
+				if parent := field.Parent(); parent != nil {
+					parent.RemoveChild(field)
+					changed = true
+				}
+			}
+		}
+	}
+
+	var walk func(parent, grandparent *etree.Element)
+	walk = func(parent, grandparent *etree.Element) {
+		children := parent.ChildElements()
+		for i := len(children) - 1; i >= 0; i-- {
+			child := children[i]
+			if shouldRemoveMissingFormDynamicListFieldReference(child, blockedByAttribute) {
+				if grandparent != nil {
+					grandparent.RemoveChild(parent)
+				} else {
+					parent.RemoveChild(child)
+				}
+				changed = true
+				continue
+			}
+			walk(child, parent)
+		}
+	}
+
+	walk(root, nil)
+	return changed
+}
+
+func collectMissingFormCommonAttributeDynamicListFields(root *etree.Element, contexts []*FileProcessingContext, decisions map[string]objectDecision) map[string]map[string]struct{} {
+	result := make(map[string]map[string]struct{})
+	if root == nil {
+		return result
+	}
+
+	for _, attr := range root.FindElements(".//Attribute") {
+		if !isDynamicListAttribute(attr) {
+			continue
+		}
+
+		attrName := strings.TrimSpace(attr.SelectAttrValue("name", ""))
+		if attrName == "" {
+			continue
+		}
+
+		mainTable := strings.TrimSpace(textOfFirst(attr, ".//MainTable"))
+		if mainTable == "" {
+			continue
+		}
+		refs := metadataReferencesFromValue(mainTable)
+		if len(refs) == 0 {
+			continue
+		}
+
+		targetCtx := findTopLevelMetadataContextByOwnerKey(contexts, refs[0])
+		available := collectAvailableDynamicListFields(targetCtx)
+		requiredFields := collectDynamicListDeclaredFields(attr)
+		for field := range collectDynamicListAttributeFields(root, attrName) {
+			requiredFields[field] = struct{}{}
+		}
+		for field := range requiredFields {
+			if _, ok := available[field]; ok {
+				continue
+			}
+			if topLevelMetadataIncluded("CommonAttribute."+field, contexts, decisions) {
+				continue
+			}
+			if result[attrName] == nil {
+				result[attrName] = make(map[string]struct{})
+			}
+			result[attrName][field] = struct{}{}
+		}
+	}
+
+	return result
+}
+
+func shouldRemoveDynamicListDeclaredField(field *etree.Element, blockedFields map[string]struct{}) bool {
+	if field == nil || len(blockedFields) == 0 {
+		return false
+	}
+
+	for _, child := range field.ChildElements() {
+		tag := localName(child.Tag)
+		if !strings.EqualFold(tag, "dataPath") && !strings.EqualFold(tag, "field") {
+			continue
+		}
+		if _, blocked := blockedFields[strings.TrimSpace(child.Text())]; blocked {
+			return true
+		}
+	}
+
+	return false
+}
+
+func shouldRemoveMissingFormDynamicListFieldReference(el *etree.Element, blockedByAttribute map[string]map[string]struct{}) bool {
+	if el == nil || !strings.EqualFold(localName(el.Tag), "DataPath") {
+		return false
+	}
+
+	text := strings.TrimSpace(el.Text())
+	if text == "" {
+		return false
+	}
+
+	for attrName, blockedFields := range blockedByAttribute {
+		field, ok := extractDynamicListFieldName(text, attrName)
+		if !ok {
+			continue
+		}
+		_, blocked := blockedFields[field]
+		return blocked
+	}
+
+	return false
+}
+
 func cleanupNativeFormNonNativeReferences(doc *etree.Document, nonNativeKeys map[string]struct{}) bool {
 	root := doc.Root()
 	if root == nil || len(nonNativeKeys) == 0 {
@@ -4407,7 +4550,51 @@ func roleMetadataTargetExists(name string, contexts []*FileProcessingContext) bo
 		}
 	}
 
-	return metadataPathExistsInElement(target, parts[2:])
+	if metadataPathExistsInElement(target, parts[2:]) {
+		return true
+	}
+
+	return metadataPathExistsInFilesystem(ctx.Path, parts[2:])
+}
+
+func metadataPathExistsInFilesystem(topLevelPath string, parts []string) bool {
+	if topLevelPath == "" || len(parts) == 0 {
+		return false
+	}
+
+	objectDir := strings.TrimSuffix(topLevelPath, filepath.Ext(topLevelPath))
+	if objectDir == "" {
+		return false
+	}
+
+	switch {
+	case len(parts) == 2 && strings.EqualFold(parts[0], "Command"):
+		commandName := strings.TrimSpace(parts[1])
+		if commandName == "" {
+			return false
+		}
+		commandDir := filepath.Join(objectDir, "Commands", commandName)
+		if _, err := os.Stat(commandDir); err == nil {
+			return true
+		}
+		commandModule := filepath.Join(commandDir, "Ext", "CommandModule.bsl")
+		_, err := os.Stat(commandModule)
+		return err == nil
+	case len(parts) == 3 && strings.EqualFold(parts[0], "Command") && strings.EqualFold(parts[2], "CommandModule"):
+		commandName := strings.TrimSpace(parts[1])
+		if commandName == "" {
+			return false
+		}
+		commandModule := filepath.Join(objectDir, "Commands", commandName, "Ext", "CommandModule.bsl")
+		_, err := os.Stat(commandModule)
+		return err == nil
+	case len(parts) == 1 && strings.EqualFold(parts[0], "CommandModule"):
+		commandModule := filepath.Join(objectDir, "Ext", "CommandModule.bsl")
+		_, err := os.Stat(commandModule)
+		return err == nil
+	}
+
+	return false
 }
 
 func roleMetadataTargetExcluded(name string, decisions map[string]objectDecision) bool {
@@ -4745,7 +4932,7 @@ func normalizeTruncatedMetadataStub(doc *etree.Document, properties *etree.Eleme
 	return true
 }
 
-func normalizeAdoptedStubExtFormComposition(doc *etree.Document, contract formDynamicListContract) bool {
+func normalizeAdoptedStubExtFormComposition(doc *etree.Document, contract formDynamicListContract, retainedCommands map[string]struct{}) bool {
 	if doc == nil {
 		return false
 	}
@@ -4779,7 +4966,7 @@ func normalizeAdoptedStubExtFormComposition(doc *etree.Document, contract formDy
 		case "InternalInfo", "Properties":
 			continue
 		case "ChildObjects":
-			if normalizeFormStubChildObjects(el, allowedPaths, "") {
+			if normalizeFormStubChildObjects(el, allowedPaths, "", retainedCommands) {
 				changed = true
 			}
 			continue
@@ -4794,8 +4981,9 @@ func normalizeAdoptedStubExtFormComposition(doc *etree.Document, contract formDy
 
 func mergeAdoptedStubMetaDataIntoFormContract(contract formDynamicListContract, rule adoptedStubMetaDataRule) formDynamicListContract {
 	merged := formDynamicListContract{
-		RequiredFields: make(map[string]struct{}, len(contract.RequiredFields)+len(rule.NativeAttributes)),
-		QueryAliases:   make(map[string]struct{}, len(contract.QueryAliases)),
+		RequiredFields:   make(map[string]struct{}, len(contract.RequiredFields)+len(rule.NativeAttributes)),
+		QueryAliases:     make(map[string]struct{}, len(contract.QueryAliases)),
+		RequiredCommands: make(map[string]struct{}, len(contract.RequiredCommands)),
 	}
 
 	for field := range contract.RequiredFields {
@@ -4803,6 +4991,9 @@ func mergeAdoptedStubMetaDataIntoFormContract(contract formDynamicListContract, 
 	}
 	for alias := range contract.QueryAliases {
 		merged.QueryAliases[alias] = struct{}{}
+	}
+	for command := range contract.RequiredCommands {
+		merged.RequiredCommands[command] = struct{}{}
 	}
 
 	for name := range rule.NativeAttributes {
@@ -4981,7 +5172,7 @@ func collectStandardAttributeNames(target *etree.Element) map[string]struct{} {
 	return result
 }
 
-func normalizeFormStubChildObjects(childObjects *etree.Element, allowedPaths map[string]struct{}, parentPath string) bool {
+func normalizeFormStubChildObjects(childObjects *etree.Element, allowedPaths map[string]struct{}, parentPath string, retainedCommands map[string]struct{}) bool {
 	if childObjects == nil {
 		return false
 	}
@@ -4993,6 +5184,14 @@ func normalizeFormStubChildObjects(childObjects *etree.Element, allowedPaths map
 			continue
 		}
 		tag := localName(el.Tag)
+		if tag == "Command" {
+			if _, keep := retainedCommands[metadataChildName(el)]; keep {
+				continue
+			}
+			childObjects.RemoveChild(el)
+			changed = true
+			continue
+		}
 		if tag != "Attribute" && tag != "TabularSection" {
 			childObjects.RemoveChild(el)
 			changed = true
@@ -5014,7 +5213,7 @@ func normalizeFormStubChildObjects(childObjects *etree.Element, allowedPaths map
 		if tag == "TabularSection" {
 			nestedChildObjects := el.FindElement("./ChildObjects")
 			if nestedChildObjects != nil {
-				if normalizeFormStubChildObjects(nestedChildObjects, allowedPaths, currentPath) {
+				if normalizeFormStubChildObjects(nestedChildObjects, allowedPaths, currentPath, retainedCommands) {
 					changed = true
 				}
 			}
@@ -5044,7 +5243,7 @@ func metadataTargetElement(doc *etree.Document) *etree.Element {
 	return root
 }
 
-func normalizeAdoptedObjectComposition(doc *etree.Document, ownerKind string) bool {
+func normalizeAdoptedObjectComposition(doc *etree.Document, ownerKind string, retainedCommands map[string]struct{}) bool {
 	if doc == nil {
 		return false
 	}
@@ -5065,6 +5264,12 @@ func normalizeAdoptedObjectComposition(doc *etree.Document, ownerKind string) bo
 		if tag == "InternalInfo" || tag == "Properties" {
 			continue
 		}
+		if tag == "ChildObjects" && len(retainedCommands) > 0 {
+			if normalizeRetainedAdoptedCommandChildObjects(el, retainedCommands) {
+				changed = true
+			}
+			continue
+		}
 		if ownerKind == "Subsystem" && tag == "ChildObjects" {
 			continue
 		}
@@ -5080,7 +5285,7 @@ func normalizeAdoptedObjectComposition(doc *etree.Document, ownerKind string) bo
 	return changed
 }
 
-func normalizeAdoptedStubMetaDataComposition(doc *etree.Document, ownerKind string, rule adoptedStubMetaDataRule) bool {
+func normalizeAdoptedStubMetaDataComposition(doc *etree.Document, ownerKind string, rule adoptedStubMetaDataRule, retainedCommands map[string]struct{}) bool {
 	if doc == nil {
 		return false
 	}
@@ -5116,7 +5321,7 @@ func normalizeAdoptedStubMetaDataComposition(doc *etree.Document, ownerKind stri
 	}
 
 	if childObjects != nil {
-		if normalizeAdoptedStubMetaDataChildObjects(childObjects, rule) {
+		if normalizeAdoptedStubMetaDataChildObjects(childObjects, rule, retainedCommands) {
 			changed = true
 		}
 	} else if hadChildObjects {
@@ -5132,7 +5337,7 @@ func normalizeAdoptedStubMetaDataComposition(doc *etree.Document, ownerKind stri
 	return changed
 }
 
-func normalizeAdoptedStubMetaDataChildObjects(childObjects *etree.Element, rule adoptedStubMetaDataRule) bool {
+func normalizeAdoptedStubMetaDataChildObjects(childObjects *etree.Element, rule adoptedStubMetaDataRule, retainedCommands map[string]struct{}) bool {
 	if childObjects == nil {
 		return false
 	}
@@ -5163,6 +5368,10 @@ func normalizeAdoptedStubMetaDataChildObjects(childObjects *etree.Element, rule 
 				if normalizeAdoptedStubMetaDataTabularSection(el, allowedAttrs) {
 					changed = true
 				}
+				continue
+			}
+		case "Command":
+			if _, keep := retainedCommands[name]; keep {
 				continue
 			}
 		}
@@ -5391,7 +5600,8 @@ func normalizeChartOfCharacteristicTypesPredefined(ctx *FileProcessingContext, c
 	}
 
 	allowed := make(map[string]string)
-	for _, child := range ownerType.ChildElements() {
+	ownerTypeChildren := append([]*etree.Element(nil), ownerType.ChildElements()...)
+	for _, child := range ownerTypeChildren {
 		tag := localName(child.Tag)
 		if tag != "Type" && tag != "TypeSet" {
 			continue
@@ -5413,7 +5623,10 @@ func normalizeChartOfCharacteristicTypesPredefined(ctx *FileProcessingContext, c
 
 	changed := false
 
-	for _, item := range root.FindElements("./Item") {
+	for _, item := range root.ChildElements() {
+		if !strings.EqualFold(localName(item.Tag), "Item") {
+			continue
+		}
 		typeEl := item.FindElement("./Type")
 		if typeEl == nil {
 			continue
@@ -5444,9 +5657,162 @@ func normalizeChartOfCharacteristicTypesPredefined(ctx *FileProcessingContext, c
 			changed = true
 			continue
 		}
+
+		if syncCharacteristicPredefinedTypeQualifiers(typeEl, ownerTypeChildren) {
+			changed = true
+		}
 	}
 
 	return changed
+}
+
+func normalizeRetainedAdoptedCommandChildObjects(childObjects *etree.Element, retainedCommands map[string]struct{}) bool {
+	if childObjects == nil {
+		return false
+	}
+
+	changed := false
+	for _, child := range append([]etree.Token(nil), childObjects.Child...) {
+		el, ok := child.(*etree.Element)
+		if !ok {
+			continue
+		}
+		if localName(el.Tag) == "Command" {
+			if _, keep := retainedCommands[metadataChildName(el)]; keep {
+				continue
+			}
+		}
+		childObjects.RemoveChild(el)
+		changed = true
+	}
+
+	return changed
+}
+
+func collectRetainedOwnerCommands(contexts []*FileProcessingContext, decisions map[string]objectDecision) map[string]map[string]struct{} {
+	result := make(map[string]map[string]struct{})
+
+	for _, ctx := range contexts {
+		if ctx == nil || ctx.Doc == nil || ctx.Doc.Root() == nil {
+			continue
+		}
+		decision, ok := decisions[ctx.OwnerKey]
+		if ok && decision.Excluded {
+			continue
+		}
+		fromForm := strings.Contains(filepath.ToSlash(ctx.RelPath), "/Forms/")
+
+		for _, value := range collectElementValues(ctx.Doc.Root()) {
+			if !isMetadataCommandReference(value) {
+				continue
+			}
+			parts := strings.Split(strings.TrimSpace(value), ".")
+			if len(parts) < 4 || !strings.EqualFold(parts[2], "Command") {
+				continue
+			}
+			ownerKey := strings.TrimSpace(parts[0] + "." + parts[1])
+			commandName := strings.TrimSpace(parts[3])
+			if ownerKey == "" || commandName == "" {
+				continue
+			}
+			if fromForm && ownerKey != ctx.OwnerKey {
+				continue
+			}
+			ownerDecision, exists := decisions[ownerKey]
+			if !exists || ownerDecision.Excluded || ownerDecision.Belonging == "Native" {
+				continue
+			}
+			if result[ownerKey] == nil {
+				result[ownerKey] = make(map[string]struct{})
+			}
+			result[ownerKey][commandName] = struct{}{}
+		}
+	}
+
+	return result
+}
+
+func syncCharacteristicPredefinedTypeQualifiers(typeEl *etree.Element, ownerTypeNodes []*etree.Element) bool {
+	if typeEl == nil || len(ownerTypeNodes) == 0 {
+		return false
+	}
+
+	itemNodes := make([]*etree.Element, 0, len(typeEl.ChildElements()))
+	itemComparable := make(map[string]struct{})
+	for _, child := range typeEl.ChildElements() {
+		tag := localName(child.Tag)
+		if tag != "Type" && tag != "TypeSet" {
+			continue
+		}
+		value := strings.TrimSpace(child.Text())
+		if value == "" {
+			continue
+		}
+		itemNodes = append(itemNodes, child)
+		itemComparable[normalizeComparableTypeValue(value)] = struct{}{}
+	}
+	if len(itemNodes) == 0 {
+		return false
+	}
+
+	ownerQualifiers := collectOwnerCharacteristicTypeQualifiers(ownerTypeNodes, itemComparable)
+	if len(ownerQualifiers) == 0 {
+		return false
+	}
+
+	existingQualifierIndexes := make([]int, 0, 4)
+	for idx, child := range typeEl.ChildElements() {
+		if isCharacteristicTypeQualifierNode(child) {
+			existingQualifierIndexes = append(existingQualifierIndexes, idx)
+		}
+	}
+
+	changed := false
+	for i := len(existingQualifierIndexes) - 1; i >= 0; i-- {
+		idx := existingQualifierIndexes[i]
+		children := typeEl.ChildElements()
+		if idx >= 0 && idx < len(children) {
+			typeEl.RemoveChild(children[idx])
+			changed = true
+		}
+	}
+
+	for _, qualifier := range ownerQualifiers {
+		typeEl.AddChild(qualifier.Copy())
+		changed = true
+	}
+
+	return changed
+}
+
+func collectOwnerCharacteristicTypeQualifiers(ownerTypeNodes []*etree.Element, itemComparable map[string]struct{}) []*etree.Element {
+	result := make([]*etree.Element, 0, 4)
+	if len(ownerTypeNodes) == 0 || len(itemComparable) == 0 {
+		return result
+	}
+
+	for _, node := range ownerTypeNodes {
+		if node == nil {
+			continue
+		}
+		if isCharacteristicTypeQualifierNode(node) {
+			result = append(result, node)
+		}
+	}
+
+	return result
+}
+
+func isCharacteristicTypeQualifierNode(el *etree.Element) bool {
+	if el == nil {
+		return false
+	}
+	switch localName(el.Tag) {
+	case "StringQualifiers", "NumberQualifiers", "DateQualifiers", "BinaryDataQualifiers":
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeComparableTypeValue(value string) string {

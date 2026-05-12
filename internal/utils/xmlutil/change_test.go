@@ -114,6 +114,178 @@ func TestApplyAdoptedStubMetaDataRulesDoesNotRestoreExcludedObject(t *testing.T)
 	}
 }
 
+func TestCleanupMissingFormCommonAttributeDynamicListFields(t *testing.T) {
+	t.Parallel()
+
+	formDoc := etree.NewDocument()
+	if err := formDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform" xmlns:dcssch="http://v8.1c.ru/8.1/data-composition-system/schema" xmlns:v8="http://v8.1c.ru/8.1/data/core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ChildItems>
+    <Table name="СписокТаблица">
+      <DataPath>Список</DataPath>
+      <ChildItems>
+        <LabelField name="упо_ДатаСоздания">
+          <DataPath>Список.упо_ДатаСоздания</DataPath>
+        </LabelField>
+        <LabelField name="Ссылка">
+          <DataPath>Список.Ref</DataPath>
+        </LabelField>
+      </ChildItems>
+    </Table>
+  </ChildItems>
+  <Attributes>
+    <Attribute name="Список">
+      <Type>
+        <v8:Type>cfg:DynamicList</v8:Type>
+      </Type>
+      <Settings xsi:type="DynamicList">
+        <MainTable>Catalog.упо_ДокументыОбязательств</MainTable>
+        <Field xsi:type="dcssch:DataSetFieldField">
+          <dcssch:dataPath>упо_ДатаСоздания</dcssch:dataPath>
+          <dcssch:field>упо_ДатаСоздания</dcssch:field>
+        </Field>
+        <Field xsi:type="dcssch:DataSetFieldField">
+          <dcssch:dataPath>Ref</dcssch:dataPath>
+          <dcssch:field>Ref</dcssch:field>
+        </Field>
+      </Settings>
+    </Attribute>
+  </Attributes>
+</Form>`); err != nil {
+		t.Fatalf("read form xml: %v", err)
+	}
+
+	ownerDoc := etree.NewDocument()
+	if err := ownerDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog>
+    <Properties>
+      <Name>упо_ДокументыОбязательств</Name>
+      <StandardAttributes>
+        <StandardAttribute name="Ref"/>
+      </StandardAttributes>
+    </Properties>
+    <ChildObjects/>
+  </Catalog>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read owner xml: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{
+		{
+			Doc:      ownerDoc,
+			Metadata: true,
+			OwnerKey: "Catalog.упо_ДокументыОбязательств",
+			OwnerKind: "Catalog",
+			RelPath:  "Catalogs/упо_ДокументыОбязательств.xml",
+		},
+	}
+	decisions := map[string]objectDecision{
+		"Catalog.упо_ДокументыОбязательств": {Belonging: "Native"},
+		"CommonAttribute.упо_ДатаСоздания":  {Excluded: true},
+	}
+
+	if !cleanupMissingFormCommonAttributeDynamicListFields(formDoc, contexts, decisions) {
+		t.Fatalf("expected missing common attribute dynamic list cleanup to change form")
+	}
+
+	for _, field := range formDoc.FindElements("//*[local-name()='LabelField']") {
+		if strings.TrimSpace(field.SelectAttrValue("name", "")) == "упо_ДатаСоздания" {
+			t.Fatalf("expected label bound to missing common attribute to be removed")
+		}
+	}
+	for _, dataPath := range formDoc.FindElements("//*[local-name()='dataPath']") {
+		if strings.TrimSpace(dataPath.Text()) == "упо_ДатаСоздания" {
+			t.Fatalf("expected dynamic list field declaration for missing common attribute to be removed")
+		}
+	}
+
+	keptReferenceField := false
+	for _, field := range formDoc.FindElements("//*[local-name()='LabelField']") {
+		if strings.TrimSpace(field.SelectAttrValue("name", "")) == "Ссылка" {
+			keptReferenceField = true
+			break
+		}
+	}
+	if !keptReferenceField {
+		t.Fatalf("expected unrelated field to remain")
+	}
+}
+
+func TestCleanupMissingFormCommonAttributeDynamicListFieldsFromControlOnly(t *testing.T) {
+	t.Parallel()
+
+	formDoc := etree.NewDocument()
+	if err := formDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform" xmlns:v8="http://v8.1c.ru/8.1/data/core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ChildItems>
+    <Table name="СписокТаблица">
+      <DataPath>Список</DataPath>
+      <ChildItems>
+        <LabelField name="упо_ДатаСоздания">
+          <DataPath>Список.упо_ДатаСоздания</DataPath>
+        </LabelField>
+        <LabelField name="Ссылка">
+          <DataPath>Список.Ref</DataPath>
+        </LabelField>
+      </ChildItems>
+    </Table>
+  </ChildItems>
+  <Attributes>
+    <Attribute name="Список">
+      <Type>
+        <v8:Type>cfg:DynamicList</v8:Type>
+      </Type>
+      <Settings xsi:type="DynamicList">
+        <MainTable>Catalog.упо_ДокументыОбязательств</MainTable>
+      </Settings>
+    </Attribute>
+  </Attributes>
+</Form>`); err != nil {
+		t.Fatalf("read form xml: %v", err)
+	}
+
+	ownerDoc := etree.NewDocument()
+	if err := ownerDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog>
+    <Properties>
+      <Name>упо_ДокументыОбязательств</Name>
+      <StandardAttributes>
+        <StandardAttribute name="Ref"/>
+      </StandardAttributes>
+    </Properties>
+    <ChildObjects/>
+  </Catalog>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read owner xml: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{
+		{
+			Doc:       ownerDoc,
+			Metadata:  true,
+			OwnerKey:  "Catalog.упо_ДокументыОбязательств",
+			OwnerKind: "Catalog",
+			RelPath:   "Catalogs/упо_ДокументыОбязательств.xml",
+		},
+	}
+	decisions := map[string]objectDecision{
+		"Catalog.упо_ДокументыОбязательств": {Belonging: "Native"},
+		"CommonAttribute.упо_ДатаСоздания":  {Excluded: true},
+	}
+
+	if !cleanupMissingFormCommonAttributeDynamicListFields(formDoc, contexts, decisions) {
+		t.Fatalf("expected cleanup to remove control-only missing common attribute field")
+	}
+
+	for _, field := range formDoc.FindElements("//*[local-name()='LabelField']") {
+		if strings.TrimSpace(field.SelectAttrValue("name", "")) == "упо_ДатаСоздания" {
+			t.Fatalf("expected label bound to missing common attribute to be removed")
+		}
+	}
+}
+
 func TestNormalizeAdoptedStubMetaDataCompositionKeepsRetainedAttributeNative(t *testing.T) {
 	t.Parallel()
 
@@ -151,7 +323,7 @@ func TestNormalizeAdoptedStubMetaDataCompositionKeepsRetainedAttributeNative(t *
 		},
 	}
 
-	if !normalizeAdoptedStubMetaDataComposition(doc, "Catalog", rule) {
+	if !normalizeAdoptedStubMetaDataComposition(doc, "Catalog", rule, nil) {
 		t.Fatalf("expected adopted metadata composition to change child attributes")
 	}
 
@@ -220,7 +392,7 @@ func TestNormalizeAdoptedStubMetaDataCompositionKeepsRetainedTabularSectionChild
 		},
 	}
 
-	if !normalizeAdoptedStubMetaDataComposition(doc, "Document", rule) {
+	if !normalizeAdoptedStubMetaDataComposition(doc, "Document", rule, nil) {
 		t.Fatalf("expected adopted metadata composition to change tabular section child attributes")
 	}
 
@@ -277,7 +449,7 @@ func TestEnsureAdoptedExtendedConfigurationObjectsPreservesRetainedMetaDataFileA
 		},
 	}
 
-	if !normalizeAdoptedStubMetaDataComposition(doc, "Catalog", rule) {
+	if !normalizeAdoptedStubMetaDataComposition(doc, "Catalog", rule, nil) {
 		t.Fatalf("expected adopted metadata composition to change child attribute")
 	}
 
@@ -1305,7 +1477,7 @@ func TestNormalizeChartOfCharacteristicTypesPredefinedKeepsCurrentConfigAlias(t 
 	}
 }
 
-func TestNormalizeChartOfCharacteristicTypesPredefinedKeepsItemQualifiers(t *testing.T) {
+func TestNormalizeChartOfCharacteristicTypesPredefinedSyncsScalarQualifiersFromOwner(t *testing.T) {
 	t.Parallel()
 
 	ownerDoc := etree.NewDocument()
@@ -1359,8 +1531,8 @@ func TestNormalizeChartOfCharacteristicTypesPredefinedKeepsItemQualifiers(t *tes
 	}
 
 	changed := normalizeChartOfCharacteristicTypesPredefined(ctx, contexts)
-	if changed {
-		t.Fatalf("expected valid predefined qualifiers to stay untouched")
+	if !changed {
+		t.Fatalf("expected predefined scalar qualifiers to sync from owner type")
 	}
 
 	qualifier := predefinedDoc.Root().FindElement("./Item/Type/*[local-name()='StringQualifiers']")
@@ -1369,11 +1541,282 @@ func TestNormalizeChartOfCharacteristicTypesPredefinedKeepsItemQualifiers(t *tes
 	}
 	length := qualifier.FindElement("./*[local-name()='Length']")
 	mode := qualifier.FindElement("./*[local-name()='AllowedLength']")
-	if length == nil || strings.TrimSpace(length.Text()) != "25" {
+	if length == nil || strings.TrimSpace(length.Text()) != "36" {
 		t.Fatalf("expected original string length to remain, got %q", textOrEmpty(length))
 	}
-	if mode == nil || strings.TrimSpace(mode.Text()) != "Fixed" {
+	if mode == nil || strings.TrimSpace(mode.Text()) != "Variable" {
 		t.Fatalf("expected original allowed length to remain, got %q", textOrEmpty(mode))
+	}
+}
+
+func TestNormalizeChartOfCharacteristicTypesPredefinedSyncsOwnerQualifiersForReferenceItem(t *testing.T) {
+	t.Parallel()
+
+	ownerDoc := etree.NewDocument()
+	if err := ownerDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns:v8="http://v8.1c.ru/8.1/data/core">
+  <ChartOfCharacteristicTypes>
+    <Properties>
+      <Type>
+        <v8:Type>cfg:CatalogRef.упо_Подразделения</v8:Type>
+        <v8:Type>xs:string</v8:Type>
+        <v8:StringQualifiers>
+          <v8:Length>150</v8:Length>
+          <v8:AllowedLength>Variable</v8:AllowedLength>
+        </v8:StringQualifiers>
+      </Type>
+    </Properties>
+  </ChartOfCharacteristicTypes>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read owner xml: %v", err)
+	}
+
+	predefinedDoc := etree.NewDocument()
+	if err := predefinedDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<PredefinedData xmlns="http://v8.1c.ru/8.3/xcf/predef" xmlns:v8="http://v8.1c.ru/8.1/data/core">
+  <Item>
+    <Name>СписокПодразделение</Name>
+    <Type>
+      <v8:Type xmlns:d4p1="http://v8.1c.ru/8.1/data/enterprise/current-config">d4p1:CatalogRef.упо_Подразделения</v8:Type>
+    </Type>
+  </Item>
+</PredefinedData>`); err != nil {
+		t.Fatalf("read predefined xml: %v", err)
+	}
+
+	ctx := &FileProcessingContext{
+		Doc:      predefinedDoc,
+		FileName: "Predefined.xml",
+		OwnerKey: "ChartOfCharacteristicTypes.упо_Владельцы",
+	}
+	contexts := []*FileProcessingContext{
+		ctx,
+		{
+			Doc:      ownerDoc,
+			RelPath:  "ChartsOfCharacteristicTypes/упо_Владельцы.xml",
+			Metadata: true,
+			OwnerKey: "ChartOfCharacteristicTypes.упо_Владельцы",
+		},
+	}
+
+	changed := normalizeChartOfCharacteristicTypesPredefined(ctx, contexts)
+	if !changed {
+		t.Fatalf("expected owner qualifiers to sync into matching predefined reference type")
+	}
+
+	qualifier := predefinedDoc.Root().FindElement("./Item/Type/*[local-name()='StringQualifiers']")
+	if qualifier == nil {
+		t.Fatalf("expected owner string qualifier to be copied to predefined reference item")
+	}
+	length := qualifier.FindElement("./*[local-name()='Length']")
+	mode := qualifier.FindElement("./*[local-name()='AllowedLength']")
+	if length == nil || strings.TrimSpace(length.Text()) != "150" {
+		t.Fatalf("expected synced owner string length, got %q", textOrEmpty(length))
+	}
+	if mode == nil || strings.TrimSpace(mode.Text()) != "Variable" {
+		t.Fatalf("expected synced owner allowed length, got %q", textOrEmpty(mode))
+	}
+}
+
+func TestNormalizeRootConfigurationKeepsAdoptedBelonging(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Configuration>
+    <Properties>
+      <ObjectBelonging>Adopted</ObjectBelonging>
+      <Name>СтароеИмя</Name>
+      <NamePrefix>old_</NamePrefix>
+    </Properties>
+  </Configuration>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read xml: %v", err)
+	}
+
+	properties := doc.FindElement("//*[local-name()='Configuration']/*[local-name()='Properties']")
+	if properties == nil {
+		t.Fatalf("expected root configuration properties")
+	}
+
+	cfg := &config.Configuration{
+		Extension:       "УправлениеПроектами",
+		Prefix:          "упо_",
+		PlatformVersion: "8.3.27.1540",
+	}
+
+	if !normalizeRootConfiguration(properties, cfg) {
+		t.Fatalf("expected root configuration normalization to change properties")
+	}
+
+	if got := textOf(properties, "ObjectBelonging"); got != "Adopted" {
+		t.Fatalf("expected root configuration belonging to stay Adopted, got %q", got)
+	}
+}
+
+func TestRoleMetadataTargetExistsForCommandModuleOnlyCommand(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	objectDir := filepath.Join(root, "Catalogs", "Пользователи", "Commands", "ПользователиИнформационнойБазы", "Ext")
+	if err := os.MkdirAll(objectDir, 0o755); err != nil {
+		t.Fatalf("mkdir command dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(objectDir, "CommandModule.bsl"), []byte("// command module"), 0o644); err != nil {
+		t.Fatalf("write command module: %v", err)
+	}
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog>
+    <Properties>
+      <Name>Пользователи</Name>
+    </Properties>
+  </Catalog>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read owner xml: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{
+		{
+			Doc:      doc,
+			Path:     filepath.Join(root, "Catalogs", "Пользователи.xml"),
+			Metadata: true,
+			OwnerKey: "Catalog.Пользователи",
+		},
+	}
+
+	if !roleMetadataTargetExists("Catalog.Пользователи.Command.ПользователиИнформационнойБазы", contexts) {
+		t.Fatalf("expected command metadata target to exist from command module directory")
+	}
+	if !roleMetadataTargetExists("Catalog.Пользователи.Command.ПользователиИнформационнойБазы.CommandModule", contexts) {
+		t.Fatalf("expected command module metadata target to exist from command module file")
+	}
+}
+
+func TestNormalizeAdoptedObjectCompositionKeepsReferencedCommands(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog>
+    <Properties>
+      <Name>Пользователи</Name>
+    </Properties>
+    <ChildObjects>
+      <Command>
+        <Properties>
+          <Name>ПользователиИнформационнойБазы</Name>
+        </Properties>
+      </Command>
+      <Command>
+        <Properties>
+          <Name>ЛишняяКоманда</Name>
+        </Properties>
+      </Command>
+      <Attribute>
+        <Properties>
+          <Name>Недействителен</Name>
+        </Properties>
+      </Attribute>
+    </ChildObjects>
+  </Catalog>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read xml: %v", err)
+	}
+
+	retained := map[string]struct{}{
+		"ПользователиИнформационнойБазы": {},
+	}
+	if !normalizeAdoptedObjectComposition(doc, "Catalog", retained) {
+		t.Fatalf("expected adopted composition to change")
+	}
+
+	childObjects := doc.Root().FindElement("./Catalog/ChildObjects")
+	if childObjects == nil {
+		t.Fatalf("expected ChildObjects to remain")
+	}
+	commands := childObjects.FindElements("./Command")
+	if len(commands) != 1 {
+		t.Fatalf("expected exactly one retained command, got %d", len(commands))
+	}
+	if got := strings.TrimSpace(textOf(commands[0].FindElement("./Properties"), "Name")); got != "ПользователиИнформационнойБазы" {
+		t.Fatalf("expected retained command to stay, got %q", got)
+	}
+}
+
+func TestCollectRetainedOwnerCommandsFromFunctionalOption(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable">
+  <FunctionalOption>
+    <Properties>
+      <Name>СтандартныеПодсистемыВЛокальномРежиме</Name>
+      <Content>
+        <xr:Object>Catalog.Пользователи.Command.ПользователиИнформационнойБазы</xr:Object>
+      </Content>
+    </Properties>
+  </FunctionalOption>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read xml: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{
+		{
+			Doc:      doc,
+			RelPath:  "FunctionalOptions/СтандартныеПодсистемыВЛокальномРежиме.xml",
+			Metadata: true,
+			OwnerKey: "FunctionalOption.СтандартныеПодсистемыВЛокальномРежиме",
+		},
+	}
+	decisions := map[string]objectDecision{
+		"FunctionalOption.СтандартныеПодсистемыВЛокальномРежиме": {Belonging: "AdoptedStub"},
+		"Catalog.Пользователи": {Belonging: "AdoptedStub"},
+	}
+
+	retained := collectRetainedOwnerCommands(contexts, decisions)
+	if _, ok := retained["Catalog.Пользователи"]["ПользователиИнформационнойБазы"]; !ok {
+		t.Fatalf("expected retained command to be collected from functional option content")
+	}
+}
+
+func TestCollectRetainedOwnerCommandsFromRetainedOwnerForm(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Form>
+    <ChildItems>
+      <Item>
+        <CommandName>Catalog.Пользователи.Command.ПользователиИнформационнойБазы</CommandName>
+      </Item>
+    </ChildItems>
+  </Form>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read xml: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{
+		{
+			Doc:      doc,
+			RelPath:  "Catalogs/Пользователи/Forms/ФормаСписка/Ext/Form.xml",
+			Metadata: false,
+			OwnerKey: "Catalog.Пользователи",
+		},
+	}
+	decisions := map[string]objectDecision{
+		"Catalog.Пользователи": {Belonging: "Adopted"},
+	}
+
+	retained := collectRetainedOwnerCommands(contexts, decisions)
+	if _, ok := retained["Catalog.Пользователи"]["ПользователиИнформационнойБазы"]; !ok {
+		t.Fatalf("expected retained command to be collected from owner form command reference")
 	}
 }
 

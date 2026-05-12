@@ -59,6 +59,7 @@ go run .\cmd\changefiles\main.go .\configs\config.json D:\Codex\files-converter_
 - Что уже исправлялось на таких кейсах:
   - убрать агрессивное переписывание `ChildItems//DataPath` и `RowPictureDataPath` у manual-query dynamic list
   - удалить из формы control, если его `DataPath` ссылается на `НаборКонстант.<ИмяКонстанты>`, а такой `Constant.*` не вошел в итоговый состав
+  - удалять из dynamic list формы поля и связанные controls, если они ссылаются на `CommonAttribute.<Имя>`, которого уже нет в итоговом составе, а самого поля нет в owner metadata
   - если проблемный объект должен быть `excluded`, сначала чинить его удержание в составе, а не саму форму
 
 ### Неизвестный объект метаданных
@@ -66,6 +67,9 @@ go run .\cmd\changefiles\main.go .\configs\config.json D:\Codex\files-converter_
 - Пример: `Неизвестный объект метаданных - DataProcessor.ОперацииЗакрытияМесяца`
 - Обычно сам top-level объект уже вырезан правильно, а в одном из служебных XML осталась висячая ссылка на него
 - Если ошибка звучит как `Неизвестный объект метаданных` по `Attribute` / `TabularSection` / `Command`, сначала проверяй именно несогласованный хвост в служебных XML со ссылками на metadata-path: часто сам top-level объект уже корректно урезан, а падает именно висячая ссылка в таком платформенном слое
+- Для `Command` отдельно проверяй не только owner XML, но и файловый каркас команды: часть owner-команд живет только как каталог `Commands/<Имя>` с `Ext/CommandModule.bsl` и записью в `ConfigDumpInfo.xml`, без отдельного `Command.xml`; такой metadata-path нельзя считать отсутствующим только потому, что его нет в основном XML владельца
+- Если неизвестным остается `Catalog.X.Command.Y` у adopted-владельца, проверь еще один сценарий: ссылка на child-команду могла остаться в `FunctionalOption.Content`, форме или другом служебном XML, а adopted-cleanup вырезал сам `Command` из `ChildObjects`; в таком случае нужно удержать сам metadata-path команды, но не возвращать текст `CommandModule`
+- Если команда должна удерживаться у adopted-владельца, проверь и порядок вычисления retained-команд: такой список нужно собирать уже после `RefDrivenInclusion` и других promotion-решений, иначе объект может еще считаться `excluded` в момент расчета и child-команда снова пропадет из `ChildObjects`
 - В первую очередь смотреть:
   - `Role/Ext/Rights.xml`
   - `Subsystem/.../Content`
@@ -97,10 +101,12 @@ go run .\cmd\changefiles\main.go .\configs\config.json D:\Codex\files-converter_
   - `ChartsOfCharacteristicTypes/<объект>.xml`
   - `ChartsOfCharacteristicTypes/<объект>/Ext/Predefined.xml`
   - cleanup ссылок в `Properties/Type` и `Predefined`
+- Отдельно сверяй qualifier-блоки (`StringQualifiers`, `NumberQualifiers`, `DateQualifiers`, `BinaryDataQualifiers`) у owner `Properties/Type` и у `Type` конкретного predefined item: в extension-дампе платформа может требовать owner-level qualifiers даже у matching item-типа без собственного scalar `xs:*`, поэтому расхождение здесь важно не только для явных string/number/date item-типов
 - Что уже исправлялось на таких кейсах:
   - добавить распознавание metadata refs с alias вроде `d4p1:CatalogRef...`
   - включить type-bearing XML в cleanup висячих metadata-ссылок
   - затем сузить нормализацию `Predefined`, чтобы она не портила QName и qualifiers
+  - синхронизировать owner-level qualifier-блоки predefined item с owner `Properties/Type`, не переписывая QName и current-config alias
 
 ### Excluded-объект остался в расширении
 

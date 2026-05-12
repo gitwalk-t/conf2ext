@@ -53,6 +53,7 @@ go test ./...
 4. [docs/architecture.md](D:\Codex\files-converter_ver2\docs\architecture.md)
 5. [docs/conventions.md](D:\Codex\files-converter_ver2\docs\conventions.md)
 6. [docs/debugging.md](D:\Codex\files-converter_ver2\docs\debugging.md)
+7. [docs/technical-spec.md](D:\Codex\files-converter_ver2\docs\technical-spec.md)
 
 ## Переменные окружения
 
