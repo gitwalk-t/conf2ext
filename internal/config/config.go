@@ -51,19 +51,24 @@ func LoadConfigE(configPath string) (*Configuration, error) {
 		return nil, errors.New("не указан путь конфигурации")
 	}
 
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+	resolvedConfigPath, err := NormalizePath(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось нормализовать путь к конфигурации: %w", err)
+	}
+
+	if _, err := os.Stat(resolvedConfigPath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("конфигурационный файл не существует: %w", err)
 	}
 
 	var cfg Configuration
 
-	if err := cleanenv.ReadConfig(configPath, &cfg); err != nil {
+	if err := cleanenv.ReadConfig(resolvedConfigPath, &cfg); err != nil {
 		return nil, fmt.Errorf("ошибка чтения конфигурационного файла: %w", err)
 	}
 
 	normalizeLegacyConfigFields(&cfg)
 
-	if err := normalizeConfigPaths(&cfg); err != nil {
+	if err := normalizeConfigPaths(&cfg, resolvedConfigPath); err != nil {
 		return nil, fmt.Errorf("ошибка в обработке путей: %w", err)
 	}
 
@@ -87,7 +92,7 @@ func LoadDefaultConfigE() (*Configuration, error) {
 
 	normalizeLegacyConfigFields(&cfg)
 
-	if err := normalizeConfigPaths(&cfg); err != nil {
+	if err := normalizeConfigPaths(&cfg, ""); err != nil {
 		return nil, fmt.Errorf("ошибка в обработке путей: %w", err)
 	}
 
@@ -208,17 +213,78 @@ func normalizeLegacyConfigFields(cfg *Configuration) {
 	}
 }
 
-func normalizeConfigPaths(config *Configuration) error {
+func normalizeConfigPaths(config *Configuration, configPath string) error {
+	baseDir := configBaseDir(configPath)
+
 	var err error
-	config.InputPath, err = NormalizePath(config.InputPath)
+	config.InputPath, err = NormalizeProjectPath(config.InputPath, baseDir)
 	if err != nil {
 		return fmt.Errorf("не удалось нормализовать путь к входному файлу: %w", err)
 	}
 
-	config.OutputPath, err = NormalizePath(config.OutputPath)
+	config.OutputPath, err = NormalizeProjectPath(config.OutputPath, baseDir)
 	if err != nil {
 		return fmt.Errorf("не удалось нормализовать путь к выходному файлу: %w", err)
 	}
 
 	return nil
+}
+
+func NormalizeProjectPath(input, baseDir string) (string, error) {
+	if input == "" {
+		return "", nil
+	}
+
+	expandedPath := os.ExpandEnv(strings.TrimSpace(input))
+	if expandedPath == "" {
+		return "", nil
+	}
+
+	if filepath.IsAbs(expandedPath) && !isConfigRootRelativePath(expandedPath) {
+		return filepath.Clean(expandedPath), nil
+	}
+
+	if isConfigRootRelativePath(expandedPath) {
+		if baseDir == "" {
+			return NormalizePath(expandedPath)
+		}
+		trimmed := strings.TrimLeft(expandedPath, `/\`)
+		return filepath.Clean(filepath.Join(baseDir, trimmed)), nil
+	}
+
+	if baseDir == "" {
+		return NormalizePath(expandedPath)
+	}
+
+	return filepath.Clean(filepath.Join(baseDir, expandedPath)), nil
+}
+
+func configBaseDir(configPath string) string {
+	if strings.TrimSpace(configPath) == "" {
+		return ""
+	}
+
+	configDir := filepath.Dir(configPath)
+	if strings.EqualFold(filepath.Base(configDir), "configs") {
+		return filepath.Dir(configDir)
+	}
+
+	return configDir
+}
+
+func isConfigRootRelativePath(path string) bool {
+	if path == "" {
+		return false
+	}
+
+	if filepath.Separator != '\\' {
+		return false
+	}
+
+	if filepath.VolumeName(path) != "" {
+		return false
+	}
+
+	first := path[0]
+	return first == '/' || first == '\\'
 }

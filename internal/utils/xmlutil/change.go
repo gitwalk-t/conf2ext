@@ -178,15 +178,16 @@ var (
 )
 
 type FileProcessingContext struct {
-	Doc        *etree.Document
-	Path       string
-	RelPath    string
-	FileName   string
-	Metadata   bool
-	Properties *etree.Element
-	OwnerKey   string
-	OwnerKind  string
-	OwnerName  string
+	Doc              *etree.Document
+	Path             string
+	RelPath          string
+	FileName         string
+	Metadata         bool
+	TopLevelMetadata bool
+	Properties       *etree.Element
+	OwnerKey         string
+	OwnerKind        string
+	OwnerName        string
 }
 
 type objectDecision struct {
@@ -214,10 +215,18 @@ type adoptedStubMetaDataRule struct {
 
 type changeFilesState struct {
 	contexts                 []*FileProcessingContext
+	indexes                  *contextIndexes
 	decisions                map[string]objectDecision
 	formDynamicListContracts map[string]formDynamicListContract
 	adoptedStubMetaDataRules map[string]adoptedStubMetaDataRule
 	excludedPaths            map[string]struct{}
+}
+
+type contextIndexes struct {
+	byOwnerKey map[string][]*FileProcessingContext
+	byRelPath  map[string]*FileProcessingContext
+	byPath     map[string]*FileProcessingContext
+	byFileName map[string][]*FileProcessingContext
 }
 
 type nodeMark struct {
@@ -238,14 +247,18 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 		filesOps[file.FileName] = file.ElementOperations
 	}
 
+	loadContextsStartedAt := time.Now()
 	contexts, err := loadXMLContexts(dir)
 	if err != nil {
 		return err
 	}
+	indexes := buildContextIndexes(contexts)
+	logXMLStepCompleted("loadXMLContexts", loadContextsStartedAt, fmt.Sprintf("contexts=%d", len(contexts)))
 
 	fillDumpInfo(contexts)
 
 	log.Printf("xml step: build object sets")
+	buildObjectSetsStartedAt := time.Now()
 	includedNativeObjects := collectConfiguredNativeObjects(contexts, cfg.IncludedNativeObjects)
 	includedAdoptedStubObjects := collectConfiguredAdoptedStubObjects(contexts, cfg)
 	adoptedStubMetaDataRules := collectAdoptedStubMetaDataRules(cfg, dir)
@@ -257,7 +270,9 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 	excludedSubsystemObjects := collectExcludedSubsystemObjects(contexts, cfg.ExcludedSubsystems, cfg.NativePrefixes)
 	configuredExcludedObjects := collectConfiguredExcludedObjects(contexts, cfg.ExcludedObjects)
 	excludedObjects := mergeObjectSets(excludedSubsystemObjects, configuredExcludedObjects)
+	logXMLStepCompleted("build object sets", buildObjectSetsStartedAt)
 	log.Printf("xml step: collect subsystem decisions")
+	collectSubsystemDecisionsStartedAt := time.Now()
 	subsystemDecisions := collectSubsystemDecisions(contexts, cfg)
 	decisions := make(map[string]objectDecision)
 	for _, ctx := range contexts {
@@ -277,19 +292,23 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 		decisions[ctx.OwnerKey] = decideObject(ctx, cfg, primaryNativeObjects, excludedObjects, includedAdoptedStubObjects, forbiddenAdoptedStubObjects)
 	}
 	applyAdoptedStubMetaDataRules(decisions, adoptedStubMetaDataRules, excludedObjects, forbiddenAdoptedStubObjects)
+	logXMLStepCompleted("collect subsystem decisions", collectSubsystemDecisionsStartedAt, fmt.Sprintf("decisions=%d", len(decisions)))
 
 	log.Printf("xml step: promote referenced objects")
+	promoteReferencedObjectsStartedAt := time.Now()
 	referenceGraph := collectReferenceGraph(contexts, cfg, primaryNativeObjects)
 	incomingReferenceGraph := collectIncomingReferenceGraph(referenceGraph)
 	adoptedStubExtReferenceGraph := collectAdoptedStubExtReferenceGraph(contexts, decisions)
 	formDynamicListContracts := collectFormDynamicListContracts(contexts, decisions)
-	promoteReferencedObjectsToAdoptedStub(contexts, decisions, cfg, referenceGraph, incomingReferenceGraph, adoptedStubExtReferenceGraph, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects)
-	promoteRegisterDocumentOwnersToNative(contexts, decisions, cfg, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects, collectRegisterDocumentReferences(contexts))
+	promoteReferencedObjectsToAdoptedStubIndexed(contexts, indexes, decisions, cfg, referenceGraph, incomingReferenceGraph, adoptedStubExtReferenceGraph, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects)
+	promoteRegisterDocumentOwnersToNativeIndexed(contexts, indexes, decisions, cfg, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects, collectRegisterDocumentReferences(contexts))
 	applyFormDynamicListContracts(decisions, formDynamicListContracts, forbiddenAdoptedStubObjects)
 	applyAdoptedStubMetaDataRules(decisions, adoptedStubMetaDataRules, excludedObjects, forbiddenAdoptedStubObjects)
 	retainedOwnerCommands := collectRetainedOwnerCommands(contexts, decisions)
+	logXMLStepCompleted("promote referenced objects", promoteReferencedObjectsStartedAt, fmt.Sprintf("decisions=%d", len(decisions)))
 
 	log.Printf("xml step: collect cleanup sets")
+	collectCleanupSetsStartedAt := time.Now()
 	excludedRefs := collectExcludedReferences(decisions)
 	blockedForbiddenObjectKeys := collectBlockedForbiddenObjectKeys(decisions, forbiddenAdoptedStubObjects)
 	blockedForbiddenRefs := collectReferenceMapFromObjectKeys(blockedForbiddenObjectKeys)
@@ -303,9 +322,13 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 	blockedDefinedTypeObjects := blockedForbiddenObjectKeys
 
 	excludedPaths := make(map[string]struct{})
+	logXMLStepCompleted("collect cleanup sets", collectCleanupSetsStartedAt)
 
 	log.Printf("xml step: apply object changes")
+	applyObjectChangesStartedAt := time.Now()
 	lastApplyObjectChangesLogAt := time.Now()
+	changedFilesCount := 0
+	writtenFilesCount := 0
 	for idx, ctx := range contexts {
 		if idx%50 == 0 || time.Since(lastApplyObjectChangesLogAt) >= 30*time.Second {
 			log.Printf("xml progress: apply object changes %d/%d file=%s", idx, len(contexts), ctx.RelPath)
@@ -363,7 +386,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 		}
 
 		if ctx.FileName == "CommandInterface.xml" {
-			changed = normalizeCommandInterfaceFile(ctx, contexts) || changed
+			changed = normalizeCommandInterfaceFileIndexed(ctx, contexts, indexes) || changed
 			changed = cleanupDanglingCommandInterfaceCommands(ctx.Doc, contexts) || changed
 		}
 
@@ -380,8 +403,8 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 		if strings.Contains(filepath.ToSlash(ctx.RelPath), "/Forms/") {
 			changed = cleanupNonNativeDynamicListMainTables(ctx.Doc, decisions) || changed
 			changed = normalizeManualQueryWithoutMainTable(ctx.Doc) || changed
-			changed = cleanupMissingFormConstantsSetReferences(ctx.Doc, contexts, decisions) || changed
-			changed = cleanupMissingFormCommonAttributeDynamicListFields(ctx.Doc, contexts, decisions) || changed
+			changed = cleanupMissingFormConstantsSetReferencesIndexed(ctx.Doc, contexts, indexes, decisions) || changed
+			changed = cleanupMissingFormCommonAttributeDynamicListFieldsIndexed(ctx.Doc, contexts, indexes, decisions) || changed
 			changed = cleanupMissingFormCommandReferences(ctx.Doc, contexts) || changed
 		}
 
@@ -440,39 +463,48 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 		}
 
 		if changed {
+			changedFilesCount++
 			if err := ctx.Doc.WriteToFile(ctx.Path); err != nil {
 				return fmt.Errorf("ошибка при записи файла %s: %w", ctx.Path, err)
 			}
+			writtenFilesCount++
 		}
 	}
 	log.Printf("xml progress: apply object changes %d/%d file=done", len(contexts), len(contexts))
+	logXMLStepCompleted("apply object changes", applyObjectChangesStartedAt, fmt.Sprintf("changed_files=%d written_files=%d", changedFilesCount, writtenFilesCount))
 
 	if cfg.IsFormValidationEnabled() {
 		log.Printf("xml step: validate dynamic list contracts")
-		if err := validateFormDynamicListContracts(contexts, decisions, formDynamicListContracts); err != nil {
+		validateDynamicListsStartedAt := time.Now()
+		if err := validateFormDynamicListContractsIndexed(contexts, indexes, decisions, formDynamicListContracts); err != nil {
 			return err
 		}
+		logXMLStepCompleted("validate dynamic list contracts", validateDynamicListsStartedAt)
 	}
 
 	log.Printf("xml step: verify old guids")
+	verifyOldGUIDsStartedAt := time.Now()
 	if err := verifyNoOldGUIDs(contexts, guidReplacements, excludedPaths); err != nil {
 		return err
 	}
+	logXMLStepCompleted("verify old GUIDs", verifyOldGUIDsStartedAt)
 
 	log.Printf("xml step: remove root service artifacts")
+	cleanupRootServiceArtifactsStartedAt := time.Now()
 	if err := cleanupRootServiceArtifacts(dir); err != nil {
 		return err
 	}
+	logXMLStepCompleted("cleanup root service artifacts", cleanupRootServiceArtifactsStartedAt)
 
 	log.Printf("xml step: remove excluded files")
-	for path := range excludedPaths {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("ошибка удаления исключенного файла %s: %w", path, err)
-		}
-		cleanupEmptyParents(filepath.Dir(path), dir)
+	removeExcludedFilesStartedAt := time.Now()
+	removedExcludedFilesCount, err := removeExcludedFiles(dir, excludedPaths)
+	if err != nil {
+		return err
 	}
+	logXMLStepCompleted("remove excluded files", removeExcludedFilesStartedAt, fmt.Sprintf("excluded_paths=%d removed_files=%d", len(excludedPaths), removedExcludedFilesCount))
 
-	log.Printf("xml change completed: dir=%s", dir)
+	log.Printf("xml change completed: dir=%s contexts=%d decisions=%d excluded_paths=%d changed_files=%d written_files=%d", dir, len(contexts), len(decisions), len(excludedPaths), changedFilesCount, writtenFilesCount)
 	return nil
 }
 
@@ -486,25 +518,29 @@ func ResumeChangeFilesFromValidation(cfg *config.Configuration, dir string) erro
 
 	if cfg.IsFormValidationEnabled() {
 		log.Printf("xml step: validate dynamic list contracts")
-		if err := validateFormDynamicListContracts(state.contexts, state.decisions, state.formDynamicListContracts); err != nil {
+		validateDynamicListsStartedAt := time.Now()
+		if err := validateFormDynamicListContractsIndexed(state.contexts, state.indexes, state.decisions, state.formDynamicListContracts); err != nil {
 			return err
 		}
+		logXMLStepCompleted("validate dynamic list contracts", validateDynamicListsStartedAt)
 	}
 
 	// Resume mode runs on an already rewritten temp tree. At this point we no longer
 	// have the original old->new GUID mapping, so we only finish validation/cleanup.
 	log.Printf("xml step: remove root service artifacts")
+	cleanupRootServiceArtifactsStartedAt := time.Now()
 	if err := cleanupRootServiceArtifacts(dir); err != nil {
 		return err
 	}
+	logXMLStepCompleted("cleanup root service artifacts", cleanupRootServiceArtifactsStartedAt)
 
 	log.Printf("xml step: remove excluded files")
-	for path := range state.excludedPaths {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("ошибка удаления исключенного файла %s: %w", path, err)
-		}
-		cleanupEmptyParents(filepath.Dir(path), dir)
+	removeExcludedFilesStartedAt := time.Now()
+	removedExcludedFilesCount, err := removeExcludedFiles(dir, state.excludedPaths)
+	if err != nil {
+		return err
 	}
+	logXMLStepCompleted("remove excluded files", removeExcludedFilesStartedAt, fmt.Sprintf("excluded_paths=%d removed_files=%d", len(state.excludedPaths), removedExcludedFilesCount))
 
 	log.Printf("xml resume completed: dir=%s", dir)
 	return nil
@@ -545,18 +581,20 @@ func loadXMLContexts(root string) ([]*FileProcessingContext, error) {
 		if err != nil {
 			return fmt.Errorf("ошибка при получении относительного пути %s: %w", path, err)
 		}
+		relPathSlash := filepath.ToSlash(relPath)
 
 		kind, name, key := detectOwner(relPath, doc)
 		contexts = append(contexts, &FileProcessingContext{
-			Doc:        doc,
-			Path:       path,
-			RelPath:    filepath.ToSlash(relPath),
-			FileName:   d.Name(),
-			Metadata:   isMetadataObjectDoc(doc),
-			Properties: findProperties(doc),
-			OwnerKind:  kind,
-			OwnerName:  name,
-			OwnerKey:   key,
+			Doc:              doc,
+			Path:             path,
+			RelPath:          relPathSlash,
+			FileName:         d.Name(),
+			Metadata:         isMetadataObjectDoc(doc),
+			TopLevelMetadata: isTopLevelMetadataRelPath(relPathSlash),
+			Properties:       findProperties(doc),
+			OwnerKind:        kind,
+			OwnerName:        name,
+			OwnerKey:         key,
 		})
 
 		return nil
@@ -569,14 +607,18 @@ func loadXMLContexts(root string) ([]*FileProcessingContext, error) {
 }
 
 func buildChangeFilesState(cfg *config.Configuration, dir string) (*changeFilesState, error) {
+	loadContextsStartedAt := time.Now()
 	contexts, err := loadXMLContexts(dir)
 	if err != nil {
 		return nil, err
 	}
+	indexes := buildContextIndexes(contexts)
+	logXMLStepCompleted("loadXMLContexts", loadContextsStartedAt, fmt.Sprintf("contexts=%d", len(contexts)))
 
 	fillDumpInfo(contexts)
 
 	log.Printf("xml step: build object sets")
+	buildObjectSetsStartedAt := time.Now()
 	includedNativeObjects := collectConfiguredNativeObjects(contexts, cfg.IncludedNativeObjects)
 	includedAdoptedStubObjects := collectConfiguredAdoptedStubObjects(contexts, cfg)
 	adoptedStubMetaDataRules := collectAdoptedStubMetaDataRules(cfg, dir)
@@ -588,8 +630,10 @@ func buildChangeFilesState(cfg *config.Configuration, dir string) (*changeFilesS
 	excludedSubsystemObjects := collectExcludedSubsystemObjects(contexts, cfg.ExcludedSubsystems, cfg.NativePrefixes)
 	configuredExcludedObjects := collectConfiguredExcludedObjects(contexts, cfg.ExcludedObjects)
 	excludedObjects := mergeObjectSets(excludedSubsystemObjects, configuredExcludedObjects)
+	logXMLStepCompleted("build object sets", buildObjectSetsStartedAt)
 
 	log.Printf("xml step: collect subsystem decisions")
+	collectSubsystemDecisionsStartedAt := time.Now()
 	subsystemDecisions := collectSubsystemDecisions(contexts, cfg)
 	decisions := make(map[string]objectDecision)
 	for _, ctx := range contexts {
@@ -609,17 +653,21 @@ func buildChangeFilesState(cfg *config.Configuration, dir string) (*changeFilesS
 		decisions[ctx.OwnerKey] = decideObject(ctx, cfg, primaryNativeObjects, excludedObjects, includedAdoptedStubObjects, forbiddenAdoptedStubObjects)
 	}
 	applyAdoptedStubMetaDataRules(decisions, adoptedStubMetaDataRules, excludedObjects, forbiddenAdoptedStubObjects)
+	logXMLStepCompleted("collect subsystem decisions", collectSubsystemDecisionsStartedAt, fmt.Sprintf("decisions=%d", len(decisions)))
 
 	log.Printf("xml step: promote referenced objects")
+	promoteReferencedObjectsStartedAt := time.Now()
 	referenceGraph := collectReferenceGraph(contexts, cfg, primaryNativeObjects)
 	incomingReferenceGraph := collectIncomingReferenceGraph(referenceGraph)
 	adoptedStubExtReferenceGraph := collectAdoptedStubExtReferenceGraph(contexts, decisions)
 	formDynamicListContracts := collectFormDynamicListContracts(contexts, decisions)
-	promoteReferencedObjectsToAdoptedStub(contexts, decisions, cfg, referenceGraph, incomingReferenceGraph, adoptedStubExtReferenceGraph, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects)
-	promoteRegisterDocumentOwnersToNative(contexts, decisions, cfg, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects, collectRegisterDocumentReferences(contexts))
+	promoteReferencedObjectsToAdoptedStubIndexed(contexts, indexes, decisions, cfg, referenceGraph, incomingReferenceGraph, adoptedStubExtReferenceGraph, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects)
+	promoteRegisterDocumentOwnersToNativeIndexed(contexts, indexes, decisions, cfg, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects, collectRegisterDocumentReferences(contexts))
 	applyFormDynamicListContracts(decisions, formDynamicListContracts, forbiddenAdoptedStubObjects)
 	applyAdoptedStubMetaDataRules(decisions, adoptedStubMetaDataRules, excludedObjects, forbiddenAdoptedStubObjects)
+	logXMLStepCompleted("promote referenced objects", promoteReferencedObjectsStartedAt, fmt.Sprintf("decisions=%d", len(decisions)))
 
+	collectCleanupSetsStartedAt := time.Now()
 	excludedPaths := make(map[string]struct{})
 	for _, ctx := range contexts {
 		decision := decisions[ctx.OwnerKey]
@@ -637,14 +685,67 @@ func buildChangeFilesState(cfg *config.Configuration, dir string) (*changeFilesS
 	}
 	collectAdoptedCommonModuleModulePaths(dir, decisions, excludedPaths)
 	collectAdoptedCommandModulePaths(contexts, decisions, excludedPaths)
+	logXMLStepCompleted("collect cleanup sets", collectCleanupSetsStartedAt, fmt.Sprintf("excluded_paths=%d", len(excludedPaths)))
 
 	return &changeFilesState{
 		contexts:                 contexts,
+		indexes:                  indexes,
 		decisions:                decisions,
 		formDynamicListContracts: formDynamicListContracts,
 		adoptedStubMetaDataRules: adoptedStubMetaDataRules,
 		excludedPaths:            excludedPaths,
 	}, nil
+}
+
+func buildContextIndexes(contexts []*FileProcessingContext) *contextIndexes {
+	indexes := &contextIndexes{
+		byOwnerKey: make(map[string][]*FileProcessingContext),
+		byRelPath:  make(map[string]*FileProcessingContext, len(contexts)),
+		byPath:     make(map[string]*FileProcessingContext, len(contexts)),
+		byFileName: make(map[string][]*FileProcessingContext),
+	}
+
+	for _, ctx := range contexts {
+		if ctx == nil {
+			continue
+		}
+		if ctx.OwnerKey != "" {
+			indexes.byOwnerKey[ctx.OwnerKey] = append(indexes.byOwnerKey[ctx.OwnerKey], ctx)
+		}
+		if ctx.RelPath != "" {
+			indexes.byRelPath[ctx.RelPath] = ctx
+		}
+		if ctx.Path != "" {
+			indexes.byPath[ctx.Path] = ctx
+		}
+		if ctx.FileName != "" {
+			indexes.byFileName[ctx.FileName] = append(indexes.byFileName[ctx.FileName], ctx)
+		}
+	}
+
+	return indexes
+}
+
+func logXMLStepCompleted(step string, startedAt time.Time, details ...string) {
+	duration := time.Since(startedAt)
+	if len(details) > 0 && strings.TrimSpace(details[0]) != "" {
+		log.Printf("xml step completed: %s duration=%s %s", step, duration, details[0])
+		return
+	}
+	log.Printf("xml step completed: %s duration=%s", step, duration)
+}
+
+func removeExcludedFiles(root string, excludedPaths map[string]struct{}) (int, error) {
+	removedCount := 0
+	for path := range excludedPaths {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return removedCount, fmt.Errorf("ошибка удаления исключенного файла %s: %w", path, err)
+		}
+		cleanupEmptyParents(filepath.Dir(path), root)
+		removedCount++
+	}
+
+	return removedCount, nil
 }
 
 func fillDumpInfo(contexts []*FileProcessingContext) {
@@ -1124,8 +1225,16 @@ func mergeReferenceMaps(maps ...map[string]map[string]struct{}) map[string]map[s
 }
 
 func findContextByOwnerKey(contexts []*FileProcessingContext, ownerKey string) *FileProcessingContext {
+	return findContextByOwnerKeyIndexed(nil, contexts, ownerKey)
+}
+
+func findContextByOwnerKeyIndexed(indexes *contextIndexes, contexts []*FileProcessingContext, ownerKey string) *FileProcessingContext {
 	var fallback *FileProcessingContext
-	for _, ctx := range contexts {
+	candidates := contexts
+	if indexes != nil && ownerKey != "" {
+		candidates = indexes.byOwnerKey[ownerKey]
+	}
+	for _, ctx := range candidates {
 		if ctx == nil || ctx.OwnerKey != ownerKey {
 			continue
 		}
@@ -1140,7 +1249,15 @@ func findContextByOwnerKey(contexts []*FileProcessingContext, ownerKey string) *
 }
 
 func findContextByFileName(contexts []*FileProcessingContext, fileName string) *FileProcessingContext {
-	for _, ctx := range contexts {
+	return findContextByFileNameIndexed(nil, contexts, fileName)
+}
+
+func findContextByFileNameIndexed(indexes *contextIndexes, contexts []*FileProcessingContext, fileName string) *FileProcessingContext {
+	candidates := contexts
+	if indexes != nil && fileName != "" {
+		candidates = indexes.byFileName[fileName]
+	}
+	for _, ctx := range candidates {
 		if ctx == nil {
 			continue
 		}
@@ -1197,11 +1314,15 @@ func cleanupExcludedReferences(doc *etree.Document, excluded map[string]map[stri
 }
 
 func normalizeCommandInterfaceFile(ctx *FileProcessingContext, contexts []*FileProcessingContext) bool {
+	return normalizeCommandInterfaceFileIndexed(ctx, contexts, nil)
+}
+
+func normalizeCommandInterfaceFileIndexed(ctx *FileProcessingContext, contexts []*FileProcessingContext, indexes *contextIndexes) bool {
 	if ctx == nil || ctx.Doc == nil {
 		return false
 	}
 
-	source := findContextByFileName(contexts, "MainSectionCommandInterface.xml")
+	source := findContextByFileNameIndexed(indexes, contexts, "MainSectionCommandInterface.xml")
 	if source == nil || source.Doc == nil {
 		return false
 	}
@@ -1293,6 +1414,21 @@ func promoteReferencedObjectsToAdoptedStub(
 	excludedObjects map[string]struct{},
 	forbiddenAdoptedStubObjects map[string]struct{},
 ) {
+	promoteReferencedObjectsToAdoptedStubIndexed(contexts, nil, decisions, cfg, referenceGraph, incomingReferenceGraph, adoptedStubExtReferenceGraph, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects)
+}
+
+func promoteReferencedObjectsToAdoptedStubIndexed(
+	contexts []*FileProcessingContext,
+	indexes *contextIndexes,
+	decisions map[string]objectDecision,
+	cfg *config.Configuration,
+	referenceGraph map[string]map[string]struct{},
+	incomingReferenceGraph map[string]map[string]struct{},
+	adoptedStubExtReferenceGraph map[string]map[string]struct{},
+	primaryNativeObjects map[string]struct{},
+	excludedObjects map[string]struct{},
+	forbiddenAdoptedStubObjects map[string]struct{},
+) {
 	for {
 		changed := false
 
@@ -1334,13 +1470,13 @@ func promoteReferencedObjectsToAdoptedStub(
 				}
 				if refExists &&
 					refDecision.Excluded &&
-					isReferencedOnlyByNativeSubsystems(ref, incomingReferenceGraph, contexts, decisions) {
+					isReferencedOnlyByNativeSubsystems(ref, incomingReferenceGraph, contexts, indexes, decisions) {
 					debugDecision(ref, "kept excluded: only native subsystems reference it")
 					continue
 				}
 
 				if _, primary := primaryNativeObjects[ref]; primary {
-					refCtx := findContextByOwnerKey(contexts, ref)
+					refCtx := findContextByOwnerKeyIndexed(indexes, contexts, ref)
 					if isHardExcludedObject(refCtx, ref, cfg, excludedObjects, forbiddenAdoptedStubObjects) {
 						continue
 					}
@@ -1356,7 +1492,7 @@ func promoteReferencedObjectsToAdoptedStub(
 					continue
 				}
 
-				refCtx := findContextByOwnerKey(contexts, ref)
+				refCtx := findContextByOwnerKeyIndexed(indexes, contexts, ref)
 				needsAdoptedStubExt := shouldUseAdoptedStubExtForReference(ctx, decision, ref, refCtx, adoptedStubExtRefs)
 
 				if !refExists || refDecision.Excluded {
@@ -1410,6 +1546,7 @@ func isReferencedOnlyByNativeSubsystems(
 	target string,
 	incomingReferenceGraph map[string]map[string]struct{},
 	contexts []*FileProcessingContext,
+	indexes *contextIndexes,
 	decisions map[string]objectDecision,
 ) bool {
 	sources := incomingReferenceGraph[target]
@@ -1419,7 +1556,7 @@ func isReferencedOnlyByNativeSubsystems(
 
 	hasEligibleSource := false
 	for sourceKey := range sources {
-		sourceCtx := findContextByOwnerKey(contexts, sourceKey)
+		sourceCtx := findContextByOwnerKeyIndexed(indexes, contexts, sourceKey)
 		if sourceCtx == nil {
 			continue
 		}
@@ -1675,6 +1812,19 @@ func promoteRegisterDocumentOwnersToNative(
 	forbiddenAdoptedStubObjects map[string]struct{},
 	registerDocumentReferences map[string]map[string]struct{},
 ) {
+	promoteRegisterDocumentOwnersToNativeIndexed(contexts, nil, decisions, cfg, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects, registerDocumentReferences)
+}
+
+func promoteRegisterDocumentOwnersToNativeIndexed(
+	contexts []*FileProcessingContext,
+	indexes *contextIndexes,
+	decisions map[string]objectDecision,
+	cfg *config.Configuration,
+	primaryNativeObjects map[string]struct{},
+	excludedObjects map[string]struct{},
+	forbiddenAdoptedStubObjects map[string]struct{},
+	registerDocumentReferences map[string]map[string]struct{},
+) {
 	for _, ctx := range contexts {
 		if ctx == nil || ctx.OwnerKey == "" || ctx.OwnerKind == "" {
 			continue
@@ -1690,7 +1840,7 @@ func promoteRegisterDocumentOwnersToNative(
 				continue
 			}
 
-			docCtx := findContextByOwnerKey(contexts, docKey)
+			docCtx := findContextByOwnerKeyIndexed(indexes, contexts, docKey)
 			if isHardExcludedObject(docCtx, docKey, cfg, excludedObjects, forbiddenAdoptedStubObjects) {
 				continue
 			}
@@ -3002,6 +3152,10 @@ func cleanupMissingFormCommandReferences(doc *etree.Document, contexts []*FilePr
 }
 
 func cleanupMissingFormConstantsSetReferences(doc *etree.Document, contexts []*FileProcessingContext, decisions map[string]objectDecision) bool {
+	return cleanupMissingFormConstantsSetReferencesIndexed(doc, contexts, nil, decisions)
+}
+
+func cleanupMissingFormConstantsSetReferencesIndexed(doc *etree.Document, contexts []*FileProcessingContext, indexes *contextIndexes, decisions map[string]objectDecision) bool {
 	root := doc.Root()
 	if root == nil {
 		return false
@@ -3014,7 +3168,7 @@ func cleanupMissingFormConstantsSetReferences(doc *etree.Document, contexts []*F
 		children := parent.ChildElements()
 		for i := len(children) - 1; i >= 0; i-- {
 			child := children[i]
-			if shouldRemoveMissingFormConstantsSetReference(child, contexts, decisions) {
+			if shouldRemoveMissingFormConstantsSetReference(child, contexts, indexes, decisions) {
 				if grandparent != nil {
 					grandparent.RemoveChild(parent)
 				} else {
@@ -3031,7 +3185,7 @@ func cleanupMissingFormConstantsSetReferences(doc *etree.Document, contexts []*F
 	return changed
 }
 
-func shouldRemoveMissingFormConstantsSetReference(el *etree.Element, contexts []*FileProcessingContext, decisions map[string]objectDecision) bool {
+func shouldRemoveMissingFormConstantsSetReference(el *etree.Element, contexts []*FileProcessingContext, indexes *contextIndexes, decisions map[string]objectDecision) bool {
 	if el == nil || !strings.EqualFold(localName(el.Tag), "DataPath") {
 		return false
 	}
@@ -3046,16 +3200,20 @@ func shouldRemoveMissingFormConstantsSetReference(el *etree.Element, contexts []
 		return false
 	}
 
-	return !topLevelMetadataIncluded("Constant."+constantName, contexts, decisions)
+	return !topLevelMetadataIncludedIndexed("Constant."+constantName, contexts, indexes, decisions)
 }
 
 func cleanupMissingFormCommonAttributeDynamicListFields(doc *etree.Document, contexts []*FileProcessingContext, decisions map[string]objectDecision) bool {
+	return cleanupMissingFormCommonAttributeDynamicListFieldsIndexed(doc, contexts, nil, decisions)
+}
+
+func cleanupMissingFormCommonAttributeDynamicListFieldsIndexed(doc *etree.Document, contexts []*FileProcessingContext, indexes *contextIndexes, decisions map[string]objectDecision) bool {
 	root := doc.Root()
 	if root == nil {
 		return false
 	}
 
-	blockedByAttribute := collectMissingFormCommonAttributeDynamicListFields(root, contexts, decisions)
+	blockedByAttribute := collectMissingFormCommonAttributeDynamicListFields(root, contexts, indexes, decisions)
 	if len(blockedByAttribute) == 0 {
 		return false
 	}
@@ -3100,7 +3258,7 @@ func cleanupMissingFormCommonAttributeDynamicListFields(doc *etree.Document, con
 	return changed
 }
 
-func collectMissingFormCommonAttributeDynamicListFields(root *etree.Element, contexts []*FileProcessingContext, decisions map[string]objectDecision) map[string]map[string]struct{} {
+func collectMissingFormCommonAttributeDynamicListFields(root *etree.Element, contexts []*FileProcessingContext, indexes *contextIndexes, decisions map[string]objectDecision) map[string]map[string]struct{} {
 	result := make(map[string]map[string]struct{})
 	if root == nil {
 		return result
@@ -3125,7 +3283,7 @@ func collectMissingFormCommonAttributeDynamicListFields(root *etree.Element, con
 			continue
 		}
 
-		targetCtx := findTopLevelMetadataContextByOwnerKey(contexts, refs[0])
+		targetCtx := findTopLevelMetadataContextByOwnerKeyIndexed(indexes, contexts, refs[0])
 		available := collectAvailableDynamicListFields(targetCtx)
 		requiredFields := collectDynamicListDeclaredFields(attr)
 		for field := range collectDynamicListAttributeFields(root, attrName) {
@@ -3135,7 +3293,7 @@ func collectMissingFormCommonAttributeDynamicListFields(root *etree.Element, con
 			if _, ok := available[field]; ok {
 				continue
 			}
-			if topLevelMetadataIncluded("CommonAttribute."+field, contexts, decisions) {
+			if topLevelMetadataIncludedIndexed("CommonAttribute."+field, contexts, indexes, decisions) {
 				continue
 			}
 			if result[attrName] == nil {
@@ -5865,7 +6023,15 @@ func collectAllowedSubsystemChildren(parentChain []string, contexts []*FileProce
 }
 
 func findTopLevelMetadataContextByOwnerKey(contexts []*FileProcessingContext, key string) *FileProcessingContext {
-	for _, ctx := range contexts {
+	return findTopLevelMetadataContextByOwnerKeyIndexed(nil, contexts, key)
+}
+
+func findTopLevelMetadataContextByOwnerKeyIndexed(indexes *contextIndexes, contexts []*FileProcessingContext, key string) *FileProcessingContext {
+	candidates := contexts
+	if indexes != nil && key != "" {
+		candidates = indexes.byOwnerKey[key]
+	}
+	for _, ctx := range candidates {
 		if ctx == nil || ctx.OwnerKey != key || !ctx.Metadata || !isTopLevelMetadataFile(ctx) {
 			continue
 		}
@@ -5876,11 +6042,15 @@ func findTopLevelMetadataContextByOwnerKey(contexts []*FileProcessingContext, ke
 }
 
 func topLevelMetadataIncluded(key string, contexts []*FileProcessingContext, decisions map[string]objectDecision) bool {
+	return topLevelMetadataIncludedIndexed(key, contexts, nil, decisions)
+}
+
+func topLevelMetadataIncludedIndexed(key string, contexts []*FileProcessingContext, indexes *contextIndexes, decisions map[string]objectDecision) bool {
 	if key == "" {
 		return false
 	}
 
-	ctx := findTopLevelMetadataContextByOwnerKey(contexts, key)
+	ctx := findTopLevelMetadataContextByOwnerKeyIndexed(indexes, contexts, key)
 	if ctx == nil || ctx.Doc == nil {
 		return false
 	}
@@ -5912,6 +6082,15 @@ func validateFormDynamicListContracts(
 	decisions map[string]objectDecision,
 	contracts map[string]formDynamicListContract,
 ) error {
+	return validateFormDynamicListContractsIndexed(contexts, nil, decisions, contracts)
+}
+
+func validateFormDynamicListContractsIndexed(
+	contexts []*FileProcessingContext,
+	indexes *contextIndexes,
+	decisions map[string]objectDecision,
+	contracts map[string]formDynamicListContract,
+) error {
 	for key, contract := range contracts {
 		decision, ok := decisions[key]
 		if !ok || decision.Excluded {
@@ -5921,7 +6100,7 @@ func validateFormDynamicListContracts(
 			return fmt.Errorf("динамический список требует объект %s в режиме AdoptedStubExt(Form), но объект остался урезанным", key)
 		}
 
-		ctx := findContextByOwnerKey(contexts, key)
+		ctx := findContextByOwnerKeyIndexed(indexes, contexts, key)
 		if ctx == nil || ctx.Doc == nil || ctx.Doc.Root() == nil {
 			return fmt.Errorf("динамический список требует объект %s, но его XML не найден", key)
 		}
@@ -6313,14 +6492,24 @@ func isXMLFile(fileName string) bool {
 	return strings.EqualFold(filepath.Ext(fileName), ".xml")
 }
 
+func isTopLevelMetadataRelPath(relPath string) bool {
+	parts := strings.Split(relPath, "/")
+	return len(parts) == 2 && strings.HasSuffix(strings.ToLower(parts[1]), ".xml")
+}
+
 func isMetadataObjectDoc(doc *etree.Document) bool {
 	root := doc.Root()
 	return root != nil && localName(root.Tag) == "MetaDataObject"
 }
 
 func isTopLevelMetadataFile(ctx *FileProcessingContext) bool {
-	parts := strings.Split(ctx.RelPath, "/")
-	return len(parts) == 2 && strings.HasSuffix(strings.ToLower(parts[1]), ".xml")
+	if ctx == nil {
+		return false
+	}
+	if ctx.TopLevelMetadata {
+		return true
+	}
+	return isTopLevelMetadataRelPath(ctx.RelPath)
 }
 
 func propertyName(properties *etree.Element) string {

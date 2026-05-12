@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/firstBitSportivnaya/files-converter/internal/config"
 	"github.com/firstBitSportivnaya/files-converter/internal/export_format"
@@ -61,16 +62,20 @@ func ConvertToCfe(cfg *config.Configuration) error {
 	log.Printf("conversion started: input=%s output=%s conversion=%s", cfg.InputPath, cfg.OutputPath, cfg.ConversionType)
 	log.Printf("conversion flags: keep_xml_dump=%t stop_after_xml_dump=%t enable_form_validation=%t keep_tmp_env=%t", cfg.KeepXMLDump, cfg.StopAfterXMLDump, cfg.IsFormValidationEnabled(), os.Getenv("FILES_CONVERTER_KEEP_TMP") == "1")
 
+	prepareStartedAt := time.Now()
 	tempRoot, err := prepareTempEnvironment(cfg)
 	if err != nil {
 		return err
 	}
+	logStepCompleted("prepare temp environment", prepareStartedAt)
 
 	version := v8.WithVersion(cfg.PlatformVersion)
+	createIBStartedAt := time.Now()
 	tmpIB, err := createTempIB()
 	if err != nil {
 		return err
 	}
+	logStepCompleted("create temp infobase", createIBStartedAt)
 	defer func() {
 		if !keepTemp {
 			tmpIB.Remove()
@@ -89,21 +94,28 @@ func ConvertToCfe(cfg *config.Configuration) error {
 	switch cfg.ConversionType {
 	case config.SrcConvert:
 		log.Printf("step: copy source directory")
-		if err = fileutil.CopyDir(cfg.InputPath, tmpDir); err != nil {
+		copySourceStartedAt := time.Now()
+		copyStats, err := fileutil.CopyDirWithStats(cfg.InputPath, tmpDir)
+		if err != nil {
 			return err
 		}
+		logStepCompleted("copy source directory", copySourceStartedAt, fmt.Sprintf("files=%d dirs=%d bytes=%d", copyStats.Files, copyStats.Dirs, copyStats.Bytes))
 
 		log.Printf("step: read format version")
+		readFormatStartedAt := time.Now()
 		formatVersion, err := xmlutil.GetFormatVersion(tmpDir)
 		if err != nil {
 			return err
 		}
+		logStepCompleted("read format version", readFormatStartedAt, fmt.Sprintf("format=%s", formatVersion))
 
 		log.Printf("step: load export format versions")
+		loadVersionsStartedAt := time.Now()
 		exportFomatVersions, err := export_format.LoadFormatVersions("")
 		if err != nil {
 			return err
 		}
+		logStepCompleted("load export format versions", loadVersionsStartedAt, fmt.Sprintf("count=%d", len(exportFomatVersions)))
 
 		platformVersion := exportFomatVersions[formatVersion]
 		if platformVersion == "" {
@@ -118,29 +130,38 @@ func ConvertToCfe(cfg *config.Configuration) error {
 		}
 
 		log.Printf("step: dump config to files")
+		dumpConfigStartedAt := time.Now()
 		comDumpConfigToFiles := v8.DumpConfigToFiles(tmpDir)
 		if err = v8.Run(tmpInfoBase, comDumpConfigToFiles, version); err != nil {
 			return fmt.Errorf("ошибка получения исходных файлов: %w", err)
 		}
+		logStepCompleted("dump config to files", dumpConfigStartedAt)
 	}
 
 	if os.Getenv("FILES_CONVERTER_SNAPSHOT_BEFORE_CHANGE") == "1" {
+		snapshotBeforeChangeStartedAt := time.Now()
 		snapshotDir := newTempDir(tempRoot, "v8_src_before_change")
-		if err = fileutil.CopyDir(tmpDir, snapshotDir); err != nil {
+		copyStats, err := fileutil.CopyDirWithStats(tmpDir, snapshotDir)
+		if err != nil {
 			return fmt.Errorf("ошибка создания снимка исходной выгрузки: %w", err)
 		}
 		log.Printf("source snapshot saved: %s", snapshotDir)
+		logStepCompleted("snapshot before change", snapshotBeforeChangeStartedAt, fmt.Sprintf("files=%d dirs=%d bytes=%d", copyStats.Files, copyStats.Dirs, copyStats.Bytes))
 	}
 
 	log.Printf("step: change files")
+	changeFilesStartedAt := time.Now()
 	if err = xmlutil.ChangeFiles(cfg, tmpDir); err != nil {
 		return err
 	}
+	logStepCompleted("change files", changeFilesStartedAt)
 
 	if keepTemp {
+		saveDumpSnapshotStartedAt := time.Now()
 		if err = saveXMLDumpSnapshot(cfg.OutputPath, tmpDir); err != nil {
 			return err
 		}
+		logStepCompleted("save XML dump snapshot", saveDumpSnapshotStartedAt)
 	}
 
 	if cfg.StopAfterXMLDump {
@@ -154,10 +175,12 @@ func ConvertToCfe(cfg *config.Configuration) error {
 	}
 
 	log.Printf("step: load extension config from files")
+	loadExtensionStartedAt := time.Now()
 	load := v8.LoadExtensionConfigFromFiles(tmpDir, extension)
 	if err = v8.Run(tmpInfoBase, load, version); err != nil {
 		return fmt.Errorf("ошибка загрузки конфигурации расширения: %w", err)
 	}
+	logStepCompleted("load extension config from files", loadExtensionStartedAt)
 
 	outPath, err := resolveOutputPath(cfg.OutputPath, extension, dumpInfo.Version)
 	if err != nil {
@@ -165,14 +188,25 @@ func ConvertToCfe(cfg *config.Configuration) error {
 	}
 
 	log.Printf("step: dump extension cfe")
+	dumpExtensionStartedAt := time.Now()
 	dump := v8.DumpExtensionCfg(outPath, extension)
 	if err = v8.Run(tmpInfoBase, dump, version); err != nil {
 		return fmt.Errorf("ошибка при выгрузке в файл .cfe: %w", err)
 	}
+	logStepCompleted("dump extension cfe", dumpExtensionStartedAt)
 
 	fmt.Printf("файл *.cfe успешно сохранен: %s\n", outPath)
 
 	return nil
+}
+
+func logStepCompleted(step string, startedAt time.Time, details ...string) {
+	duration := time.Since(startedAt)
+	if len(details) > 0 && strings.TrimSpace(details[0]) != "" {
+		log.Printf("step completed: %s duration=%s %s", step, duration, details[0])
+		return
+	}
+	log.Printf("step completed: %s duration=%s", step, duration)
 }
 
 func loadCfConfig(cfg *config.Configuration, tmpInfoBase *v8.Infobase, version runner.Option) error {
@@ -278,10 +312,12 @@ func saveXMLDumpSnapshot(outputPath, tmpDir string) error {
 	if err := os.RemoveAll(snapshotDir); err != nil {
 		return fmt.Errorf("не удалось очистить старый снимок XML-дампа: %w", err)
 	}
-	if err := fileutil.CopyDir(tmpDir, snapshotDir); err != nil {
+	copyStats, err := fileutil.CopyDirWithStats(tmpDir, snapshotDir)
+	if err != nil {
 		return fmt.Errorf("ошибка сохранения XML-дампа: %w", err)
 	}
 
 	log.Printf("source snapshot saved: %s", snapshotDir)
+	log.Printf("xml dump snapshot stats: files=%d dirs=%d bytes=%d", copyStats.Files, copyStats.Dirs, copyStats.Bytes)
 	return nil
 }

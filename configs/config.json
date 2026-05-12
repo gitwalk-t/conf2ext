@@ -54,7 +54,7 @@
         "Enum.ХозяйственныеОперации",
         "DataProcessor.упо_ОграничениеДоступаПоОбъектамPM"
     ],
-    "input_path": "D:/Codex/files-converter_ver2/input",
-    "output_path": "D:/Codex/files-converter_ver2/output/demo.cfe",
+    "input_path": "/input",
+    "output_path": "/output/demo.cfe",
     "conversion_type": "srcConvert"
 }
