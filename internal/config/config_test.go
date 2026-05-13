@@ -104,3 +104,43 @@ func TestLoadConfigESetsDerivedIdentityPaths(t *testing.T) {
 		t.Fatalf("unexpected identity map path: got %q want %q", cfg.IdentityMapPath, expectedIdentityMap)
 	}
 }
+
+func TestLoadConfigEPreservesNormalizedConfigPath(t *testing.T) {
+	tempDir := t.TempDir()
+	configDir := filepath.Join(tempDir, "configs")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir configs: %v", err)
+	}
+
+	configPath := filepath.Join(configDir, "config.json")
+	configJSON := `{
+		"input_path": "/input",
+		"output_path": "/output/demo.cfe",
+		"conversion_type": "srcConvert"
+	}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadConfigE(filepath.Join(configDir, ".", "config.json"))
+	if err != nil {
+		t.Fatalf("LoadConfigE: %v", err)
+	}
+
+	if cfg.ConfigPath != filepath.Clean(configPath) {
+		t.Fatalf("unexpected normalized config path: got %q want %q", cfg.ConfigPath, filepath.Clean(configPath))
+	}
+}
+
+func TestConfigurationDefaultsToExactSearchResultTemplates(t *testing.T) {
+	var cfg Configuration
+	if !cfg.IsExactSearchResultTemplatesEnabled() {
+		t.Fatalf("expected exact SearchResult templates to be enabled by default")
+	}
+
+	disabled := false
+	cfg.AdditionalProcessing.UseExactTemplates = &disabled
+	if cfg.IsExactSearchResultTemplatesEnabled() {
+		t.Fatalf("expected explicit soft SearchResult matching to disable exact mode")
+	}
+}

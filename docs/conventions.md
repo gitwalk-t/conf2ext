@@ -15,6 +15,8 @@
 - Объекты из `included_Native_objects` должны обрабатываться так же, как `Native` по префиксу: после сборки `primaryNativeObjects` их нельзя отдельно трактовать как “не-префиксные” ни в `Configuration`-ref graph, ни в соседних helper-ветках.
 - `AdoptedStub`:
   технический режим урезанного заимствованного объекта. Термин не переводим и не подменяем на просто `Adopted`, потому что в коде и текущей модели это не одно и то же.
+- `Use_упо_SearchResult`:
+  дополнительный overlay `AdoptedStubCode` поверх уже принятого adopted-решения. Отдельного нового `ObjectBelonging` для него нет: базовая классификация остается в рамках `Native`, `AdoptedStub`, `AdoptedStubExt` и `AdoptedStubMetaData`.
 - У `AdoptedStub` не переносим тексты `ManagerModule` и `ObjectModule`; для adopted-констант по тому же правилу не переносим `ValueManagerModule`; для adopted общих модулей не переносим `Module`; для adopted команд не переносим `CommandModule`. Если adopted-объект уже не `Native`, такие child-записи нужно вычищать и из `ConfigDumpInfo.xml`; для `CommonModule` еще и удалять `CommonModules/<Имя>/Ext/Module.bsl`, а для команд — `Ext/CommandModule.bsl`.
 - `AdoptedStubMetaData`:
 частный случай `AdoptedStub`, который включается флагом `AdditionalProcessing.Use_MetaDataFile`. Объект попадает в adopted-режим по списку из `CommonTemplate.упо_MetaDataFile`, а child metadata из множеств `Реквизиты` и `ТабличныеЧасти` сохраняются только для реквизитов с префиксом `упо_`.

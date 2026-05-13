@@ -29,8 +29,9 @@ type FileOperation struct {
 }
 
 type AdditionalProcessing struct {
-	UseMetaDataFile bool `json:"Use_MetaDataFile,omitempty"`
-	UseSearchResult bool `json:"Use_упо_SearchResult,omitempty"`
+	UseMetaDataFile   bool  `json:"Use_MetaDataFile,omitempty"`
+	UseSearchResult   bool  `json:"Use_упо_SearchResult,omitempty"`
+	UseExactTemplates *bool `json:"UseExactTemplates,omitempty"`
 }
 
 type BaseBinding struct {
@@ -81,4 +82,15 @@ func (cfg *Configuration) IsFormValidationEnabled() bool {
 
 func (cfg *Configuration) IsMetaDataFileEnabled() bool {
 	return cfg != nil && cfg.AdditionalProcessing.UseMetaDataFile
+}
+
+func (cfg *Configuration) IsSearchResultEnabled() bool {
+	return cfg != nil && cfg.AdditionalProcessing.UseSearchResult
+}
+
+func (cfg *Configuration) IsExactSearchResultTemplatesEnabled() bool {
+	if cfg == nil || cfg.AdditionalProcessing.UseExactTemplates == nil {
+		return true
+	}
+	return *cfg.AdditionalProcessing.UseExactTemplates
 }

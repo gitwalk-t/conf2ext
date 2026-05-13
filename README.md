@@ -73,7 +73,9 @@ go test ./...
 - `stop_after_xml_dump`: если `true`, программа останавливается после переписывания XML и не переходит к сборке `.cfe`
 - `enable_form_validation`: если `true`, после переписывания XML выполняется проверка form-driven dynamic list contracts; если `false`, этот этап пропускается
 - `AdditionalProcessing.Use_MetaDataFile`: если `true`, `ChangeFiles` читает общий макет `упо_MetaDataFile` и добавляет режим `AdoptedStubMetaData` для перечисленных там объектов
-- `AdditionalProcessing.Use_упо_SearchResult`: зарезервированный флаг; пока не влияет на поведение
+- `AdditionalProcessing.Use_упо_SearchResult`: включает дополнительный overlay `AdoptedStubCode` для adopted-части состава; он может поднять default-excluded объект в `AdoptedStub`, сохранить нужные формы/команды/modules и наложить текст модулей по меткам из `searchingTemplateText.json` и `CommonTemplate.упо_SearchResult`
+- при `AdditionalProcessing.Use_упо_SearchResult=true` конвертер дополнительно проверяет, что объекты, реально выбранные из `упо_SearchResult`, дошли до итогового XML-дампа как top-level adopted-объекты
+- `AdditionalProcessing.UseExactTemplates`: управляет строгостью сопоставления шаблонов для `Use_упо_SearchResult`; по умолчанию `true`
 
 ## Identity mapping
 

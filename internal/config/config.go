@@ -187,6 +187,19 @@ func MergeConfigurations(defaultCfg, cfg *Configuration) {
 		defaultCfg.ConversionType = cfg.ConversionType
 	}
 
+	if cfg.ConfigPath != "" {
+		defaultCfg.ConfigPath = cfg.ConfigPath
+	}
+	if cfg.ProjectRootPath != "" {
+		defaultCfg.ProjectRootPath = cfg.ProjectRootPath
+	}
+	if cfg.BaseBindingsPath != "" {
+		defaultCfg.BaseBindingsPath = cfg.BaseBindingsPath
+	}
+	if cfg.IdentityMapPath != "" {
+		defaultCfg.IdentityMapPath = cfg.IdentityMapPath
+	}
+
 	defaultCfg.KeepXMLDump = cfg.KeepXMLDump
 	defaultCfg.StopAfterXMLDump = cfg.StopAfterXMLDump
 	defaultCfg.AdditionalProcessing = cfg.AdditionalProcessing

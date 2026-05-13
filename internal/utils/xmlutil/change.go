@@ -29,9 +29,10 @@ const (
 )
 
 var (
-	guidPattern              = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
-	metadataReferencePattern = regexp.MustCompile(`(?:[A-Za-z_][A-Za-z0-9_.-]*:)?(AccountingRegister|AccumulationRegister|BusinessProcess|CalculationRegister|Catalog|ChartOfAccounts|ChartOfCalculationTypes|ChartOfCharacteristicTypes|CommandGroup|CommonAttribute|CommonCommand|CommonForm|CommonModule|CommonPicture|CommonTemplate|Constant|DataProcessor|DefinedType|Document|DocumentJournal|Enum|EventSubscription|ExchangePlan|ExternalDataSource|FilterCriterion|FunctionalOption|FunctionalOptionsParameter|HTTPService|InformationRegister|IntegrationService|Interface|Language|Report|Role|ScheduledJob|Sequence|Session|SessionParameter|SettingsStorage|Style|StyleItem|Subsystem|Task|WebService|XDTOPackage)(?:Ref|Object|Selection|List|Manager|ValueManager|RecordSet|TabularSectionRow|TabularSection)?\.([^\s<>"':/\\]+)`)
-	styleReferencePattern    = regexp.MustCompile(`(?:^|[^[:alnum:]_])style:([^\s<>"':/\\]+)`)
+	guidPattern               = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
+	metadataReferencePattern  = regexp.MustCompile(`(?:[A-Za-z_][A-Za-z0-9_.-]*:)?(AccountingRegister|AccumulationRegister|BusinessProcess|CalculationRegister|Catalog|ChartOfAccounts|ChartOfCalculationTypes|ChartOfCharacteristicTypes|CommandGroup|CommonAttribute|CommonCommand|CommonForm|CommonModule|CommonPicture|CommonTemplate|Constant|DataProcessor|DefinedType|Document|DocumentJournal|Enum|EventSubscription|ExchangePlan|ExternalDataSource|FilterCriterion|FunctionalOption|FunctionalOptionsParameter|HTTPService|InformationRegister|IntegrationService|Interface|Language|Report|Role|ScheduledJob|Sequence|Session|SessionParameter|SettingsStorage|Style|StyleItem|Subsystem|Task|WebService|XDTOPackage)(?:Ref|Object|Selection|List|Manager|ValueManager|RecordSet|TabularSectionRow|TabularSection)?\.([^\s<>"':/\\]+)`)
+	styleReferencePattern     = regexp.MustCompile(`(?:^|[^[:alnum:]_])style:([^\s<>"':/\\]+)`)
+	moduleMethodHeaderPattern = regexp.MustCompile(`^(\s*)(Процедура|Функция)(\s+)([A-Za-zА-Яа-яЁё_][A-Za-zА-Яа-яЁё0-9_]*)`)
 
 	adoptedSubsystemRoots = map[string]struct{}{
 		"СтандартныеПодсистемы":        {},
@@ -119,6 +120,41 @@ var (
 		"ПодпискаНаСобытие":      "EventSubscription",
 	}
 
+	searchResultKindAliases = map[string]string{
+		"БизнесПроцессы":               "BusinessProcess",
+		"Документы":                    "Document",
+		"ЖурналыДокументов":            "DocumentJournal",
+		"Задачи":                       "Task",
+		"Константы":                    "Constant",
+		"КритерииОтбора":               "FilterCriterion",
+		"Обработки":                    "DataProcessor",
+		"ОбщиеКоманды":                 "CommonCommand",
+		"ОбщиеМакеты":                  "CommonTemplate",
+		"ОбщиеМодули":                  "CommonModule",
+		"ОбщиеФормы":                   "CommonForm",
+		"ОбщиеКартинки":                "CommonPicture",
+		"ОбщиеРеквизиты":               "CommonAttribute",
+		"Отчеты":                       "Report",
+		"ПараметрыСеанса":              "SessionParameter",
+		"Перечисления":                 "Enum",
+		"ПланыВидовРасчета":            "ChartOfCalculationTypes",
+		"ПланыВидовХарактеристик":      "ChartOfCharacteristicTypes",
+		"ПланыОбмена":                  "ExchangePlan",
+		"ПодпискиНаСобытия":            "EventSubscription",
+		"Последовательности":           "Sequence",
+		"РегистрыБухгалтерии":          "AccountingRegister",
+		"РегистрыНакопления":           "AccumulationRegister",
+		"РегистрыРасчета":              "CalculationRegister",
+		"РегистрыСведений":             "InformationRegister",
+		"Роли":                         "Role",
+		"Справочники":                  "Catalog",
+		"Стили":                        "Style",
+		"ЭлементыСтиля":                "StyleItem",
+		"ФункциональныеОпции":          "FunctionalOption",
+		"ПараметрыФункциональныхОпций": "FunctionalOptionsParameter",
+		"ХранилищаНастроек":            "SettingsStorage",
+	}
+
 	configurationChildObjectKinds = map[string]string{
 		"AccountingRegister":         "AccountingRegister",
 		"AccumulationRegister":       "AccumulationRegister",
@@ -191,9 +227,10 @@ type FileProcessingContext struct {
 }
 
 type objectDecision struct {
-	Belonging string
-	Excluded  bool
-	Truncated bool
+	Belonging        string
+	Excluded         bool
+	Truncated        bool
+	SearchResultCode bool
 }
 
 type subsystemState struct {
@@ -213,12 +250,32 @@ type adoptedStubMetaDataRule struct {
 	NativeTabularSections map[string]map[string]struct{}
 }
 
+type searchResultObjectOverlay struct {
+	PreserveForms    map[string]struct{}
+	PreserveCommands map[string]struct{}
+}
+
+type searchResultModuleWrite struct {
+	OwnerKey string
+	Path     string
+	Content  string
+}
+
+type searchResultState struct {
+	ObjectOverlays          map[string]searchResultObjectOverlay
+	ModuleWrites            map[string]searchResultModuleWrite
+	ExpectedAdoptedObjects  map[string]struct{}
+	PreservedPaths          map[string]struct{}
+	PreservedConfigDumpInfo map[string]struct{}
+}
+
 type changeFilesState struct {
 	contexts                 []*FileProcessingContext
 	indexes                  *contextIndexes
 	decisions                map[string]objectDecision
 	formDynamicListContracts map[string]formDynamicListContract
 	adoptedStubMetaDataRules map[string]adoptedStubMetaDataRule
+	searchResultState        *searchResultState
 	excludedPaths            map[string]struct{}
 }
 
@@ -328,12 +385,17 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 	applyAdoptedStubMetaDataRules(decisions, adoptedStubMetaDataRules, excludedObjects, forbiddenAdoptedStubObjects)
 	logXMLStepCompleted("collect subsystem decisions", collectSubsystemDecisionsStartedAt, fmt.Sprintf("decisions=%d", len(decisions)))
 
+	searchResultState, err := collectSearchResultState(cfg, dir, contexts, decisions, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects)
+	if err != nil {
+		return err
+	}
+
 	log.Printf("xml step: promote referenced objects")
 	promoteReferencedObjectsStartedAt := time.Now()
-	referenceGraph := collectReferenceGraph(contexts, cfg, primaryNativeObjects)
+	referenceGraph := collectReferenceGraph(contexts, cfg, primaryNativeObjects, decisions, searchResultState)
 	incomingReferenceGraph := collectIncomingReferenceGraph(referenceGraph)
-	adoptedStubExtReferenceGraph := collectAdoptedStubExtReferenceGraph(contexts, decisions)
-	formDynamicListContracts := collectFormDynamicListContracts(contexts, decisions)
+	adoptedStubExtReferenceGraph := collectAdoptedStubExtReferenceGraph(contexts, decisions, searchResultState)
+	formDynamicListContracts := collectFormDynamicListContracts(contexts, decisions, searchResultState)
 	promoteReferencedObjectsToAdoptedStubIndexed(contexts, indexes, decisions, cfg, referenceGraph, incomingReferenceGraph, adoptedStubExtReferenceGraph, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects)
 	promoteRegisterDocumentOwnersToNativeIndexed(contexts, indexes, decisions, cfg, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects, collectRegisterDocumentReferences(contexts))
 	applyFormDynamicListContracts(decisions, formDynamicListContracts, forbiddenAdoptedStubObjects)
@@ -391,7 +453,8 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 			continue
 		}
 
-		if ctx.FileName != configDumpInfo && ctx.OwnerKey != "Configuration" && !isTopLevelMetadataFile(ctx) && decision.Belonging != "Native" {
+		if ctx.FileName != configDumpInfo && ctx.OwnerKey != "Configuration" && !isTopLevelMetadataFile(ctx) &&
+			decision.Belonging != "Native" && !searchResultPreservesPath(searchResultState, ctx.Path) {
 			excludedPaths[ctx.Path] = struct{}{}
 			continue
 		}
@@ -428,7 +491,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 		if ctx.FileName == configDumpInfo {
 			changed = normalizeConfigDumpInfoRootNames(ctx.Doc, config.GetDumpInfo().ConfigName, cfg.Extension) || changed
 			changed = cleanupConfigDumpInfoRootServiceEntries(ctx.Doc, cfg.Extension) || changed
-			changed = cleanupConfigDumpInfoNonNativeChildren(ctx.Doc, contexts, decisions) || changed
+			changed = cleanupConfigDumpInfoNonNativeChildren(ctx.Doc, contexts, decisions, searchResultState.PreservedConfigDumpInfo) || changed
 		}
 
 		if ctx.FileName == "CommandInterface.xml" {
@@ -467,16 +530,17 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 			ctx.OwnerKind != "DefinedType" && ctx.OwnerKind != "EventSubscription" {
 			changed = cleanupAdoptedObjectFormReferences(ctx.Properties) || changed
 			contract, hasContract := formDynamicListContracts[ctx.OwnerKey]
-			retainedCommands := retainedOwnerCommandCandidates[ctx.OwnerKey]
+			overlay := searchResultObjectOverlayForKey(searchResultState, ctx.OwnerKey)
+			overlay = mergeSearchResultOverlayCommands(overlay, retainedOwnerCommandCandidates[ctx.OwnerKey])
 			rule, hasRule := adoptedStubMetaDataRules[ctx.OwnerKey]
 			if hasContract && hasRule {
-				changed = normalizeAdoptedStubExtFormComposition(ctx.Doc, mergeAdoptedStubMetaDataIntoFormContract(contract, rule), retainedCommands) || changed
+				changed = normalizeAdoptedStubExtFormComposition(ctx.Doc, mergeAdoptedStubMetaDataIntoFormContract(contract, rule), overlay) || changed
 			} else if hasRule {
-				changed = normalizeAdoptedStubMetaDataComposition(ctx.Doc, ctx.OwnerKind, rule, retainedCommands) || changed
+				changed = normalizeAdoptedStubMetaDataComposition(ctx.Doc, ctx.OwnerKind, rule, overlay) || changed
 			} else if hasContract {
-				changed = normalizeAdoptedStubExtFormComposition(ctx.Doc, contract, retainedCommands) || changed
+				changed = normalizeAdoptedStubExtFormComposition(ctx.Doc, contract, overlay) || changed
 			} else {
-				changed = normalizeAdoptedObjectComposition(ctx.Doc, ctx.OwnerKind, retainedCommands) || changed
+				changed = normalizeAdoptedObjectComposition(ctx.Doc, ctx.OwnerKind, overlay) || changed
 			}
 		}
 
@@ -532,7 +596,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 
 	log.Printf("xml step: finalize retained owner commands")
 	finalizeRetainedOwnerCommandsStartedAt := time.Now()
-	finalizationStats, err := finalizeRetainedOwnerCommands(contexts, indexes, decisions, excludedPaths, adoptedStubMetaDataRules, formDynamicListContracts, retainedOwnerCommandCandidates, retainedOwnerCommands, liveCommandRefs)
+	finalizationStats, err := finalizeRetainedOwnerCommands(contexts, indexes, decisions, excludedPaths, adoptedStubMetaDataRules, formDynamicListContracts, retainedOwnerCommandCandidates, retainedOwnerCommands, liveCommandRefs, searchResultState)
 	if err != nil {
 		return err
 	}
@@ -554,6 +618,10 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 	if err := verifyNoOldGUIDs(contexts, guidReplacements, excludedPaths); err != nil {
 		return err
 	}
+
+	if err := writeSearchResultModuleFiles(searchResultState, decisions); err != nil {
+		return err
+	}
 	logXMLStepCompleted("verify old GUIDs", verifyOldGUIDsStartedAt)
 
 	log.Printf("xml step: remove root service artifacts")
@@ -570,6 +638,10 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 		return err
 	}
 	logXMLStepCompleted("remove excluded files", removeExcludedFilesStartedAt, fmt.Sprintf("excluded_paths=%d removed_files=%d", len(excludedPaths), removedExcludedFilesCount))
+
+	if err := validateSearchResultAdoptedObjects(indexes, contexts, decisions, excludedPaths, searchResultState); err != nil {
+		return err
+	}
 
 	log.Printf("xml change completed: dir=%s contexts=%d decisions=%d excluded_paths=%d changed_files=%d written_files=%d", dir, len(contexts), len(decisions), len(excludedPaths), changedFilesCount, writtenFilesCount)
 	return nil
@@ -601,6 +673,10 @@ func ResumeChangeFilesFromValidation(cfg *config.Configuration, dir string) erro
 	}
 	logXMLStepCompleted("cleanup root service artifacts", cleanupRootServiceArtifactsStartedAt)
 
+	if err := writeSearchResultModuleFiles(state.searchResultState, state.decisions); err != nil {
+		return err
+	}
+
 	log.Printf("xml step: remove excluded files")
 	removeExcludedFilesStartedAt := time.Now()
 	removedExcludedFilesCount, err := removeExcludedFiles(dir, state.excludedPaths)
@@ -608,6 +684,10 @@ func ResumeChangeFilesFromValidation(cfg *config.Configuration, dir string) erro
 		return err
 	}
 	logXMLStepCompleted("remove excluded files", removeExcludedFilesStartedAt, fmt.Sprintf("excluded_paths=%d removed_files=%d", len(state.excludedPaths), removedExcludedFilesCount))
+
+	if err := validateSearchResultAdoptedObjects(state.indexes, state.contexts, state.decisions, state.excludedPaths, state.searchResultState); err != nil {
+		return err
+	}
 
 	log.Printf("xml resume completed: dir=%s", dir)
 	return nil
@@ -722,12 +802,17 @@ func buildChangeFilesState(cfg *config.Configuration, dir string) (*changeFilesS
 	applyAdoptedStubMetaDataRules(decisions, adoptedStubMetaDataRules, excludedObjects, forbiddenAdoptedStubObjects)
 	logXMLStepCompleted("collect subsystem decisions", collectSubsystemDecisionsStartedAt, fmt.Sprintf("decisions=%d", len(decisions)))
 
+	searchResultState, err := collectSearchResultState(cfg, dir, contexts, decisions, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects)
+	if err != nil {
+		return nil, err
+	}
+
 	log.Printf("xml step: promote referenced objects")
 	promoteReferencedObjectsStartedAt := time.Now()
-	referenceGraph := collectReferenceGraph(contexts, cfg, primaryNativeObjects)
+	referenceGraph := collectReferenceGraph(contexts, cfg, primaryNativeObjects, decisions, searchResultState)
 	incomingReferenceGraph := collectIncomingReferenceGraph(referenceGraph)
-	adoptedStubExtReferenceGraph := collectAdoptedStubExtReferenceGraph(contexts, decisions)
-	formDynamicListContracts := collectFormDynamicListContracts(contexts, decisions)
+	adoptedStubExtReferenceGraph := collectAdoptedStubExtReferenceGraph(contexts, decisions, searchResultState)
+	formDynamicListContracts := collectFormDynamicListContracts(contexts, decisions, searchResultState)
 	promoteReferencedObjectsToAdoptedStubIndexed(contexts, indexes, decisions, cfg, referenceGraph, incomingReferenceGraph, adoptedStubExtReferenceGraph, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects)
 	promoteRegisterDocumentOwnersToNativeIndexed(contexts, indexes, decisions, cfg, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects, collectRegisterDocumentReferences(contexts))
 	applyFormDynamicListContracts(decisions, formDynamicListContracts, forbiddenAdoptedStubObjects)
@@ -746,12 +831,14 @@ func buildChangeFilesState(cfg *config.Configuration, dir string) (*changeFilesS
 			excludedPaths[ctx.Path] = struct{}{}
 			continue
 		}
-		if ctx.FileName != configDumpInfo && ctx.OwnerKey != "Configuration" && !isTopLevelMetadataFile(ctx) && decision.Belonging != "Native" {
+		if ctx.FileName != configDumpInfo && ctx.OwnerKey != "Configuration" && !isTopLevelMetadataFile(ctx) &&
+			decision.Belonging != "Native" && !searchResultPreservesPath(searchResultState, ctx.Path) {
 			excludedPaths[ctx.Path] = struct{}{}
 		}
 	}
 	collectAdoptedCommonModuleModulePaths(dir, decisions, excludedPaths)
 	collectAdoptedCommandModulePaths(contexts, decisions, excludedPaths)
+	applySearchResultStateToExcludedPaths(searchResultState, excludedPaths)
 	logXMLStepCompleted("collect cleanup sets", collectCleanupSetsStartedAt, fmt.Sprintf("excluded_paths=%d", len(excludedPaths)))
 
 	return &changeFilesState{
@@ -760,6 +847,7 @@ func buildChangeFilesState(cfg *config.Configuration, dir string) (*changeFilesS
 		decisions:                decisions,
 		formDynamicListContracts: formDynamicListContracts,
 		adoptedStubMetaDataRules: adoptedStubMetaDataRules,
+		searchResultState:        searchResultState,
 		excludedPaths:            excludedPaths,
 	}, nil
 }
@@ -1900,6 +1988,9 @@ func isRefDrivenInclusionSource(ctx *FileProcessingContext, decision objectDecis
 	if decision.Belonging == "Native" {
 		return true
 	}
+	if decision.SearchResultCode && decision.Belonging == "AdoptedStub" && !decision.Truncated {
+		return true
+	}
 
 	// Ненативные определяемые типы и подписки на события остаются источником RefDrivenInclusion,
 	// если они уже перенесены как AdoptedStubExt и сохранили состав.
@@ -2047,12 +2138,17 @@ func collectExistingOwnerKeys(contexts []*FileProcessingContext, ownerKind strin
 	return result
 }
 
-func collectReferenceGraph(contexts []*FileProcessingContext, cfg *config.Configuration, primaryNativeObjects map[string]struct{}) map[string]map[string]struct{} {
+func collectReferenceGraph(contexts []*FileProcessingContext, cfg *config.Configuration, primaryNativeObjects map[string]struct{}, decisions map[string]objectDecision, searchResultState *searchResultState) map[string]map[string]struct{} {
 	graph := make(map[string]map[string]struct{})
 	styleItemKeys := collectExistingOwnerKeys(contexts, "StyleItem")
 
 	for _, ctx := range contexts {
 		if ctx == nil || ctx.OwnerKey == "" || ctx.Doc == nil || ctx.Doc.Root() == nil {
+			continue
+		}
+		decision, hasDecision := decisions[ctx.OwnerKey]
+		if hasDecision && decision.SearchResultCode && decision.Belonging != "Native" &&
+			!isTopLevelMetadataFile(ctx) && !searchResultPreservesPath(searchResultState, ctx.Path) {
 			continue
 		}
 
@@ -2083,7 +2179,7 @@ func collectReferenceGraph(contexts []*FileProcessingContext, cfg *config.Config
 	return graph
 }
 
-func collectAdoptedStubExtReferenceGraph(contexts []*FileProcessingContext, decisions map[string]objectDecision) map[string]map[string]struct{} {
+func collectAdoptedStubExtReferenceGraph(contexts []*FileProcessingContext, decisions map[string]objectDecision, searchResultState *searchResultState) map[string]map[string]struct{} {
 	graph := make(map[string]map[string]struct{})
 
 	for _, ctx := range contexts {
@@ -2092,7 +2188,10 @@ func collectAdoptedStubExtReferenceGraph(contexts []*FileProcessingContext, deci
 		}
 		if strings.Contains(ctx.RelPath, "/Forms/") {
 			decision, ok := decisions[ctx.OwnerKey]
-			if !ok || decision.Excluded || decision.Belonging != "Native" {
+			if !ok || decision.Excluded {
+				continue
+			}
+			if decision.Belonging != "Native" && !(decision.SearchResultCode && !decision.Truncated && searchResultPreservesPath(searchResultState, ctx.Path)) {
 				continue
 			}
 		}
@@ -2214,7 +2313,7 @@ func promoteRegisterDocumentOwnersToNativeIndexed(
 	}
 }
 
-func collectFormDynamicListContracts(contexts []*FileProcessingContext, decisions map[string]objectDecision) map[string]formDynamicListContract {
+func collectFormDynamicListContracts(contexts []*FileProcessingContext, decisions map[string]objectDecision, searchResultState *searchResultState) map[string]formDynamicListContract {
 	result := make(map[string]formDynamicListContract)
 
 	for _, ctx := range contexts {
@@ -2227,7 +2326,10 @@ func collectFormDynamicListContracts(contexts []*FileProcessingContext, decision
 			continue
 		}
 		decision, ok := decisions[ctx.OwnerKey]
-		if !ok || decision.Excluded || decision.Belonging != "Native" {
+		if !ok || decision.Excluded {
+			continue
+		}
+		if decision.Belonging != "Native" && !(decision.SearchResultCode && !decision.Truncated && searchResultPreservesPath(searchResultState, ctx.Path)) {
 			continue
 		}
 
@@ -2635,7 +2737,7 @@ func applyAdoptedStubMetaDataRules(
 		}
 
 		if decision.Excluded || decision.Belonging == "" {
-			decisions[key] = objectDecision{Belonging: "AdoptedStub"}
+			decisions[key] = objectDecision{Belonging: "AdoptedStub", SearchResultCode: decision.SearchResultCode}
 			debugDecision(key, "kept as AdoptedStubMetaData from CommonTemplate упо_MetaDataFile")
 			continue
 		}
@@ -2646,6 +2748,839 @@ func applyAdoptedStubMetaDataRules(
 			debugDecision(key, "expanded to AdoptedStubMetaData from CommonTemplate упо_MetaDataFile")
 		}
 	}
+}
+
+type searchResultPlaceRequest struct {
+	Place  string
+	Groups []string
+}
+
+type searchResultParsedMethod struct {
+	Name           string
+	IsFunction     bool
+	DirectiveLines []string
+	HeaderLine     string
+	BodyLines      []string
+	GeneratedName  string
+}
+
+func newSearchResultState() *searchResultState {
+	return &searchResultState{
+		ObjectOverlays:          make(map[string]searchResultObjectOverlay),
+		ModuleWrites:            make(map[string]searchResultModuleWrite),
+		ExpectedAdoptedObjects:  make(map[string]struct{}),
+		PreservedPaths:          make(map[string]struct{}),
+		PreservedConfigDumpInfo: make(map[string]struct{}),
+	}
+}
+
+func searchResultPreservesPath(state *searchResultState, path string) bool {
+	if state == nil || len(state.PreservedPaths) == 0 {
+		return false
+	}
+	_, ok := state.PreservedPaths[path]
+	return ok
+}
+
+func searchResultObjectOverlayForKey(state *searchResultState, key string) searchResultObjectOverlay {
+	if state == nil || key == "" {
+		return searchResultObjectOverlay{}
+	}
+	return state.ObjectOverlays[key]
+}
+
+func mergeSearchResultOverlayCommands(overlay searchResultObjectOverlay, retained map[string]struct{}) searchResultObjectOverlay {
+	if len(retained) == 0 {
+		return overlay
+	}
+	if overlay.PreserveCommands == nil {
+		overlay.PreserveCommands = make(map[string]struct{}, len(retained))
+	}
+	for name := range retained {
+		overlay.PreserveCommands[name] = struct{}{}
+	}
+	return overlay
+}
+
+func applySearchResultStateToExcludedPaths(state *searchResultState, excludedPaths map[string]struct{}) {
+	if state == nil || excludedPaths == nil {
+		return
+	}
+	for path := range state.PreservedPaths {
+		delete(excludedPaths, path)
+	}
+}
+
+func collectSearchResultState(
+	cfg *config.Configuration,
+	dir string,
+	contexts []*FileProcessingContext,
+	decisions map[string]objectDecision,
+	primaryNativeObjects map[string]struct{},
+	excludedObjects map[string]struct{},
+	forbiddenAdoptedStubObjects map[string]struct{},
+) (*searchResultState, error) {
+	state := newSearchResultState()
+	if cfg == nil || !cfg.IsSearchResultEnabled() {
+		return state, nil
+	}
+
+	markerGroups, err := loadSearchResultMarkerGroups(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if len(markerGroups) == 0 {
+		return state, nil
+	}
+
+	placeRequests, err := collectSearchResultPlaceRequests(dir, markerGroups)
+	if err != nil {
+		return nil, err
+	}
+	if len(placeRequests) == 0 {
+		return state, nil
+	}
+
+	for key, places := range placeRequests {
+		if _, forbidden := forbiddenAdoptedStubObjects[key]; forbidden {
+			continue
+		}
+		if _, excluded := excludedObjects[key]; excluded {
+			continue
+		}
+		if _, primary := primaryNativeObjects[key]; primary {
+			continue
+		}
+
+		decision := decisions[key]
+		if decision.Belonging == "Native" {
+			continue
+		}
+
+		topCtx := findTopLevelMetadataContextByOwnerKeyIndexed(nil, contexts, key)
+		if topCtx == nil {
+			return nil, fmt.Errorf("упо_SearchResult ссылается на отсутствующий объект %s", key)
+		}
+
+		if decision.Excluded || decision.Belonging == "" {
+			decisions[key] = objectDecision{Belonging: "AdoptedStub", SearchResultCode: true}
+			debugDecision(key, "kept as AdoptedStubCode from CommonTemplate упо_SearchResult")
+		} else if decision.Truncated {
+			decision.Truncated = false
+			decision.SearchResultCode = true
+			decisions[key] = decision
+			debugDecision(key, "expanded to AdoptedStubCode from CommonTemplate упо_SearchResult")
+		} else {
+			decision.SearchResultCode = true
+			decisions[key] = decision
+		}
+		state.ExpectedAdoptedObjects[key] = struct{}{}
+
+		for _, place := range places {
+			if err := registerSearchResultPlace(state, dir, topCtx, place, markerGroups, cfg.Prefix, cfg.IsExactSearchResultTemplatesEnabled(), searchResultDiagnosticsPath(cfg)); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return state, nil
+}
+
+func validateSearchResultAdoptedObjects(
+	indexes *contextIndexes,
+	contexts []*FileProcessingContext,
+	decisions map[string]objectDecision,
+	excludedPaths map[string]struct{},
+	state *searchResultState,
+) error {
+	if state == nil || len(state.ExpectedAdoptedObjects) == 0 {
+		return nil
+	}
+
+	log.Printf("xml step: validate search result adopted objects")
+	startedAt := time.Now()
+
+	for key := range state.ExpectedAdoptedObjects {
+		decision, ok := decisions[key]
+		if !ok {
+			return fmt.Errorf("упо_SearchResult: отсутствует итоговое решение для %s", key)
+		}
+		if decision.Excluded || decision.Belonging == "" || decision.Belonging == "Native" {
+			return fmt.Errorf("упо_SearchResult: объект %s не попал в расширение в режиме adopted", key)
+		}
+
+		ctx := findTopLevelMetadataContextByOwnerKeyIndexed(indexes, contexts, key)
+		if ctx == nil {
+			return fmt.Errorf("упо_SearchResult: не найден top-level XML объекта %s", key)
+		}
+		if _, excluded := excludedPaths[ctx.Path]; excluded {
+			return fmt.Errorf("упо_SearchResult: объект %s исключен из итогового состава", key)
+		}
+		if ctx.Properties == nil || textOf(ctx.Properties, "ObjectBelonging") != "Adopted" {
+			return fmt.Errorf("упо_SearchResult: объект %s сохранен не в режиме adopted", key)
+		}
+	}
+
+	logXMLStepCompleted("validate search result adopted objects", startedAt, fmt.Sprintf("objects=%d", len(state.ExpectedAdoptedObjects)))
+	return nil
+}
+
+func loadSearchResultMarkerGroups(cfg *config.Configuration) (map[string][]string, error) {
+	result := make(map[string][]string)
+	if cfg == nil {
+		return result, nil
+	}
+	configPath := strings.TrimSpace(cfg.ConfigPath)
+	if configPath == "" {
+		return nil, fmt.Errorf("Use_упо_SearchResult включен, но путь к файлу конфига не определен")
+	}
+
+	markersPath := filepath.Join(filepath.Dir(configPath), "searchingTemplateText.json")
+	data, err := os.ReadFile(markersPath)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось прочитать searchingTemplateText.json: %w", err)
+	}
+	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
+
+	var raw map[string][]string
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("не удалось разобрать searchingTemplateText.json: %w", err)
+	}
+
+	for group, markers := range raw {
+		group = strings.TrimSpace(group)
+		if group == "" {
+			continue
+		}
+		for _, marker := range markers {
+			marker = strings.TrimSpace(marker)
+			if marker == "" {
+				continue
+			}
+			result[group] = append(result[group], marker)
+		}
+	}
+
+	return result, nil
+}
+
+func collectSearchResultPlaceRequests(dir string, markerGroups map[string][]string) (map[string][]searchResultPlaceRequest, error) {
+	result := make(map[string][]searchResultPlaceRequest)
+	if dir == "" || len(markerGroups) == 0 {
+		return result, nil
+	}
+
+	templatePath := filepath.Join(dir, "CommonTemplates", "упо_SearchResult", "Ext", "Template.txt")
+	data, err := os.ReadFile(templatePath)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось прочитать макет упо_SearchResult: %w", err)
+	}
+	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
+
+	var raw any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("не удалось разобрать макет упо_SearchResult: %w", err)
+	}
+
+	root, ok := raw.(map[string]any)
+	if !ok {
+		return result, nil
+	}
+
+	for kindName, objectsValue := range root {
+		kind := normalizeSearchResultKind(kindName)
+		if kind == "" {
+			continue
+		}
+
+		objects, ok := objectsValue.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		for objectName, objectValue := range objects {
+			places, ok := objectValue.(map[string]any)
+			if !ok {
+				continue
+			}
+
+			key := kind + "." + strings.TrimSpace(objectName)
+			for placeName, countersValue := range places {
+				counters, ok := countersValue.(map[string]any)
+				if !ok {
+					continue
+				}
+
+				activeGroups := collectActiveSearchResultGroups(counters, markerGroups)
+				if len(activeGroups) == 0 {
+					continue
+				}
+
+				result[key] = append(result[key], searchResultPlaceRequest{
+					Place:  strings.TrimSpace(placeName),
+					Groups: activeGroups,
+				})
+			}
+		}
+	}
+
+	return result, nil
+}
+
+func normalizeSearchResultKind(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	if kind, ok := searchResultKindAliases[trimmed]; ok {
+		return kind
+	}
+	return normalizeConfiguredKind(trimmed)
+}
+
+func collectActiveSearchResultGroups(counters map[string]any, markerGroups map[string][]string) []string {
+	result := make([]string, 0, len(counters))
+	for group := range markerGroups {
+		count, ok := counters[group]
+		if !ok {
+			continue
+		}
+		if searchResultCounterPositive(count) {
+			result = append(result, group)
+		}
+	}
+	slices.Sort(result)
+	return result
+}
+
+func searchResultCounterPositive(value any) bool {
+	switch typed := value.(type) {
+	case float64:
+		return typed > 0
+	case int:
+		return typed > 0
+	case int32:
+		return typed > 0
+	case int64:
+		return typed > 0
+	case json.Number:
+		num, err := typed.Int64()
+		return err == nil && num > 0
+	case string:
+		num, err := strconv.Atoi(strings.TrimSpace(typed))
+		return err == nil && num > 0
+	default:
+		return false
+	}
+}
+
+func registerSearchResultPlace(
+	state *searchResultState,
+	root string,
+	topCtx *FileProcessingContext,
+	place searchResultPlaceRequest,
+	markerGroups map[string][]string,
+	prefix string,
+	exactTemplates bool,
+	diagnosticsPath string,
+) error {
+	if state == nil || topCtx == nil {
+		return nil
+	}
+
+	objectDir := strings.TrimSuffix(topCtx.Path, filepath.Ext(topCtx.Path))
+	if objectDir == "" {
+		return fmt.Errorf("не удалось определить каталог объекта для %s", topCtx.OwnerKey)
+	}
+
+	trimmedPlace := strings.TrimSpace(place.Place)
+	if trimmedPlace == "" {
+		return nil
+	}
+
+	switch {
+	case trimmedPlace == "ОбщийМодуль":
+		if topCtx.OwnerKind != "CommonModule" {
+			return fmt.Errorf("место %q допустимо только для CommonModule, получен %s", trimmedPlace, topCtx.OwnerKey)
+		}
+		return addSearchResultModuleWrite(state, filepath.Join(objectDir, "Ext", "Module.bsl"), topCtx.OwnerKey+".Module", topCtx.OwnerKey, place.Groups, markerGroups, prefix, exactTemplates, diagnosticsPath)
+	case trimmedPlace == "МодульМенеджера":
+		return addSearchResultModuleWrite(state, filepath.Join(objectDir, "Ext", "ManagerModule.bsl"), topCtx.OwnerKey+".ManagerModule", topCtx.OwnerKey, place.Groups, markerGroups, prefix, exactTemplates, diagnosticsPath)
+	case trimmedPlace == "МодульОбъекта":
+		return addSearchResultModuleWrite(state, filepath.Join(objectDir, "Ext", "ObjectModule.bsl"), topCtx.OwnerKey+".ObjectModule", topCtx.OwnerKey, place.Groups, markerGroups, prefix, exactTemplates, diagnosticsPath)
+	case trimmedPlace == "МодульНабораЗаписей":
+		return addSearchResultModuleWrite(state, filepath.Join(objectDir, "Ext", "RecordSetModule.bsl"), topCtx.OwnerKey+".RecordSetModule", topCtx.OwnerKey, place.Groups, markerGroups, prefix, exactTemplates, diagnosticsPath)
+	case trimmedPlace == "МодульКоманды":
+		if topCtx.OwnerKind != "CommonCommand" {
+			return fmt.Errorf("место %q без имени команды допустимо только для CommonCommand, получен %s", trimmedPlace, topCtx.OwnerKey)
+		}
+		return addSearchResultModuleWrite(state, filepath.Join(objectDir, "Ext", "CommandModule.bsl"), topCtx.OwnerKey+".CommandModule", topCtx.OwnerKey, place.Groups, markerGroups, prefix, exactTemplates, diagnosticsPath)
+	case strings.HasPrefix(trimmedPlace, "МодульФормы"):
+		formName := strings.TrimSpace(strings.TrimPrefix(trimmedPlace, "МодульФормы"))
+		if formName == "" {
+			return fmt.Errorf("не удалось определить имя формы из %q для %s", trimmedPlace, topCtx.OwnerKey)
+		}
+		return addSearchResultFormOverlay(state, objectDir, topCtx, formName, place.Groups, markerGroups, prefix, exactTemplates, diagnosticsPath)
+	case strings.HasPrefix(trimmedPlace, "МодульКоманды"):
+		commandName := strings.TrimSpace(strings.TrimPrefix(trimmedPlace, "МодульКоманды"))
+		if commandName == "" {
+			return fmt.Errorf("не удалось определить имя команды из %q для %s", trimmedPlace, topCtx.OwnerKey)
+		}
+		return addSearchResultCommandOverlay(state, objectDir, topCtx, commandName, place.Groups, markerGroups, prefix, exactTemplates, diagnosticsPath)
+	}
+
+	_ = root
+	return nil
+}
+
+func addSearchResultFormOverlay(
+	state *searchResultState,
+	objectDir string,
+	topCtx *FileProcessingContext,
+	formName string,
+	groups []string,
+	markerGroups map[string][]string,
+	prefix string,
+	exactTemplates bool,
+	diagnosticsPath string,
+) error {
+	var formXMLPath string
+	var formModuleXMLPath string
+	var modulePath string
+	var metadataNames []string
+
+	if topCtx.OwnerKind == "CommonForm" {
+		formModuleXMLPath = filepath.Join(objectDir, "Ext", "Form.xml")
+		modulePath = filepath.Join(objectDir, "Ext", "Form", "Module.bsl")
+		metadataNames = []string{topCtx.OwnerKey + ".Form"}
+	} else {
+		formXMLPath = filepath.Join(objectDir, "Forms", formName+".xml")
+		formModuleXMLPath = filepath.Join(objectDir, "Forms", formName, "Ext", "Form.xml")
+		modulePath = filepath.Join(objectDir, "Forms", formName, "Ext", "Form", "Module.bsl")
+		metadataNames = []string{
+			topCtx.OwnerKey + ".Form." + formName,
+			topCtx.OwnerKey + ".Form." + formName + ".Form",
+		}
+		overlay := state.ObjectOverlays[topCtx.OwnerKey]
+		if overlay.PreserveForms == nil {
+			overlay.PreserveForms = make(map[string]struct{})
+		}
+		overlay.PreserveForms[formName] = struct{}{}
+		state.ObjectOverlays[topCtx.OwnerKey] = overlay
+	}
+
+	if formXMLPath != "" {
+		if _, err := os.Stat(formXMLPath); err != nil {
+			return fmt.Errorf("не найден XML формы %s для %s: %w", formName, topCtx.OwnerKey, err)
+		}
+		state.PreservedPaths[formXMLPath] = struct{}{}
+	}
+	if _, err := os.Stat(formModuleXMLPath); err != nil {
+		return fmt.Errorf("не найден Form.xml формы %s для %s: %w", formName, topCtx.OwnerKey, err)
+	}
+	state.PreservedPaths[formModuleXMLPath] = struct{}{}
+
+	for _, metadataName := range metadataNames {
+		state.PreservedConfigDumpInfo[metadataName] = struct{}{}
+	}
+
+	return addSearchResultModuleWrite(state, modulePath, "", topCtx.OwnerKey, groups, markerGroups, prefix, exactTemplates, diagnosticsPath)
+}
+
+func addSearchResultCommandOverlay(
+	state *searchResultState,
+	objectDir string,
+	topCtx *FileProcessingContext,
+	commandName string,
+	groups []string,
+	markerGroups map[string][]string,
+	prefix string,
+	exactTemplates bool,
+	diagnosticsPath string,
+) error {
+	if topCtx.OwnerKind == "CommonCommand" {
+		return addSearchResultModuleWrite(state, filepath.Join(objectDir, "Ext", "CommandModule.bsl"), topCtx.OwnerKey+".CommandModule", topCtx.OwnerKey, groups, markerGroups, prefix, exactTemplates, diagnosticsPath)
+	}
+
+	overlay := state.ObjectOverlays[topCtx.OwnerKey]
+	if overlay.PreserveCommands == nil {
+		overlay.PreserveCommands = make(map[string]struct{})
+	}
+	overlay.PreserveCommands[commandName] = struct{}{}
+	state.ObjectOverlays[topCtx.OwnerKey] = overlay
+
+	state.PreservedConfigDumpInfo[topCtx.OwnerKey+".Command."+commandName] = struct{}{}
+	state.PreservedConfigDumpInfo[topCtx.OwnerKey+".Command."+commandName+".CommandModule"] = struct{}{}
+
+	return addSearchResultModuleWrite(state, filepath.Join(objectDir, "Commands", commandName, "Ext", "CommandModule.bsl"), "", topCtx.OwnerKey, groups, markerGroups, prefix, exactTemplates, diagnosticsPath)
+}
+
+func addSearchResultModuleWrite(
+	state *searchResultState,
+	modulePath string,
+	metadataName string,
+	ownerKey string,
+	groups []string,
+	markerGroups map[string][]string,
+	prefix string,
+	exactTemplates bool,
+	diagnosticsPath string,
+) error {
+	if state == nil {
+		return nil
+	}
+	if modulePath == "" {
+		return fmt.Errorf("не задан путь к модулю для SearchResult")
+	}
+	if _, exists := state.ModuleWrites[modulePath]; exists {
+		return fmt.Errorf("повторное наложение текста модуля SearchResult для %s", modulePath)
+	}
+	if _, err := os.Stat(modulePath); err != nil {
+		return fmt.Errorf("не найден текст модуля %s: %w", modulePath, err)
+	}
+
+	content, err := buildSearchResultModuleContent(modulePath, groups, markerGroups, prefix, exactTemplates, diagnosticsPath)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(content) == "" {
+		return nil
+	}
+
+	state.ModuleWrites[modulePath] = searchResultModuleWrite{
+		OwnerKey: ownerKey,
+		Path:     modulePath,
+		Content:  content,
+	}
+	state.PreservedPaths[modulePath] = struct{}{}
+	if metadataName != "" {
+		state.PreservedConfigDumpInfo[metadataName] = struct{}{}
+	}
+	return nil
+}
+
+func buildSearchResultModuleContent(modulePath string, groups []string, markerGroups map[string][]string, prefix string, exactTemplates bool, diagnosticsPath string) (string, error) {
+	data, err := os.ReadFile(modulePath)
+	if err != nil {
+		return "", fmt.Errorf("не удалось прочитать текст модуля %s: %w", modulePath, err)
+	}
+	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
+
+	newline := detectModuleNewline(data)
+	text := strings.ReplaceAll(string(data), "\r\n", "\n")
+	lines := strings.Split(text, "\n")
+	exactMarkers := collectSearchResultMarkers(groups, markerGroups)
+	if len(exactMarkers) == 0 {
+		return "", nil
+	}
+
+	allMethodNames := make(map[string]struct{})
+	allMethods := make([]searchResultParsedMethod, 0, 8)
+	allModuleBlocks := make([][]string, 0, 2)
+	outsideBlock := make([]string, 0, 8)
+
+	for i := 0; i < len(lines); {
+		method, next, ok, err := parseSearchResultModuleMethod(lines, i)
+		if err != nil {
+			return "", fmt.Errorf("не удалось разобрать метод в %s: %w", modulePath, err)
+		}
+		if !ok {
+			outsideBlock = append(outsideBlock, lines[i])
+			i++
+			continue
+		}
+
+		if len(outsideBlock) > 0 {
+			allModuleBlocks = append(allModuleBlocks, append([]string(nil), outsideBlock...))
+		}
+		outsideBlock = outsideBlock[:0]
+
+		allMethodNames[method.Name] = struct{}{}
+		method.GeneratedName = prefix + method.Name
+		allMethods = append(allMethods, method)
+		i = next
+	}
+
+	if len(outsideBlock) > 0 {
+		allModuleBlocks = append(allModuleBlocks, append([]string(nil), outsideBlock...))
+	}
+
+	selectedBlocks := selectSearchResultModuleBlocks(allModuleBlocks, exactMarkers)
+	selectedMethods := selectSearchResultMethods(allMethods, exactMarkers)
+
+	exactMismatchMessage := ""
+	if len(selectedBlocks) == 0 && len(selectedMethods) == 0 {
+		exactMismatchMessage = formatSearchResultMarkerMismatch(modulePath, groups, markerGroups, lines, true)
+	}
+
+	if len(selectedBlocks) == 0 && len(selectedMethods) == 0 && !exactTemplates {
+		if exactMismatchMessage != "" {
+			writeSearchResultDiagnostics(diagnosticsPath, exactMismatchMessage)
+		}
+		softMarkers := collectAllSearchResultMarkers(markerGroups)
+		selectedBlocks = selectSearchResultModuleBlocks(allModuleBlocks, softMarkers)
+		selectedMethods = selectSearchResultMethods(allMethods, softMarkers)
+	}
+
+	for _, method := range selectedMethods {
+		if _, exists := allMethodNames[method.GeneratedName]; exists {
+			return "", fmt.Errorf("в модуле %s уже существует метод %s; SearchResult не может безопасно наложить код", modulePath, method.GeneratedName)
+		}
+	}
+
+	if len(selectedBlocks) == 0 && len(selectedMethods) == 0 {
+		mismatchMessage := exactMismatchMessage
+		if mismatchMessage == "" {
+			mismatchMessage = formatSearchResultMarkerMismatch(modulePath, groups, markerGroups, lines, exactTemplates)
+		}
+		writeSearchResultDiagnostics(diagnosticsPath, mismatchMessage)
+		if len(collectSearchResultFoundGroups(lines, markerGroups)) == 0 {
+			return "", fmt.Errorf("%s", mismatchMessage)
+		}
+		return "", fmt.Errorf("%s", mismatchMessage)
+	}
+
+	rendered := make([]string, 0, len(selectedBlocks)+len(selectedMethods)*6)
+	for _, block := range selectedBlocks {
+		rendered = append(rendered, block...)
+		if len(rendered) > 0 && rendered[len(rendered)-1] != "" {
+			rendered = append(rendered, "")
+		}
+	}
+
+	for idx, method := range selectedMethods {
+		rendered = append(rendered, method.DirectiveLines...)
+		if method.IsFunction {
+			rendered = append(rendered, `&ИзменениеИКонтроль("`+method.Name+`")`)
+		} else {
+			rendered = append(rendered, `&После("`+method.Name+`")`)
+		}
+		rendered = append(rendered, renameSearchResultMethodHeader(method.HeaderLine, method.Name, method.GeneratedName))
+		rendered = append(rendered, method.BodyLines...)
+		if idx != len(selectedMethods)-1 {
+			rendered = append(rendered, "")
+		}
+	}
+
+	for len(rendered) > 0 && rendered[len(rendered)-1] == "" {
+		rendered = rendered[:len(rendered)-1]
+	}
+
+	return strings.Join(rendered, newline) + newline, nil
+}
+
+func detectModuleNewline(data []byte) string {
+	if bytes.Contains(data, []byte("\r\n")) {
+		return "\r\n"
+	}
+	return "\n"
+}
+
+func collectSearchResultMarkers(groups []string, markerGroups map[string][]string) []string {
+	result := make([]string, 0, len(groups)*4)
+	seen := make(map[string]struct{})
+	for _, group := range groups {
+		for _, marker := range markerGroups[group] {
+			if marker == "" {
+				continue
+			}
+			if _, ok := seen[marker]; ok {
+				continue
+			}
+			seen[marker] = struct{}{}
+			result = append(result, marker)
+		}
+	}
+	return result
+}
+
+func collectAllSearchResultMarkers(markerGroups map[string][]string) []string {
+	groups := make([]string, 0, len(markerGroups))
+	for group := range markerGroups {
+		groups = append(groups, group)
+	}
+	slices.Sort(groups)
+	return collectSearchResultMarkers(groups, markerGroups)
+}
+
+func selectSearchResultModuleBlocks(blocks [][]string, markers []string) [][]string {
+	selected := make([][]string, 0, len(blocks))
+	for _, block := range blocks {
+		if blockContainsSearchResultMarker(block, markers) {
+			selected = append(selected, block)
+		}
+	}
+	return selected
+}
+
+func selectSearchResultMethods(methods []searchResultParsedMethod, markers []string) []searchResultParsedMethod {
+	selected := make([]searchResultParsedMethod, 0, len(methods))
+	for _, method := range methods {
+		if blockContainsSearchResultMarker(searchResultMethodLines(method), markers) {
+			selected = append(selected, method)
+		}
+	}
+	return selected
+}
+
+func searchResultMethodLines(method searchResultParsedMethod) []string {
+	lines := make([]string, 0, len(method.DirectiveLines)+1+len(method.BodyLines))
+	lines = append(lines, method.DirectiveLines...)
+	lines = append(lines, method.HeaderLine)
+	lines = append(lines, method.BodyLines...)
+	return lines
+}
+
+func collectSearchResultFoundGroups(lines []string, markerGroups map[string][]string) []string {
+	found := make([]string, 0, len(markerGroups))
+	for group, markers := range markerGroups {
+		if blockContainsSearchResultMarker(lines, markers) {
+			found = append(found, group)
+		}
+	}
+	slices.Sort(found)
+	return found
+}
+
+func formatSearchResultMarkerMismatch(modulePath string, expectedGroups []string, markerGroups map[string][]string, lines []string, exactTemplates bool) string {
+	expected := append([]string(nil), expectedGroups...)
+	slices.Sort(expected)
+	found := collectSearchResultFoundGroups(lines, markerGroups)
+
+	if exactTemplates {
+		if len(found) == 0 {
+			return fmt.Sprintf("макет упо_SearchResult ожидает точные метки групп [%s] в %s, но в модуле не найдена ни одна метка из searchingTemplateText.json", strings.Join(expected, ", "), modulePath)
+		}
+		return fmt.Sprintf("макет упо_SearchResult ожидает точные метки групп [%s] в %s, но найдены только группы [%s]", strings.Join(expected, ", "), modulePath, strings.Join(found, ", "))
+	}
+
+	if len(found) == 0 {
+		return fmt.Sprintf("макет упо_SearchResult ожидает метки групп [%s] в %s, но в модуле не найдена ни одна метка из searchingTemplateText.json", strings.Join(expected, ", "), modulePath)
+	}
+	return fmt.Sprintf("макет упо_SearchResult ожидает метки групп [%s] в %s, но не удалось собрать код даже после мягкого сопоставления; найдены группы [%s]", strings.Join(expected, ", "), modulePath, strings.Join(found, ", "))
+}
+
+func searchResultDiagnosticsPath(cfg *config.Configuration) string {
+	if cfg == nil || strings.TrimSpace(cfg.OutputPath) == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(cfg.OutputPath), "_log", "searchresult-template-errors.log")
+}
+
+func writeSearchResultDiagnostics(path string, message string) {
+	path = strings.TrimSpace(path)
+	message = strings.TrimSpace(message)
+	if path == "" || message == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		log.Printf("searchresult diagnostics: cannot create log dir for %s: %v", path, err)
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		log.Printf("searchresult diagnostics: cannot open %s: %v", path, err)
+		return
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString(message + "\n"); err != nil {
+		log.Printf("searchresult diagnostics: cannot write %s: %v", path, err)
+	}
+}
+
+func blockContainsSearchResultMarker(lines []string, markers []string) bool {
+	for _, line := range lines {
+		for _, marker := range markers {
+			if strings.Contains(line, marker) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func parseSearchResultModuleMethod(lines []string, start int) (method searchResultParsedMethod, next int, ok bool, err error) {
+	if start >= len(lines) {
+		return method, start, false, nil
+	}
+
+	idx := start
+	directives := make([]string, 0, 2)
+	for idx < len(lines) && isModuleDirectiveLine(lines[idx]) {
+		directives = append(directives, lines[idx])
+		idx++
+	}
+	if idx >= len(lines) {
+		return method, start, false, nil
+	}
+
+	name, isFunction, headerOK := parseModuleMethodHeader(lines[idx])
+	if !headerOK {
+		return method, start, false, nil
+	}
+
+	endKeyword := "КонецПроцедуры"
+	if isFunction {
+		endKeyword = "КонецФункции"
+	}
+
+	end := idx + 1
+	for end < len(lines) && !strings.HasPrefix(strings.TrimSpace(lines[end]), endKeyword) {
+		end++
+	}
+	if end >= len(lines) {
+		return method, start, false, fmt.Errorf("не найдено %s для метода %s", endKeyword, name)
+	}
+
+	method.Name = name
+	method.IsFunction = isFunction
+	method.DirectiveLines = directives
+	method.HeaderLine = lines[idx]
+	method.BodyLines = append([]string(nil), lines[idx+1:end+1]...)
+	return method, end + 1, true, nil
+}
+
+func isModuleDirectiveLine(line string) bool {
+	return strings.HasPrefix(strings.TrimSpace(line), "&")
+}
+
+func parseModuleMethodHeader(line string) (name string, isFunction bool, ok bool) {
+	matches := moduleMethodHeaderPattern.FindStringSubmatch(line)
+	if len(matches) != 5 {
+		return "", false, false
+	}
+	return matches[4], strings.EqualFold(matches[2], "Функция"), true
+}
+
+func renameSearchResultMethodHeader(headerLine, originalName, generatedName string) string {
+	indexes := moduleMethodHeaderPattern.FindStringSubmatchIndex(headerLine)
+	if len(indexes) < 10 {
+		return headerLine
+	}
+	nameStart := indexes[8]
+	nameEnd := indexes[9]
+	if nameStart < 0 || nameEnd < 0 || originalName == "" || generatedName == "" {
+		return headerLine
+	}
+	return headerLine[:nameStart] + generatedName + headerLine[nameEnd:]
+}
+
+func writeSearchResultModuleFiles(state *searchResultState, decisions map[string]objectDecision) error {
+	if state == nil {
+		return nil
+	}
+	for _, write := range state.ModuleWrites {
+		if write.OwnerKey != "" {
+			if decision, ok := decisions[write.OwnerKey]; ok && decision.Belonging == "Native" {
+				continue
+			}
+		}
+		if err := os.WriteFile(write.Path, []byte(write.Content), 0o644); err != nil {
+			return fmt.Errorf("не удалось записать текст модуля %s: %w", write.Path, err)
+		}
+	}
+	return nil
 }
 
 func collectConfigurationChildObjectReferences(root *etree.Element, primaryNativeObjects map[string]struct{}) map[string]struct{} {
@@ -5276,13 +6211,13 @@ func cleanupDanglingCommandInterfaceCommandsWithResolver(doc *etree.Document, ex
 	return changed
 }
 
-func cleanupConfigDumpInfoNonNativeChildren(doc *etree.Document, contexts []*FileProcessingContext, decisions map[string]objectDecision) bool {
+func cleanupConfigDumpInfoNonNativeChildren(doc *etree.Document, contexts []*FileProcessingContext, decisions map[string]objectDecision, preserved map[string]struct{}) bool {
 	return cleanupConfigDumpInfoNonNativeChildrenWithResolver(doc, decisions, func(name string) bool {
 		return roleMetadataTargetExists(name, contexts)
-	})
+	}, preserved)
 }
 
-func cleanupConfigDumpInfoNonNativeChildrenWithResolver(doc *etree.Document, decisions map[string]objectDecision, exists metadataTargetExistsFunc) bool {
+func cleanupConfigDumpInfoNonNativeChildrenWithResolver(doc *etree.Document, decisions map[string]objectDecision, exists metadataTargetExistsFunc, preserved map[string]struct{}) bool {
 	if doc == nil || len(decisions) == 0 {
 		return false
 	}
@@ -5310,6 +6245,10 @@ func cleanupConfigDumpInfoNonNativeChildrenWithResolver(doc *etree.Document, dec
 			}
 
 			name := strings.TrimSpace(child.SelectAttrValue("name", ""))
+			if _, keep := preserved[name]; keep {
+				walk(child)
+				continue
+			}
 			removed := false
 			for prefix := range nonNativePrefixes {
 				if strings.HasPrefix(name, prefix) {
@@ -5332,6 +6271,9 @@ func cleanupConfigDumpInfoNonNativeChildrenWithResolver(doc *etree.Document, dec
 				if decision, decisionExists := decisions[key]; decisionExists && !decision.Excluded && decision.Belonging != "Native" {
 					for _, nested := range append([]*etree.Element(nil), child.ChildElements()...) {
 						nestedName := strings.TrimSpace(nested.SelectAttrValue("name", ""))
+						if _, keep := preserved[nestedName]; keep {
+							continue
+						}
 						if strings.EqualFold(localName(nested.Tag), "Metadata") &&
 							(isDisallowedAdoptedModuleMetadata(nestedName) || (exists != nil && !exists(nestedName))) {
 							child.RemoveChild(nested)
@@ -5575,6 +6517,48 @@ func cleanupAdoptedObjectFormReferences(properties *etree.Element) bool {
 	return changed
 }
 
+func hasSearchResultPreservedChildren(overlay searchResultObjectOverlay) bool {
+	return len(overlay.PreserveForms) > 0 || len(overlay.PreserveCommands) > 0
+}
+
+func shouldKeepSearchResultChild(el *etree.Element, overlay searchResultObjectOverlay) bool {
+	if el == nil {
+		return false
+	}
+
+	switch localName(el.Tag) {
+	case "Form":
+		_, keep := overlay.PreserveForms[strings.TrimSpace(el.Text())]
+		return keep
+	case "Command":
+		name := metadataChildName(el)
+		_, keep := overlay.PreserveCommands[name]
+		return keep
+	default:
+		return false
+	}
+}
+
+func normalizeSearchResultChildObjects(childObjects *etree.Element, overlay searchResultObjectOverlay) bool {
+	if childObjects == nil {
+		return false
+	}
+
+	changed := false
+	for _, child := range append([]etree.Token(nil), childObjects.Child...) {
+		el, ok := child.(*etree.Element)
+		if !ok {
+			continue
+		}
+		if shouldKeepSearchResultChild(el, overlay) {
+			continue
+		}
+		childObjects.RemoveChild(el)
+		changed = true
+	}
+	return changed
+}
+
 func normalizeTruncatedMetadataStub(doc *etree.Document, properties *etree.Element) bool {
 	if doc == nil || properties == nil {
 		return false
@@ -5615,7 +6599,7 @@ func normalizeTruncatedMetadataStub(doc *etree.Document, properties *etree.Eleme
 	return true
 }
 
-func normalizeAdoptedStubExtFormComposition(doc *etree.Document, contract formDynamicListContract, retainedCommands map[string]struct{}) bool {
+func normalizeAdoptedStubExtFormComposition(doc *etree.Document, contract formDynamicListContract, overlay searchResultObjectOverlay) bool {
 	if doc == nil {
 		return false
 	}
@@ -5649,7 +6633,7 @@ func normalizeAdoptedStubExtFormComposition(doc *etree.Document, contract formDy
 		case "InternalInfo", "Properties":
 			continue
 		case "ChildObjects":
-			if normalizeFormStubChildObjects(el, allowedPaths, "", retainedCommands) {
+			if normalizeFormStubChildObjects(el, allowedPaths, "", overlay) {
 				changed = true
 			}
 			continue
@@ -5855,7 +6839,7 @@ func collectStandardAttributeNames(target *etree.Element) map[string]struct{} {
 	return result
 }
 
-func normalizeFormStubChildObjects(childObjects *etree.Element, allowedPaths map[string]struct{}, parentPath string, retainedCommands map[string]struct{}) bool {
+func normalizeFormStubChildObjects(childObjects *etree.Element, allowedPaths map[string]struct{}, parentPath string, overlay searchResultObjectOverlay) bool {
 	if childObjects == nil {
 		return false
 	}
@@ -5867,12 +6851,7 @@ func normalizeFormStubChildObjects(childObjects *etree.Element, allowedPaths map
 			continue
 		}
 		tag := localName(el.Tag)
-		if tag == "Command" {
-			if _, keep := retainedCommands[metadataChildName(el)]; keep {
-				continue
-			}
-			childObjects.RemoveChild(el)
-			changed = true
+		if parentPath == "" && shouldKeepSearchResultChild(el, overlay) {
 			continue
 		}
 		if tag != "Attribute" && tag != "TabularSection" {
@@ -5896,7 +6875,7 @@ func normalizeFormStubChildObjects(childObjects *etree.Element, allowedPaths map
 		if tag == "TabularSection" {
 			nestedChildObjects := el.FindElement("./ChildObjects")
 			if nestedChildObjects != nil {
-				if normalizeFormStubChildObjects(nestedChildObjects, allowedPaths, currentPath, retainedCommands) {
+				if normalizeFormStubChildObjects(nestedChildObjects, allowedPaths, currentPath, overlay) {
 					changed = true
 				}
 			}
@@ -5926,7 +6905,7 @@ func metadataTargetElement(doc *etree.Document) *etree.Element {
 	return root
 }
 
-func normalizeAdoptedObjectComposition(doc *etree.Document, ownerKind string, retainedCommands map[string]struct{}) bool {
+func normalizeAdoptedObjectComposition(doc *etree.Document, ownerKind string, overlay searchResultObjectOverlay) bool {
 	if doc == nil {
 		return false
 	}
@@ -5947,8 +6926,8 @@ func normalizeAdoptedObjectComposition(doc *etree.Document, ownerKind string, re
 		if tag == "InternalInfo" || tag == "Properties" {
 			continue
 		}
-		if tag == "ChildObjects" && len(retainedCommands) > 0 {
-			if normalizeRetainedAdoptedCommandChildObjects(el, retainedCommands) {
+		if tag == "ChildObjects" && hasSearchResultPreservedChildren(overlay) {
+			if normalizeSearchResultChildObjects(el, overlay) {
 				changed = true
 			}
 			continue
@@ -5968,7 +6947,7 @@ func normalizeAdoptedObjectComposition(doc *etree.Document, ownerKind string, re
 	return changed
 }
 
-func normalizeAdoptedStubMetaDataComposition(doc *etree.Document, ownerKind string, rule adoptedStubMetaDataRule, retainedCommands map[string]struct{}) bool {
+func normalizeAdoptedStubMetaDataComposition(doc *etree.Document, ownerKind string, rule adoptedStubMetaDataRule, overlay searchResultObjectOverlay) bool {
 	if doc == nil {
 		return false
 	}
@@ -6004,7 +6983,7 @@ func normalizeAdoptedStubMetaDataComposition(doc *etree.Document, ownerKind stri
 	}
 
 	if childObjects != nil {
-		if normalizeAdoptedStubMetaDataChildObjects(childObjects, rule, retainedCommands) {
+		if normalizeAdoptedStubMetaDataChildObjects(childObjects, rule, overlay) {
 			changed = true
 		}
 	} else if hadChildObjects {
@@ -6020,7 +6999,7 @@ func normalizeAdoptedStubMetaDataComposition(doc *etree.Document, ownerKind stri
 	return changed
 }
 
-func normalizeAdoptedStubMetaDataChildObjects(childObjects *etree.Element, rule adoptedStubMetaDataRule, retainedCommands map[string]struct{}) bool {
+func normalizeAdoptedStubMetaDataChildObjects(childObjects *etree.Element, rule adoptedStubMetaDataRule, overlay searchResultObjectOverlay) bool {
 	if childObjects == nil {
 		return false
 	}
@@ -6033,6 +7012,9 @@ func normalizeAdoptedStubMetaDataChildObjects(childObjects *etree.Element, rule 
 		}
 
 		tag := localName(el.Tag)
+		if shouldKeepSearchResultChild(el, overlay) {
+			continue
+		}
 		name := metadataChildName(el)
 		switch tag {
 		case "Attribute":
@@ -6051,10 +7033,6 @@ func normalizeAdoptedStubMetaDataChildObjects(childObjects *etree.Element, rule 
 				if normalizeAdoptedStubMetaDataTabularSection(el, allowedAttrs) {
 					changed = true
 				}
-				continue
-			}
-		case "Command":
-			if _, keep := retainedCommands[name]; keep {
 				continue
 			}
 		}
@@ -6468,6 +7446,7 @@ func buildFinalMetadataPathIndex(
 	decisions map[string]objectDecision,
 	excludedPaths map[string]struct{},
 	retainedOwnerCommands map[string]map[string]struct{},
+	searchResultState *searchResultState,
 ) map[string]struct{} {
 	index := make(map[string]struct{})
 
@@ -6482,24 +7461,26 @@ func buildFinalMetadataPathIndex(
 		if !ok || decision.Excluded {
 			continue
 		}
-		addFinalMetadataPathsFromContext(index, ctx, decision, retainedOwnerCommands[ctx.OwnerKey])
+		overlay := searchResultObjectOverlayForKey(searchResultState, ctx.OwnerKey)
+		overlay = mergeSearchResultOverlayCommands(overlay, retainedOwnerCommands[ctx.OwnerKey])
+		addFinalMetadataPathsFromContext(index, ctx, decision, overlay)
 	}
 
 	return index
 }
 
-func addFinalMetadataPathsFromContext(index map[string]struct{}, ctx *FileProcessingContext, decision objectDecision, retainedCommands map[string]struct{}) {
+func addFinalMetadataPathsFromContext(index map[string]struct{}, ctx *FileProcessingContext, decision objectDecision, overlay searchResultObjectOverlay) {
 	if index == nil || ctx == nil || ctx.OwnerKey == "" {
 		return
 	}
 
 	index[ctx.OwnerKey] = struct{}{}
 	target := metadataTargetElement(ctx.Doc)
-	addFinalMetadataChildPaths(index, target, ctx.OwnerKey, decision, retainedCommands)
-	addFinalMetadataFilesystemPaths(index, ctx, decision, retainedCommands)
+	addFinalMetadataChildPaths(index, target, ctx.OwnerKey, decision, overlay)
+	addFinalMetadataFilesystemPaths(index, ctx, decision, overlay)
 }
 
-func addFinalMetadataChildPaths(index map[string]struct{}, parent *etree.Element, ownerPath string, decision objectDecision, retainedCommands map[string]struct{}) {
+func addFinalMetadataChildPaths(index map[string]struct{}, parent *etree.Element, ownerPath string, decision objectDecision, overlay searchResultObjectOverlay) {
 	if index == nil || parent == nil || ownerPath == "" {
 		return
 	}
@@ -6515,18 +7496,25 @@ func addFinalMetadataChildPaths(index map[string]struct{}, parent *etree.Element
 		if kind == "" || name == "" {
 			continue
 		}
-		if kind == "Command" && decision.Belonging != "Native" {
-			if _, keep := retainedCommands[name]; !keep {
-				continue
+		if decision.Belonging != "Native" {
+			if kind == "Command" {
+				if _, keep := overlay.PreserveCommands[name]; !keep {
+					continue
+				}
+			}
+			if kind == "Form" {
+				if _, keep := overlay.PreserveForms[name]; !keep {
+					continue
+				}
 			}
 		}
 		path := ownerPath + "." + kind + "." + name
 		index[path] = struct{}{}
-		addFinalMetadataChildPaths(index, child, path, decision, retainedCommands)
+		addFinalMetadataChildPaths(index, child, path, decision, overlay)
 	}
 }
 
-func addFinalMetadataFilesystemPaths(index map[string]struct{}, ctx *FileProcessingContext, decision objectDecision, retainedCommands map[string]struct{}) {
+func addFinalMetadataFilesystemPaths(index map[string]struct{}, ctx *FileProcessingContext, decision objectDecision, overlay searchResultObjectOverlay) {
 	if index == nil || ctx == nil {
 		return
 	}
@@ -6564,7 +7552,7 @@ func addFinalMetadataFilesystemPaths(index map[string]struct{}, ctx *FileProcess
 		return
 	}
 
-	for commandName := range retainedCommands {
+	for commandName := range overlay.PreserveCommands {
 		commandName = strings.TrimSpace(commandName)
 		if commandName == "" {
 			continue
@@ -6600,6 +7588,7 @@ func finalizeRetainedOwnerCommands(
 	retainedOwnerCommandCandidates map[string]map[string]struct{},
 	retainedOwnerCommands map[string]map[string]struct{},
 	liveCommandRefs *liveCommandReferenceIndex,
+	searchResultState *searchResultState,
 ) (*retainedOwnerCommandFinalizationStats, error) {
 	stats := &retainedOwnerCommandFinalizationStats{}
 	removedPaths, dirtyOwners := diffRetainedOwnerCommands(retainedOwnerCommandCandidates, retainedOwnerCommands)
@@ -6627,9 +7616,13 @@ func finalizeRetainedOwnerCommands(
 		return stats, nil
 	}
 
-	finalMetadataPathIndex := buildFinalMetadataPathIndex(contexts, decisions, excludedPaths, retainedOwnerCommands)
+	finalMetadataPathIndex := buildFinalMetadataPathIndex(contexts, decisions, excludedPaths, retainedOwnerCommands, searchResultState)
 	finalExists := func(name string) bool {
 		return metadataPathExistsInIndex(finalMetadataPathIndex, name)
+	}
+	var preservedConfigDumpInfo map[string]struct{}
+	if searchResultState != nil {
+		preservedConfigDumpInfo = searchResultState.PreservedConfigDumpInfo
 	}
 
 	for ownerKey := range dirtyOwners {
@@ -6643,17 +7636,18 @@ func finalizeRetainedOwnerCommands(
 		}
 
 		changed := false
-		retainedCommands := retainedOwnerCommands[ownerKey]
+		overlay := searchResultObjectOverlayForKey(searchResultState, ownerKey)
+		overlay = mergeSearchResultOverlayCommands(overlay, retainedOwnerCommands[ownerKey])
 		contract, hasContract := formDynamicListContracts[ownerKey]
 		rule, hasRule := adoptedStubMetaDataRules[ownerKey]
 		if hasContract && hasRule {
-			changed = normalizeAdoptedStubExtFormComposition(ctx.Doc, mergeAdoptedStubMetaDataIntoFormContract(contract, rule), retainedCommands) || changed
+			changed = normalizeAdoptedStubExtFormComposition(ctx.Doc, mergeAdoptedStubMetaDataIntoFormContract(contract, rule), overlay) || changed
 		} else if hasRule {
-			changed = normalizeAdoptedStubMetaDataComposition(ctx.Doc, ctx.OwnerKind, rule, retainedCommands) || changed
+			changed = normalizeAdoptedStubMetaDataComposition(ctx.Doc, ctx.OwnerKind, rule, overlay) || changed
 		} else if hasContract {
-			changed = normalizeAdoptedStubExtFormComposition(ctx.Doc, contract, retainedCommands) || changed
+			changed = normalizeAdoptedStubExtFormComposition(ctx.Doc, contract, overlay) || changed
 		} else {
-			changed = normalizeAdoptedObjectComposition(ctx.Doc, ctx.OwnerKind, retainedCommands) || changed
+			changed = normalizeAdoptedObjectComposition(ctx.Doc, ctx.OwnerKind, overlay) || changed
 		}
 		changed = stripPreserveNativeObjectBelongingMarkers(ctx.Doc) || changed
 		stats.FinalizedOwnerDocs++
@@ -6668,7 +7662,7 @@ func finalizeRetainedOwnerCommands(
 	}
 
 	if configDumpCtx := findContextByRelPath(indexes, contexts, configDumpInfo); configDumpCtx != nil && configDumpCtx.Doc != nil {
-		changed := cleanupConfigDumpInfoNonNativeChildrenWithResolver(configDumpCtx.Doc, decisions, finalExists)
+		changed := cleanupConfigDumpInfoNonNativeChildrenWithResolver(configDumpCtx.Doc, decisions, finalExists, preservedConfigDumpInfo)
 		if changed {
 			stats.ChangedFiles++
 			if err := configDumpCtx.Doc.WriteToFile(configDumpCtx.Path); err != nil {

@@ -494,7 +494,7 @@ func TestNormalizeAdoptedStubMetaDataCompositionKeepsRetainedAttributeNative(t *
 		},
 	}
 
-	if !normalizeAdoptedStubMetaDataComposition(doc, "Catalog", rule, nil) {
+	if !normalizeAdoptedStubMetaDataComposition(doc, "Catalog", rule, searchResultObjectOverlay{}) {
 		t.Fatalf("expected adopted metadata composition to change child attributes")
 	}
 
@@ -563,7 +563,7 @@ func TestNormalizeAdoptedStubMetaDataCompositionKeepsRetainedTabularSectionChild
 		},
 	}
 
-	if !normalizeAdoptedStubMetaDataComposition(doc, "Document", rule, nil) {
+	if !normalizeAdoptedStubMetaDataComposition(doc, "Document", rule, searchResultObjectOverlay{}) {
 		t.Fatalf("expected adopted metadata composition to change tabular section child attributes")
 	}
 
@@ -620,7 +620,7 @@ func TestEnsureAdoptedExtendedConfigurationObjectsPreservesRetainedMetaDataFileA
 		},
 	}
 
-	if !normalizeAdoptedStubMetaDataComposition(doc, "Catalog", rule, nil) {
+	if !normalizeAdoptedStubMetaDataComposition(doc, "Catalog", rule, searchResultObjectOverlay{}) {
 		t.Fatalf("expected adopted metadata composition to change child attribute")
 	}
 
@@ -765,7 +765,7 @@ func TestCleanupConfigDumpInfoNonNativeChildrenRemovesAdoptedModules(t *testing.
 		"CommonCommand.ТестОбщаяКоманда": {Belonging: "AdoptedStub"},
 	}
 
-	if !cleanupConfigDumpInfoNonNativeChildren(configDump, contexts, decisions) {
+	if !cleanupConfigDumpInfoNonNativeChildren(configDump, contexts, decisions, nil) {
 		t.Fatalf("expected config dump cleanup to remove adopted module entries")
 	}
 
@@ -855,7 +855,7 @@ func TestCleanupConfigDumpInfoNonNativeChildrenRemovesAdoptedConstantValueManage
 		"Constant.ТестКонстанта": {Belonging: "AdoptedStub"},
 	}
 
-	if !cleanupConfigDumpInfoNonNativeChildren(configDump, contexts, decisions) {
+	if !cleanupConfigDumpInfoNonNativeChildren(configDump, contexts, decisions, nil) {
 		t.Fatalf("expected config dump cleanup to remove adopted constant value manager module entry")
 	}
 
@@ -1912,7 +1912,7 @@ func TestNormalizeAdoptedObjectCompositionKeepsReferencedCommands(t *testing.T) 
 	retained := map[string]struct{}{
 		"ПользователиИнформационнойБазы": {},
 	}
-	if !normalizeAdoptedObjectComposition(doc, "Catalog", retained) {
+	if !normalizeAdoptedObjectComposition(doc, "Catalog", searchResultObjectOverlay{PreserveCommands: retained}) {
 		t.Fatalf("expected adopted composition to change")
 	}
 
@@ -2038,7 +2038,7 @@ func TestPromoteReferencedObjectsFromFunctionalOptionStorageOnly(t *testing.T) {
 		"Report.ДатыЗапретаИзменения":                       {Excluded: true},
 	}
 
-	referenceGraph := collectReferenceGraph(contexts, &config.Configuration{}, nil)
+	referenceGraph := collectReferenceGraph(contexts, &config.Configuration{}, nil, nil, nil)
 	incomingReferenceGraph := collectIncomingReferenceGraph(referenceGraph)
 
 	promoteReferencedObjectsToAdoptedStubIndexed(
@@ -2212,7 +2212,7 @@ func TestFilterRetainedOwnerCommandsDropsCleanedFunctionalOptionReference(t *tes
 		t.Fatalf("expected no live retained commands after cleanup, got %d", len(retained["Catalog.Тест"]))
 	}
 
-	stats, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, nil, nil, candidates, retained, liveRefs)
+	stats, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, nil, nil, candidates, retained, liveRefs, nil)
 	if err != nil {
 		t.Fatalf("finalize retained commands: %v", err)
 	}
@@ -2325,7 +2325,7 @@ func TestFilterRetainedOwnerCommandsKeepsLiveNativeFormReference(t *testing.T) {
 		t.Fatalf("expected live native form reference to retain adopted owner command")
 	}
 
-	if _, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, nil, nil, candidates, retained, liveRefs); err != nil {
+	if _, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, nil, nil, candidates, retained, liveRefs, nil); err != nil {
 		t.Fatalf("finalize retained commands: %v", err)
 	}
 
@@ -2437,7 +2437,7 @@ func TestFilterRetainedOwnerCommandsKeepsLiveCommandInterfaceAttributeReference(
 		t.Fatalf("expected live command interface attribute reference to retain adopted owner command")
 	}
 
-	if _, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, nil, nil, candidates, retained, liveRefs); err != nil {
+	if _, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, nil, nil, candidates, retained, liveRefs, nil); err != nil {
 		t.Fatalf("finalize retained commands: %v", err)
 	}
 
@@ -2600,7 +2600,7 @@ func TestFilterRetainedOwnerCommandsIgnoresRightsReference(t *testing.T) {
 		t.Fatalf("expected rights xml not to retain adopted owner command")
 	}
 
-	if _, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, nil, nil, candidates, retained, liveRefs); err != nil {
+	if _, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, nil, nil, candidates, retained, liveRefs, nil); err != nil {
 		t.Fatalf("finalize retained commands: %v", err)
 	}
 
@@ -2683,7 +2683,7 @@ func TestFinalizeRetainedOwnerCommandsStripsNativePreserveMarker(t *testing.T) {
 		},
 	}
 
-	if _, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, rules, nil, candidates, nil, buildLiveCommandReferenceIndex(contexts, decisions, map[string]struct{}{})); err != nil {
+	if _, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, rules, nil, candidates, nil, buildLiveCommandReferenceIndex(contexts, decisions, map[string]struct{}{}), nil); err != nil {
 		t.Fatalf("finalize retained commands: %v", err)
 	}
 
@@ -2756,7 +2756,7 @@ func TestFinalizeRetainedOwnerCommandsStripsNativePreserveMarkerWithoutRetainedD
 		"Catalog.НаправленияДеятельности": {},
 	}
 
-	stats, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, rules, nil, retained, retained, buildLiveCommandReferenceIndex(contexts, decisions, map[string]struct{}{}))
+	stats, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, rules, nil, retained, retained, buildLiveCommandReferenceIndex(contexts, decisions, map[string]struct{}{}), nil)
 	if err != nil {
 		t.Fatalf("finalize retained commands: %v", err)
 	}
@@ -2876,6 +2876,448 @@ func TestCleanupFunctionalOptionsParameterUseNativeChildRefsKeepsRefWithoutDelet
 	}
 	if got := textOrEmpty(properties.FindElement("./Use/*[1]")); got != "InformationRegister.упо_ТестовыйРегистр.Dimension.Тест" {
 		t.Fatalf("unexpected Use reference after cleanup: %q", got)
+	}
+}
+
+func TestCollectSearchResultPlaceRequestsReadsBOMAndFiltersGroups(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	templateDir := filepath.Join(dir, "CommonTemplates", "упо_SearchResult", "Ext")
+	if err := os.MkdirAll(templateDir, 0o755); err != nil {
+		t.Fatalf("mkdir template dir: %v", err)
+	}
+
+	content := "\xEF\xBB\xBF{\n" +
+		`  "Справочники": {` + "\n" +
+		`    "ДоговорыКонтрагентов": {` + "\n" +
+		`      "МодульФормыФормаВыбора": {` + "\n" +
+		`        "EPM": 1,` + "\n" +
+		`        "ЧистыйPM": 2` + "\n" +
+		`      }` + "\n" +
+		`    }` + "\n" +
+		`  }` + "\n" +
+		`}`
+	if err := os.WriteFile(filepath.Join(templateDir, "Template.txt"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+
+	requests, err := collectSearchResultPlaceRequests(dir, map[string][]string{
+		"EPM": {"//{EPM}"},
+	})
+	if err != nil {
+		t.Fatalf("collect search result requests: %v", err)
+	}
+
+	places := requests["Catalog.ДоговорыКонтрагентов"]
+	if len(places) != 1 {
+		t.Fatalf("expected one place request, got %#v", requests)
+	}
+	if places[0].Place != "МодульФормыФормаВыбора" {
+		t.Fatalf("unexpected place %q", places[0].Place)
+	}
+	if len(places[0].Groups) != 1 || places[0].Groups[0] != "EPM" {
+		t.Fatalf("expected only configured EPM group, got %#v", places[0].Groups)
+	}
+}
+
+func TestBuildSearchResultModuleContentPreservesDirectiveOrderAndComments(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	modulePath := filepath.Join(dir, "Module.bsl")
+	source := strings.Join([]string{
+		"//{EPM}",
+		"// комментарий в начале",
+		"",
+		"&НаКлиенте",
+		"Процедура Команда()",
+		"\t//{EPM}",
+		"КонецПроцедуры",
+		"",
+		"Функция Проверка(Знач Парам)",
+		"\t// {EPM}",
+		"\tВозврат Истина;",
+		"КонецФункции",
+		"",
+	}, "\n")
+	if err := os.WriteFile(modulePath, []byte(source), 0o644); err != nil {
+		t.Fatalf("write module: %v", err)
+	}
+
+	content, err := buildSearchResultModuleContent(modulePath, []string{"EPM"}, map[string][]string{
+		"EPM": {"//{EPM}", "// {EPM}"},
+	}, "упо_", true, "")
+	if err != nil {
+		t.Fatalf("build search result module content: %v", err)
+	}
+
+	if !strings.Contains(content, "//{EPM}\n// комментарий в начале") {
+		t.Fatalf("expected top-level comment block to be preserved, got:\n%s", content)
+	}
+	if !strings.Contains(content, "&НаКлиенте\n&После(\"Команда\")\nПроцедура упо_Команда()") {
+		t.Fatalf("expected procedure directive order to be preserved, got:\n%s", content)
+	}
+	if !strings.Contains(content, "&ИзменениеИКонтроль(\"Проверка\")\nФункция упо_Проверка(Знач Парам)") {
+		t.Fatalf("expected function interceptor to be added, got:\n%s", content)
+	}
+	if !strings.Contains(content, "\t//{EPM}") || !strings.Contains(content, "\t// {EPM}") {
+		t.Fatalf("expected marker comments inside methods to remain, got:\n%s", content)
+	}
+}
+
+func TestBuildSearchResultModuleContentStrictMismatchReportsFoundGroups(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	modulePath := filepath.Join(dir, "Module.bsl")
+	diagnosticsPath := filepath.Join(dir, "searchresult-template-errors.log")
+	source := strings.Join([]string{
+		"Процедура Тест()",
+		"\t// {PM.НеМодуль}",
+		"\tСообщить(\"ok\");",
+		"КонецПроцедуры",
+		"",
+	}, "\n")
+	if err := os.WriteFile(modulePath, []byte(source), 0o644); err != nil {
+		t.Fatalf("write module: %v", err)
+	}
+
+	_, err := buildSearchResultModuleContent(modulePath, []string{"PM"}, map[string][]string{
+		"PM":       {"//{PM}", "// {PM}"},
+		"НеМодуль": {"// {PM.НеМодуль}"},
+	}, "упо_", true, diagnosticsPath)
+	if err == nil {
+		t.Fatalf("expected strict mismatch error")
+	}
+	if !strings.Contains(err.Error(), "ожидает точные метки групп [PM]") || !strings.Contains(err.Error(), "найдены только группы [НеМодуль]") {
+		t.Fatalf("unexpected strict mismatch error: %v", err)
+	}
+
+	data, readErr := os.ReadFile(diagnosticsPath)
+	if readErr != nil {
+		t.Fatalf("read diagnostics: %v", readErr)
+	}
+	if !strings.Contains(string(data), "найдены только группы [НеМодуль]") {
+		t.Fatalf("expected diagnostics file to contain exact mismatch, got: %s", string(data))
+	}
+}
+
+func TestCollectSearchResultStatePromotesExcludedObjectAndPreservesFormPaths(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	configDir := filepath.Join(root, "cfg")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "searchingTemplateText.json"), []byte(`{"EPM":["//{EPM}"]}`), 0o644); err != nil {
+		t.Fatalf("write markers: %v", err)
+	}
+
+	templateDir := filepath.Join(root, "CommonTemplates", "упо_SearchResult", "Ext")
+	if err := os.MkdirAll(templateDir, 0o755); err != nil {
+		t.Fatalf("mkdir template dir: %v", err)
+	}
+	template := `{
+  "Справочники": {
+    "Тест": {
+      "МодульФормыФормаВыбора": {
+        "EPM": 1,
+        "ЧистыйPM": 3
+      }
+    }
+  }
+}`
+	if err := os.WriteFile(filepath.Join(templateDir, "Template.txt"), []byte(template), 0o644); err != nil {
+		t.Fatalf("write search result template: %v", err)
+	}
+
+	objectDir := filepath.Join(root, "Catalogs", "Тест")
+	formDir := filepath.Join(objectDir, "Forms", "ФормаВыбора", "Ext", "Form")
+	if err := os.MkdirAll(formDir, 0o755); err != nil {
+		t.Fatalf("mkdir form dir: %v", err)
+	}
+
+	topLevelXML := `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog>
+    <Properties>
+      <Name>Тест</Name>
+    </Properties>
+    <ChildObjects>
+      <Form>ФормаВыбора</Form>
+    </ChildObjects>
+  </Catalog>
+</MetaDataObject>`
+	if err := os.WriteFile(filepath.Join(root, "Catalogs", "Тест.xml"), []byte(topLevelXML), 0o644); err != nil {
+		t.Fatalf("write top-level xml: %v", err)
+	}
+
+	formXML := `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Form>
+    <Properties>
+      <Name>ФормаВыбора</Name>
+    </Properties>
+  </Form>
+</MetaDataObject>`
+	if err := os.WriteFile(filepath.Join(objectDir, "Forms", "ФормаВыбора.xml"), []byte(formXML), 0o644); err != nil {
+		t.Fatalf("write form xml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(objectDir, "Forms", "ФормаВыбора", "Ext", "Form.xml"), []byte(formXML), 0o644); err != nil {
+		t.Fatalf("write ext form xml: %v", err)
+	}
+
+	formModule := strings.Join([]string{
+		"//{EPM}",
+		"Процедура ОткрытьФорму()",
+		"\t//{EPM}",
+		"КонецПроцедуры",
+		"",
+	}, "\n")
+	modulePath := filepath.Join(formDir, "Module.bsl")
+	if err := os.WriteFile(modulePath, []byte(formModule), 0o644); err != nil {
+		t.Fatalf("write form module: %v", err)
+	}
+
+	contexts, err := loadXMLContexts(root)
+	if err != nil {
+		t.Fatalf("load xml contexts: %v", err)
+	}
+
+	cfg := &config.Configuration{
+		Prefix:               "упо_",
+		ConfigPath:           filepath.Join(configDir, "config.json"),
+		AdditionalProcessing: config.AdditionalProcessing{UseSearchResult: true},
+	}
+	decisions := map[string]objectDecision{
+		"Catalog.Тест": {Excluded: true},
+	}
+
+	state, err := collectSearchResultState(cfg, root, contexts, decisions, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("collect search result state: %v", err)
+	}
+
+	decision := decisions["Catalog.Тест"]
+	if decision.Excluded || decision.Belonging != "AdoptedStub" || decision.Truncated {
+		t.Fatalf("expected SearchResult to promote object to AdoptedStub without truncation, got %#v", decision)
+	}
+
+	overlay := state.ObjectOverlays["Catalog.Тест"]
+	if _, ok := overlay.PreserveForms["ФормаВыбора"]; !ok {
+		t.Fatalf("expected overlay to preserve form, got %#v", overlay)
+	}
+
+	formObjectPath := filepath.Join(objectDir, "Forms", "ФормаВыбора.xml")
+	formMetadataPath := filepath.Join(objectDir, "Forms", "ФормаВыбора", "Ext", "Form.xml")
+	for _, path := range []string{formObjectPath, formMetadataPath, modulePath} {
+		if _, ok := state.PreservedPaths[path]; !ok {
+			t.Fatalf("expected preserved path %s, got %#v", path, state.PreservedPaths)
+		}
+	}
+
+	for _, name := range []string{
+		"Catalog.Тест.Form.ФормаВыбора",
+		"Catalog.Тест.Form.ФормаВыбора.Form",
+	} {
+		if _, ok := state.PreservedConfigDumpInfo[name]; !ok {
+			t.Fatalf("expected preserved ConfigDumpInfo name %s, got %#v", name, state.PreservedConfigDumpInfo)
+		}
+	}
+
+	write, ok := state.ModuleWrites[modulePath]
+	if !ok {
+		t.Fatalf("expected generated module write for %s", modulePath)
+	}
+	if !strings.Contains(write.Content, `&После("ОткрытьФорму")`) || !strings.Contains(write.Content, "Процедура упо_ОткрытьФорму()") {
+		t.Fatalf("unexpected generated module content:\n%s", write.Content)
+	}
+}
+
+func TestCollectFormDynamicListContractsIncludesSearchResultPreservedForms(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform" xmlns:v8="http://v8.1c.ru/8.1/data/core">
+  <Attributes>
+    <Attribute name="Список">
+      <Type>
+        <v8:Type>cfg:DynamicList</v8:Type>
+      </Type>
+      <MainTable>Catalog.Валюты</MainTable>
+    </Attribute>
+  </Attributes>
+  <ChildItems>
+    <Table name="Список">
+      <ChildItems>
+        <InputField name="Наименование">
+          <Settings>
+            <DataPath>Список.Наименование</DataPath>
+          </Settings>
+        </InputField>
+      </ChildItems>
+    </Table>
+  </ChildItems>
+</Form>`); err != nil {
+		t.Fatalf("read form xml: %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "Catalogs", "Тест", "Forms", "ФормаСписка", "Ext", "Form.xml")
+	contexts := []*FileProcessingContext{{
+		Doc:      doc,
+		Path:     path,
+		RelPath:  filepath.ToSlash(path),
+		OwnerKey: "Catalog.Тест",
+	}}
+	decisions := map[string]objectDecision{
+		"Catalog.Тест": {Belonging: "AdoptedStub", SearchResultCode: true},
+	}
+	state := &searchResultState{
+		PreservedPaths: map[string]struct{}{path: {}},
+	}
+
+	contracts := collectFormDynamicListContracts(contexts, decisions, state)
+	contract, ok := contracts["Catalog.Валюты"]
+	if !ok {
+		t.Fatalf("expected SearchResult preserved form to participate in dynamic list contracts")
+	}
+	if _, ok := contract.RequiredFields["Наименование"]; !ok {
+		t.Fatalf("expected dynamic list contract to retain required field, got %#v", contract.RequiredFields)
+	}
+}
+
+func TestCleanupConfigDumpInfoNonNativeChildrenKeepsSearchResultPreservedMetadata(t *testing.T) {
+	t.Parallel()
+
+	configDump := etree.NewDocument()
+	if err := configDump.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo>
+  <Metadata name="Catalog.Тест" id="1">
+    <Metadata name="Catalog.Тест.Form.ФормаВыбора" id="2"/>
+    <Metadata name="Catalog.Тест.Form.ФормаВыбора.Form" id="3"/>
+    <Metadata name="Catalog.Тест.Command.Открыть" id="4"/>
+    <Metadata name="Catalog.Тест.Command.Открыть.CommandModule" id="5"/>
+  </Metadata>
+</ConfigDumpInfo>`); err != nil {
+		t.Fatalf("read config dump: %v", err)
+	}
+
+	changed := cleanupConfigDumpInfoNonNativeChildren(
+		configDump,
+		nil,
+		map[string]objectDecision{
+			"Catalog.Тест": {Belonging: "AdoptedStub", SearchResultCode: true},
+		},
+		map[string]struct{}{
+			"Catalog.Тест.Form.ФормаВыбора":              {},
+			"Catalog.Тест.Form.ФормаВыбора.Form":         {},
+			"Catalog.Тест.Command.Открыть":               {},
+			"Catalog.Тест.Command.Открыть.CommandModule": {},
+		},
+	)
+	if changed {
+		t.Fatalf("expected preserved SearchResult metadata to survive ConfigDumpInfo cleanup")
+	}
+
+	for _, name := range []string{
+		"Catalog.Тест.Form.ФормаВыбора",
+		"Catalog.Тест.Form.ФормаВыбора.Form",
+		"Catalog.Тест.Command.Открыть",
+		"Catalog.Тест.Command.Открыть.CommandModule",
+	} {
+		if !hasMetadataName(configDump, name) {
+			t.Fatalf("expected preserved metadata name %s to remain", name)
+		}
+	}
+}
+
+func TestWriteSearchResultModuleFilesSkipsNativeOwners(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	modulePath := filepath.Join(dir, "Module.bsl")
+	if err := os.WriteFile(modulePath, []byte("старый"), 0o644); err != nil {
+		t.Fatalf("write initial module: %v", err)
+	}
+
+	state := &searchResultState{
+		ModuleWrites: map[string]searchResultModuleWrite{
+			modulePath: {
+				OwnerKey: "Catalog.Тест",
+				Path:     modulePath,
+				Content:  "новый",
+			},
+		},
+	}
+	decisions := map[string]objectDecision{
+		"Catalog.Тест": {Belonging: "Native"},
+	}
+
+	if err := writeSearchResultModuleFiles(state, decisions); err != nil {
+		t.Fatalf("write search result module files: %v", err)
+	}
+
+	data, err := os.ReadFile(modulePath)
+	if err != nil {
+		t.Fatalf("read module after write: %v", err)
+	}
+	if string(data) != "старый" {
+		t.Fatalf("expected native owner module to stay untouched, got %q", string(data))
+	}
+}
+
+func TestValidateSearchResultAdoptedObjectsRequiresAdoptedTopLevelXML(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject>
+  <Catalog>
+    <Properties>
+      <Name>Тест</Name>
+      <ObjectBelonging>Adopted</ObjectBelonging>
+    </Properties>
+  </Catalog>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read doc: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{{
+		Doc:              doc,
+		Path:             filepath.Join(t.TempDir(), "Catalogs", "Тест.xml"),
+		RelPath:          "Catalogs/Тест.xml",
+		FileName:         "Тест.xml",
+		Metadata:         true,
+		TopLevelMetadata: true,
+		Properties:       findProperties(doc),
+		OwnerKind:        "Catalog",
+		OwnerName:        "Тест",
+		OwnerKey:         "Catalog.Тест",
+	}}
+	indexes := buildContextIndexes(contexts)
+	decisions := map[string]objectDecision{
+		"Catalog.Тест": {Belonging: "AdoptedStub", SearchResultCode: true},
+	}
+	state := &searchResultState{
+		ExpectedAdoptedObjects: map[string]struct{}{
+			"Catalog.Тест": {},
+		},
+	}
+
+	if err := validateSearchResultAdoptedObjects(indexes, contexts, decisions, map[string]struct{}{}, state); err != nil {
+		t.Fatalf("validate search result adopted objects: %v", err)
+	}
+
+	if err := validateSearchResultAdoptedObjects(indexes, contexts, map[string]objectDecision{
+		"Catalog.Тест": {Belonging: "Native", SearchResultCode: true},
+	}, map[string]struct{}{}, state); err == nil {
+		t.Fatalf("expected native decision to fail validation")
 	}
 }
 

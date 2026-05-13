@@ -164,7 +164,21 @@ XML-конвейер должен классифицировать top-level о�
 - сохранять только разрешенный retained child-состав с префиксом `упо_`
 - не возвращать объект в состав, если он уже soft-excluded
 
-`AdditionalProcessing.Use_упо_SearchResult` в текущем репозитории остается зарезервированным флагом без рабочего поведения.
+`AdditionalProcessing.Use_упо_SearchResult` включает дополнительный overlay `AdoptedStubCode` для adopted-части состава.
+Он не вводит новый `ObjectBelonging` и не меняет базовую классификацию `Native` / `AdoptedStub` / `AdoptedStubExt` / `AdoptedStubMetaData`.
+Дополнительный параметр `AdditionalProcessing.UseExactTemplates` управляет строгостью сопоставления шаблонов; по умолчанию используется strict-режим.
+
+При включенном `Use_упо_SearchResult` конвертер:
+
+- читает `searchingTemplateText.json` рядом с активным конфигом
+- читает `CommonTemplates/упо_SearchResult/Ext/Template.txt`
+- использует только whitelist групп и меток из `searchingTemplateText.json`
+- поднимает подходящий default-excluded объект в `AdoptedStub` без перевода в `Native`
+- снимает `Truncated` у уже выбранного `AdoptedStub`
+- сохраняет нужные child `Form` / `Command`, связанные файлы и whitelisted записи `ConfigDumpInfo.xml`
+- в конце rewrite накладывает текст модулей только для non-`Native` владельцев, используя `&После(...)` для `Процедура` и `&ИзменениеИКонтроль(...)` для `Функция`
+
+Этот слой работает cache-first: `searchingTemplateText.json`, `упо_SearchResult` и тексты модулей читаются один раз до основного XML-прохода, после чего используются только кеши `searchResultState`.
 
 ## 9. Persisted identity mapping для Adopted-объектов
 
