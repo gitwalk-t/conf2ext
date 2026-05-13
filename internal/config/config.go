@@ -71,6 +71,9 @@ func LoadConfigE(configPath string) (*Configuration, error) {
 	if err := normalizeConfigPaths(&cfg, resolvedConfigPath); err != nil {
 		return nil, fmt.Errorf("ошибка в обработке путей: %w", err)
 	}
+	if err := populateDerivedPaths(&cfg, resolvedConfigPath); err != nil {
+		return nil, fmt.Errorf("ошибка в вычислении служебных путей: %w", err)
+	}
 
 	return &cfg, nil
 }
@@ -94,6 +97,9 @@ func LoadDefaultConfigE() (*Configuration, error) {
 
 	if err := normalizeConfigPaths(&cfg, ""); err != nil {
 		return nil, fmt.Errorf("ошибка в обработке путей: %w", err)
+	}
+	if err := populateDerivedPaths(&cfg, ""); err != nil {
+		return nil, fmt.Errorf("ошибка в вычислении служебных путей: %w", err)
 	}
 
 	return &cfg, nil
@@ -227,6 +233,32 @@ func normalizeConfigPaths(config *Configuration, configPath string) error {
 		return fmt.Errorf("не удалось нормализовать путь к выходному файлу: %w", err)
 	}
 
+	return nil
+}
+
+func populateDerivedPaths(config *Configuration, configPath string) error {
+	if config == nil {
+		return nil
+	}
+
+	projectRoot := configBaseDir(configPath)
+	if strings.TrimSpace(projectRoot) == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		projectRoot = wd
+	}
+
+	normalizedProjectRoot, err := NormalizePath(projectRoot)
+	if err != nil {
+		return err
+	}
+
+	config.ConfigPath = strings.TrimSpace(configPath)
+	config.ProjectRootPath = normalizedProjectRoot
+	config.BaseBindingsPath = filepath.Join(normalizedProjectRoot, "configs", "base-bindings.json")
+	config.IdentityMapPath = filepath.Join(normalizedProjectRoot, "output", "_state", "identity-map.json")
 	return nil
 }
 

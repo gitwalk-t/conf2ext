@@ -10,6 +10,177 @@ import (
 	"github.com/firstBitSportivnaya/files-converter/internal/config"
 )
 
+func TestCollectGUIDReplacementsFromConfigDumpReusesPersistedAdoptedIDs(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo>
+  <Metadata name="Catalog.Пользователи" id="11111111-1111-1111-1111-111111111111">
+    <Metadata name="Catalog.Пользователи.Command.ПользователиИнформационнойБазы" id="22222222-2222-2222-2222-222222222222"/>
+  </Metadata>
+  <Metadata name="Catalog.Номенклатура" id="33333333-3333-3333-3333-333333333333"/>
+</ConfigDumpInfo>`); err != nil {
+		t.Fatalf("read config dump xml: %v", err)
+	}
+
+	replacements := make(map[string]string)
+	identityMap := &identityMapState{
+		Version: 1,
+		Objects: map[string]identityMapObjectBinding{
+			"Catalog.Пользователи": {ExtensionID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"},
+		},
+	}
+
+	collectGUIDReplacementsFromConfigDump(
+		[]*FileProcessingContext{{Doc: doc, FileName: configDumpInfo}},
+		map[string]objectDecision{
+			"Catalog.Пользователи": {Belonging: "AdoptedStub"},
+			"Catalog.Номенклатура": {Belonging: "Native"},
+		},
+		replacements,
+		identityMap,
+		nil,
+	)
+
+	if got := replacements["11111111-1111-1111-1111-111111111111"]; got != "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" {
+		t.Fatalf("unexpected reused top-level id: got %q", got)
+	}
+
+	commandState, ok := identityMap.Objects["Catalog.Пользователи.Command.ПользователиИнформационнойБазы"]
+	if !ok || commandState.ExtensionID == "" {
+		t.Fatalf("expected generated command identity, got %#v", identityMap.Objects)
+	}
+	if got := replacements["22222222-2222-2222-2222-222222222222"]; got != commandState.ExtensionID {
+		t.Fatalf("unexpected generated command replacement: got %q want %q", got, commandState.ExtensionID)
+	}
+	if _, ok := identityMap.Objects["Catalog.Номенклатура"]; ok {
+		t.Fatalf("native metadata must not be stored in identity map: %#v", identityMap.Objects)
+	}
+}
+
+func TestCollectGUIDReplacementsFromConfigDumpSkipsRetainedNativeAdoptedStubMetaDataChildren(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo>
+  <Metadata name="Catalog.Пользователи" id="11111111-1111-1111-1111-111111111111">
+    <Metadata name="Catalog.Пользователи.Attribute.упо_Код" id="22222222-2222-2222-2222-222222222222"/>
+    <Metadata name="Catalog.Пользователи.TabularSection.Товары" id="33333333-3333-3333-3333-333333333333"/>
+    <Metadata name="Catalog.Пользователи.TabularSection.Товары.Attribute.упо_Цена" id="44444444-4444-4444-4444-444444444444"/>
+    <Metadata name="Catalog.Пользователи.Command.Открыть" id="55555555-5555-5555-5555-555555555555"/>
+  </Metadata>
+</ConfigDumpInfo>`); err != nil {
+		t.Fatalf("read config dump xml: %v", err)
+	}
+
+	identityMap := newIdentityMapState()
+	replacements := make(map[string]string)
+
+	collectGUIDReplacementsFromConfigDump(
+		[]*FileProcessingContext{{Doc: doc, FileName: configDumpInfo}},
+		map[string]objectDecision{
+			"Catalog.Пользователи": {Belonging: "AdoptedStub"},
+		},
+		replacements,
+		identityMap,
+		map[string]adoptedStubMetaDataRule{
+			"Catalog.Пользователи": {
+				NativeAttributes: map[string]struct{}{
+					"упо_Код": {},
+				},
+				NativeTabularSections: map[string]map[string]struct{}{
+					"Товары": {
+						"упо_Цена": {},
+					},
+				},
+			},
+		},
+	)
+
+	for _, key := range []string{
+		"Catalog.Пользователи.Attribute.упо_Код",
+		"Catalog.Пользователи.TabularSection.Товары",
+		"Catalog.Пользователи.TabularSection.Товары.Attribute.упо_Цена",
+	} {
+		if _, ok := identityMap.Objects[key]; ok {
+			t.Fatalf("retained native child must not be stored in identity map: %s", key)
+		}
+	}
+	if _, ok := identityMap.Objects["Catalog.Пользователи.Command.Открыть"]; !ok {
+		t.Fatalf("expected adopted command to stay tracked, got %#v", identityMap.Objects)
+	}
+}
+
+func TestCollectMetadataBindingTargetsAppliesOverridesOnlyToTrackedAdoptedPaths(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog uuid="11111111-1111-1111-1111-111111111111">
+    <Properties>
+      <Name>Пользователи</Name>
+    </Properties>
+    <ChildObjects>
+      <Command uuid="22222222-2222-2222-2222-222222222222">
+        <Properties>
+          <Name>Открыть</Name>
+        </Properties>
+      </Command>
+      <Attribute uuid="33333333-3333-3333-3333-333333333333">
+        <Properties>
+          <Name>упо_Код</Name>
+        </Properties>
+      </Attribute>
+    </ChildObjects>
+  </Catalog>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read metadata xml: %v", err)
+	}
+
+	targets := collectMetadataBindingTargets(
+		doc,
+		"Catalog.Пользователи",
+		map[string]string{
+			"Catalog.Пользователи":                 "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+			"Catalog.Пользователи.Command.Открыть": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+		},
+		map[string]objectDecision{
+			"Catalog.Пользователи": {Belonging: "AdoptedStub"},
+		},
+		map[string]adoptedStubMetaDataRule{
+			"Catalog.Пользователи": {
+				NativeAttributes: map[string]struct{}{
+					"упо_Код": {},
+				},
+			},
+		},
+	)
+
+	target := metadataTargetElement(doc)
+	if got := targets[target].BaseObjectID; got != "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" {
+		t.Fatalf("unexpected top-level binding: got %q", got)
+	}
+
+	command := target.FindElement("./ChildObjects/*[local-name()='Command']")
+	if command == nil {
+		t.Fatalf("expected command child")
+	}
+	if got := targets[command].BaseObjectID; got != "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" {
+		t.Fatalf("unexpected command binding: got %q", got)
+	}
+
+	attribute := target.FindElement("./ChildObjects/*[local-name()='Attribute']")
+	if attribute == nil {
+		t.Fatalf("expected attribute child")
+	}
+	if got := targets[attribute].BaseObjectID; got != "33333333-3333-3333-3333-333333333333" {
+		t.Fatalf("retained native attribute must keep original base object id, got %q", got)
+	}
+}
+
 func TestCollectAdoptedStubMetaDataRulesReadsBOMAndNestedPaths(t *testing.T) {
 	t.Parallel()
 
@@ -425,13 +596,13 @@ func TestEnsureAdoptedExtendedConfigurationObjectsPreservesRetainedMetaDataFileA
 	doc := etree.NewDocument()
 	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
 <MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
-  <Catalog uuid="catalog-guid">
+  <Catalog uuid="11111111-1111-1111-1111-111111111111">
     <Properties>
       <Name>НаправленияДеятельности</Name>
       <ObjectBelonging>Adopted</ObjectBelonging>
     </Properties>
     <ChildObjects>
-      <Attribute uuid="attr-guid">
+      <Attribute uuid="22222222-2222-2222-2222-222222222222">
         <Properties>
           <Name>упо_ЭлементПлана</Name>
           <ObjectBelonging>Adopted</ObjectBelonging>
@@ -453,8 +624,18 @@ func TestEnsureAdoptedExtendedConfigurationObjectsPreservesRetainedMetaDataFileA
 		t.Fatalf("expected adopted metadata composition to change child attribute")
 	}
 
-	original := collectMetadataOriginalUUIDs(doc)
-	if !ensureAdoptedExtendedConfigurationObjects(doc, original) {
+	bindingTargets := collectMetadataBindingTargets(
+		doc,
+		"Catalog.НаправленияДеятельности",
+		nil,
+		map[string]objectDecision{
+			"Catalog.НаправленияДеятельности": {Belonging: "AdoptedStub"},
+		},
+		map[string]adoptedStubMetaDataRule{
+			"Catalog.НаправленияДеятельности": rule,
+		},
+	)
+	if !ensureAdoptedExtendedConfigurationObjects(doc, bindingTargets) {
 		t.Fatalf("expected ensure adopted objects to write mapping")
 	}
 

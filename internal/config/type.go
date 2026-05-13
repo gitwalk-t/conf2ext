@@ -33,6 +33,14 @@ type AdditionalProcessing struct {
 	UseSearchResult bool `json:"Use_упо_SearchResult,omitempty"`
 }
 
+type BaseBinding struct {
+	BaseObjectID string `json:"base_object_id"`
+}
+
+type BaseBindingsFile struct {
+	Bindings map[string]BaseBinding `json:"bindings"`
+}
+
 type Configuration struct {
 	PlatformVersion             string               `json:"platform_version"`
 	Extension                   string               `json:"extension"`
@@ -55,6 +63,11 @@ type Configuration struct {
 
 	// Deprecated aliases kept for backwards compatibility with old configs.
 	IncludedObjects []string `json:"included_objects,omitempty"`
+
+	ConfigPath       string `json:"-"`
+	ProjectRootPath  string `json:"-"`
+	BaseBindingsPath string `json:"-"`
+	IdentityMapPath  string `json:"-"`
 }
 
 type DumpInfo struct {

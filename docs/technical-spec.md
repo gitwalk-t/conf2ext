@@ -1,5 +1,7 @@
 # Техническое задание
 
+Дополнительная пользовательская спецификация: полезна для синхронизации требований, архитектурных задач и онбординга человека, но не является обязательным стартовым контекстом агента.
+
 ## Назначение
 
 `files-converter` — это CLI-инструмент на Go для конвертации конфигурации 1С в пакет расширения `*.cfe`.
@@ -12,7 +14,7 @@
 4. загрузить его в 1С как расширение
 5. выгрузить итоговый `*.cfe`
 
-Главная практическая цель проекта сейчас: добиться стабильной сборки расширения из активного локального конфига [D:\Codex\files-converter_ver2\configs\config.json](</D:/Codex/files-converter_ver2/configs/config.json>) без ошибок загрузки.
+Главная практическая цель проекта сейчас: добиться стабильной сборки расширения из активного локального конфига [`../configs/config.json`](../configs/config.json) без ошибок загрузки.
 
 ## Область применения
 
@@ -50,7 +52,7 @@ go build ./...
 - использовать `./configs/config.json`, если `--config` не передан
 
 Ключевой рабочий конфиг:
-- [D:\Codex\files-converter_ver2\configs\config.json](</D:/Codex/files-converter_ver2/configs/config.json>)
+- [`../configs/config.json`](../configs/config.json)
 
 ### 2. Классификация метаданных
 
@@ -281,7 +283,7 @@ Persisted identity mapping не должен:
 При изменениях в коде нужно:
 
 - предпочитать локальные правки
-- не делать широкий рефакторинг, особенно в [D:\Codex\files-converter_ver2\internal\utils\xmlutil\change.go](</D:/Codex/files-converter_ver2/internal/utils/xmlutil/change.go>)
+- не делать широкий рефакторинг, особенно в [`../internal/utils/xmlutil/change.go`](../internal/utils/xmlutil/change.go)
 - не менять бизнес-правила ради косметики
 
 ### 2. Надежность расследований
@@ -305,23 +307,23 @@ Persisted identity mapping не должен:
 - проект не анализирует BSL как источник правил
 - CI в репозитории нет
 - автоматическая проверка в 1С не формализована, финальная валидация по-прежнему опирается на локальный прогон
-- основное узкое место и главный риск проекта — [D:\Codex\files-converter_ver2\internal\utils\xmlutil\change.go](</D:/Codex/files-converter_ver2/internal/utils/xmlutil/change.go>)
+- основное узкое место и главный риск проекта — [`../internal/utils/xmlutil/change.go`](../internal/utils/xmlutil/change.go)
 
 ## Источники истины
 
 Если требования расходятся, в первую очередь ориентироваться на:
 
-1. [D:\Codex\files-converter_ver2\configs\config.json](</D:/Codex/files-converter_ver2/configs/config.json>)
-2. [D:\Codex\files-converter_ver2\internal\utils\xmlutil\change.go](</D:/Codex/files-converter_ver2/internal/utils/xmlutil/change.go>)
-3. [D:\Codex\files-converter_ver2\.codex\decisions.md](</D:/Codex/files-converter_ver2/.codex/decisions.md>)
-4. [D:\Codex\files-converter_ver2\docs\debugging.md](</D:/Codex/files-converter_ver2/docs/debugging.md>)
+1. [`../configs/config.json`](../configs/config.json)
+2. [`../internal/utils/xmlutil/change.go`](../internal/utils/xmlutil/change.go)
+3. [`../.codex/decisions.md`](../.codex/decisions.md)
+4. [`./debugging.md`](./debugging.md)
 
 ## Связанные документы
 
-- [D:\Codex\files-converter_ver2\README.md](</D:/Codex/files-converter_ver2/README.md>)
-- [D:\Codex\files-converter_ver2\docs\architecture.md](</D:/Codex/files-converter_ver2/docs/architecture.md>)
-- [D:\Codex\files-converter_ver2\docs\conventions.md](</D:/Codex/files-converter_ver2/docs/conventions.md>)
-- [D:\Codex\files-converter_ver2\docs\debugging.md](</D:/Codex/files-converter_ver2/docs/debugging.md>)
-- [D:\Codex\files-converter_ver2\.codex\context.md](</D:/Codex/files-converter_ver2/.codex/context.md>)
-- [D:\Codex\files-converter_ver2\.codex\decisions.md](</D:/Codex/files-converter_ver2/.codex/decisions.md>)
-- [D:\Codex\files-converter_ver2\.codex\tasks.md](</D:/Codex/files-converter_ver2/.codex/tasks.md>)
+- [`../README.md`](../README.md)
+- [`./architecture.md`](./architecture.md)
+- [`./conventions.md`](./conventions.md)
+- [`./debugging.md`](./debugging.md)
+- [`../.codex/context.md`](../.codex/context.md)
+- [`../.codex/decisions.md`](../.codex/decisions.md)
+- [`../.codex/tasks.md`](../.codex/tasks.md)

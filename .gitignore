@@ -3,7 +3,9 @@
 *.zip
 
 .vscode
+.gocache/
 input/
-output/_log/
+output/
 Artefacts/
+artif/
 Вариант1/

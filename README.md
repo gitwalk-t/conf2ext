@@ -1,6 +1,6 @@
 # files-converter
 
-Go CLI-инструмент для конвертации исходников конфигурации 1С или файла `*.cf` в пакет расширения `*.cfe`. В этой рабочей копии основной активный сценарий — `cfConvert`: загрузить `1Cv8.cf`, выгрузить метаданные в XML, переписать XML по правилам расширения и собрать `*.cfe`.
+Go CLI-инструмент для конвертации исходников конфигурации 1С или файла `*.cf` в пакет расширения `*.cfe`. В этой рабочей копии основной активный сценарий — `srcConvert`: взять готовое дерево XML-исходников, переписать XML по правилам расширения и собрать `*.cfe`.
 
 ## Запуск
 
@@ -46,15 +46,18 @@ go test ./...
 - [internal/utils/xmlutil/change.go](D:\Codex\files-converter_ver2\internal\utils\xmlutil\change.go): движок переписывания XML и текущая горячая точка
 - [configs/config.json](D:\Codex\files-converter_ver2\configs\config.json): текущий рабочий локальный конфиг
 
-## Обязательные документы для агента
+## Обязательный стартовый контекст агента
 
 1. [AGENTS.md](D:\Codex\files-converter_ver2\AGENTS.md)
 2. [.codex/context.md](D:\Codex\files-converter_ver2\.codex\context.md)
 3. [.codex/handoff.md](D:\Codex\files-converter_ver2\.codex\handoff.md)
-4. [docs/architecture.md](D:\Codex\files-converter_ver2\docs\architecture.md)
-5. [docs/conventions.md](D:\Codex\files-converter_ver2\docs\conventions.md)
-6. [docs/debugging.md](D:\Codex\files-converter_ver2\docs\debugging.md)
-7. [docs/technical-spec.md](D:\Codex\files-converter_ver2\docs\technical-spec.md)
+4. [docs/debugging.md](D:\Codex\files-converter_ver2\docs\debugging.md)
+
+## Дополнительные документы
+
+- [docs/architecture.md](D:\Codex\files-converter_ver2\docs\architecture.md): полезен для архитектурных задач и понимания границ модулей
+- [docs/conventions.md](D:\Codex\files-converter_ver2\docs\conventions.md): полезен для терминологии и точечного выравнивания формулировок
+- [docs/technical-spec.md](D:\Codex\files-converter_ver2\docs\technical-spec.md): дополнительная пользовательская спецификация; полезна для синхронизации требований, архитектурных задач и онбординга человека, но не обязательна как стартовый агентский контекст
 
 ## Переменные окружения
 
@@ -71,6 +74,11 @@ go test ./...
 - `enable_form_validation`: если `true`, после переписывания XML выполняется проверка form-driven dynamic list contracts; если `false`, этот этап пропускается
 - `AdditionalProcessing.Use_MetaDataFile`: если `true`, `ChangeFiles` читает общий макет `упо_MetaDataFile` и добавляет режим `AdoptedStubMetaData` для перечисленных там объектов
 - `AdditionalProcessing.Use_упо_SearchResult`: зарезервированный флаг; пока не влияет на поведение
+
+## Identity mapping
+
+- `output/_state/identity-map.json`: persisted runtime state только для `Adopted-*` metadata-path; хранит стабильные `extension_id` между генерациями
+- `configs/base-bindings.json`: пользовательские override bindings для `base_object_id`; файл может быть частично заполнен и не влияет на `Native`
 
 ## Что важно про текущее состояние репозитория
 

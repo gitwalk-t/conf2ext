@@ -69,3 +69,38 @@ func TestLoadConfigEPreservesAbsolutePaths(t *testing.T) {
 		t.Fatalf("unexpected absolute output path: got %q want %q", cfg.OutputPath, filepath.Clean(absoluteOutput))
 	}
 }
+
+func TestLoadConfigESetsDerivedIdentityPaths(t *testing.T) {
+	tempDir := t.TempDir()
+	configDir := filepath.Join(tempDir, "configs")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir configs: %v", err)
+	}
+
+	configPath := filepath.Join(configDir, "config.json")
+	configJSON := `{
+		"input_path": "/input",
+		"output_path": "/output/demo.cfe",
+		"conversion_type": "srcConvert"
+	}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadConfigE(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfigE: %v", err)
+	}
+
+	if cfg.ProjectRootPath != tempDir {
+		t.Fatalf("unexpected project root: got %q want %q", cfg.ProjectRootPath, tempDir)
+	}
+	expectedBindings := filepath.Join(tempDir, "configs", "base-bindings.json")
+	if cfg.BaseBindingsPath != expectedBindings {
+		t.Fatalf("unexpected base bindings path: got %q want %q", cfg.BaseBindingsPath, expectedBindings)
+	}
+	expectedIdentityMap := filepath.Join(tempDir, "output", "_state", "identity-map.json")
+	if cfg.IdentityMapPath != expectedIdentityMap {
+		t.Fatalf("unexpected identity map path: got %q want %q", cfg.IdentityMapPath, expectedIdentityMap)
+	}
+}

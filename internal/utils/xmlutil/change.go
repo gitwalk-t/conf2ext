@@ -222,6 +222,25 @@ type changeFilesState struct {
 	excludedPaths            map[string]struct{}
 }
 
+type identityMapState struct {
+	Version int                                 `json:"version"`
+	Objects map[string]identityMapObjectBinding `json:"objects"`
+}
+
+type identityMapObjectBinding struct {
+	ExtensionID string `json:"extension_id"`
+}
+
+type metadataPathSegment struct {
+	Kind string
+	Name string
+}
+
+type metadataBindingTarget struct {
+	MetadataPath string
+	BaseObjectID string
+}
+
 type contextIndexes struct {
 	byOwnerKey map[string][]*FileProcessingContext
 	byRelPath  map[string]*FileProcessingContext
@@ -309,6 +328,14 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 
 	log.Printf("xml step: collect cleanup sets")
 	collectCleanupSetsStartedAt := time.Now()
+	baseBindings, err := loadBaseBindings(cfg)
+	if err != nil {
+		return err
+	}
+	identityMap, err := loadIdentityMapState(cfg)
+	if err != nil {
+		return err
+	}
 	excludedRefs := collectExcludedReferences(decisions)
 	blockedForbiddenObjectKeys := collectBlockedForbiddenObjectKeys(decisions, forbiddenAdoptedStubObjects)
 	blockedForbiddenRefs := collectReferenceMapFromObjectKeys(blockedForbiddenObjectKeys)
@@ -316,7 +343,10 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 	excludedMetadataPrefixes := collectExcludedMetadataPrefixes(excludedRefs)
 	truncatedKeys := collectTruncatedKeys(decisions)
 	truncatedChildPrefixes := collectTruncatedChildPrefixes(truncatedKeys)
-	guidReplacements := collectGUIDReplacements(contexts, decisions)
+	guidReplacements := collectGUIDReplacements(contexts, decisions, identityMap, adoptedStubMetaDataRules)
+	if err := saveIdentityMapState(cfg, identityMap); err != nil {
+		return err
+	}
 	// Для DefinedType режем только hard forbidden: мягко исключенные типы
 	// должны сохраняться в составе и дотягиваться по RefDrivenInclusion.
 	blockedDefinedTypeObjects := blockedForbiddenObjectKeys
@@ -455,11 +485,11 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 		if ctx.OwnerKind != "DefinedType" && ctx.OwnerKind != "EventSubscription" {
 			changed = cleanupExcludedReferences(ctx.Doc, excludedRefs, excludedMetadataPrefixes, truncatedKeys, truncatedChildPrefixes) || changed
 		}
-		originalExtendedObjects := collectMetadataOriginalUUIDs(ctx.Doc)
+		bindingTargets := collectMetadataBindingTargets(ctx.Doc, ctx.OwnerKey, baseBindings, decisions, adoptedStubMetaDataRules)
 		changed = replaceGUIDsInDoc(ctx.Doc, guidReplacements) || changed
 		if decision.Belonging != "Native" && ctx.Metadata && isTopLevelMetadataFile(ctx) &&
 			ctx.OwnerKey != "Configuration" && ctx.OwnerKey != "Language.Русский" {
-			changed = ensureAdoptedExtendedConfigurationObjects(ctx.Doc, originalExtendedObjects) || changed
+			changed = ensureAdoptedExtendedConfigurationObjects(ctx.Doc, bindingTargets) || changed
 		}
 
 		if changed {
@@ -922,10 +952,15 @@ func isHardExcludedObject(
 	return false
 }
 
-func collectGUIDReplacements(contexts []*FileProcessingContext, decisions map[string]objectDecision) map[string]string {
+func collectGUIDReplacements(
+	contexts []*FileProcessingContext,
+	decisions map[string]objectDecision,
+	identityMap *identityMapState,
+	adoptedStubMetaDataRules map[string]adoptedStubMetaDataRule,
+) map[string]string {
 	replacements := make(map[string]string)
 
-	collectGUIDReplacementsFromConfigDump(contexts, decisions, replacements)
+	collectGUIDReplacementsFromConfigDump(contexts, decisions, replacements, identityMap, adoptedStubMetaDataRules)
 
 	for _, ctx := range contexts {
 		decision, ok := decisions[ctx.OwnerKey]
@@ -943,10 +978,19 @@ func collectGUIDReplacements(contexts []*FileProcessingContext, decisions map[st
 	return replacements
 }
 
-func collectGUIDReplacementsFromConfigDump(contexts []*FileProcessingContext, decisions map[string]objectDecision, replacements map[string]string) {
+func collectGUIDReplacementsFromConfigDump(
+	contexts []*FileProcessingContext,
+	decisions map[string]objectDecision,
+	replacements map[string]string,
+	identityMap *identityMapState,
+	adoptedStubMetaDataRules map[string]adoptedStubMetaDataRule,
+) {
 	ctx := findConfigDumpContext(contexts)
 	if ctx == nil || ctx.Doc == nil || ctx.Doc.Root() == nil {
 		return
+	}
+	if identityMap == nil {
+		identityMap = newIdentityMapState()
 	}
 
 	var walk func(*etree.Element)
@@ -954,10 +998,10 @@ func collectGUIDReplacementsFromConfigDump(contexts []*FileProcessingContext, de
 		if localName(el.Tag) == "Metadata" {
 			name := strings.TrimSpace(el.SelectAttrValue("name", ""))
 			id := strings.TrimSpace(el.SelectAttrValue("id", ""))
-			if isAdoptedMetadata(name, decisions) {
-				for _, guid := range extractGUIDs(id) {
-					ensureGUIDReplacement(replacements, guid)
-				}
+			if shouldTrackIdentityMetadataPath(name, decisions, adoptedStubMetaDataRules) {
+				ensureIdentityReplacement(replacements, identityMap, name, id)
+			} else if identityMap.Objects != nil {
+				delete(identityMap.Objects, name)
 			}
 		}
 
@@ -967,6 +1011,32 @@ func collectGUIDReplacementsFromConfigDump(contexts []*FileProcessingContext, de
 	}
 
 	walk(ctx.Doc.Root())
+}
+
+func ensureIdentityReplacement(replacements map[string]string, identityMap *identityMapState, metadataPath, currentID string) {
+	if replacements == nil || identityMap == nil {
+		return
+	}
+
+	metadataPath = strings.TrimSpace(metadataPath)
+	if metadataPath == "" {
+		return
+	}
+
+	identityMap.ensureDefaults()
+	state := identityMap.Objects[metadataPath]
+	extensionID := normalizeGUIDValue(state.ExtensionID)
+	if extensionID == "" {
+		log.Printf("missing extension_id: metadata=%s", metadataPath)
+		extensionID = newGUID()
+		log.Printf("generated extension_id: metadata=%s extension_id=%s", metadataPath, extensionID)
+		state.ExtensionID = extensionID
+		identityMap.Objects[metadataPath] = state
+	}
+
+	for _, guid := range extractGUIDs(currentID) {
+		replacements[strings.ToLower(guid)] = extensionID
+	}
 }
 
 func findConfigDumpContext(contexts []*FileProcessingContext) *FileProcessingContext {
@@ -1010,6 +1080,202 @@ func ensureGUIDReplacement(replacements map[string]string, guid string) {
 		return
 	}
 	replacements[normalized] = newGUID()
+}
+
+func newIdentityMapState() *identityMapState {
+	state := &identityMapState{}
+	state.ensureDefaults()
+	return state
+}
+
+func (state *identityMapState) ensureDefaults() {
+	if state == nil {
+		return
+	}
+	if state.Version == 0 {
+		state.Version = 1
+	}
+	if state.Objects == nil {
+		state.Objects = make(map[string]identityMapObjectBinding)
+	}
+}
+
+func loadIdentityMapState(cfg *config.Configuration) (*identityMapState, error) {
+	state := newIdentityMapState()
+	if cfg == nil || strings.TrimSpace(cfg.IdentityMapPath) == "" {
+		return state, nil
+	}
+
+	content, err := os.ReadFile(cfg.IdentityMapPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return state, nil
+		}
+		return nil, fmt.Errorf("не удалось прочитать identity map %s: %w", cfg.IdentityMapPath, err)
+	}
+
+	if err := json.Unmarshal(content, state); err != nil {
+		return nil, fmt.Errorf("не удалось разобрать identity map %s: %w", cfg.IdentityMapPath, err)
+	}
+	state.ensureDefaults()
+	return state, nil
+}
+
+func saveIdentityMapState(cfg *config.Configuration, state *identityMapState) error {
+	if cfg == nil || strings.TrimSpace(cfg.IdentityMapPath) == "" || state == nil {
+		return nil
+	}
+
+	state.ensureDefaults()
+	if err := os.MkdirAll(filepath.Dir(cfg.IdentityMapPath), 0o755); err != nil {
+		return fmt.Errorf("не удалось создать каталог identity map %s: %w", filepath.Dir(cfg.IdentityMapPath), err)
+	}
+
+	content, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("не удалось сериализовать identity map %s: %w", cfg.IdentityMapPath, err)
+	}
+
+	if err := os.WriteFile(cfg.IdentityMapPath, append(content, '\n'), 0o644); err != nil {
+		return fmt.Errorf("не удалось сохранить identity map %s: %w", cfg.IdentityMapPath, err)
+	}
+
+	return nil
+}
+
+func loadBaseBindings(cfg *config.Configuration) (map[string]string, error) {
+	result := make(map[string]string)
+	if cfg == nil || strings.TrimSpace(cfg.BaseBindingsPath) == "" {
+		return result, nil
+	}
+
+	content, err := os.ReadFile(cfg.BaseBindingsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return result, nil
+		}
+		return nil, fmt.Errorf("не удалось прочитать base bindings %s: %w", cfg.BaseBindingsPath, err)
+	}
+
+	var raw config.BaseBindingsFile
+	if err := json.Unmarshal(content, &raw); err != nil {
+		return nil, fmt.Errorf("не удалось разобрать base bindings %s: %w", cfg.BaseBindingsPath, err)
+	}
+
+	for metadataPath, binding := range raw.Bindings {
+		metadataPath = strings.TrimSpace(metadataPath)
+		baseObjectID := normalizeGUIDValue(binding.BaseObjectID)
+		if metadataPath == "" || baseObjectID == "" {
+			continue
+		}
+		result[metadataPath] = baseObjectID
+	}
+
+	return result, nil
+}
+
+func normalizeGUIDValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	guid := extractGUIDs(value)
+	if len(guid) == 0 {
+		return ""
+	}
+	return strings.ToLower(guid[0])
+}
+
+func shouldTrackIdentityMetadataPath(
+	metadataPath string,
+	decisions map[string]objectDecision,
+	adoptedStubMetaDataRules map[string]adoptedStubMetaDataRule,
+) bool {
+	topKey, segments, ok := parseMetadataPath(metadataPath)
+	if !ok || topKey == "Configuration" || topKey == "Language.Русский" {
+		return false
+	}
+
+	decision, exists := decisions[topKey]
+	if !exists || decision.Excluded || decision.Belonging == "Native" {
+		return false
+	}
+
+	if len(segments) == 0 {
+		return true
+	}
+
+	switch len(segments) {
+	case 1:
+		if segments[0].Kind != "Attribute" && segments[0].Kind != "TabularSection" && segments[0].Kind != "Command" {
+			return false
+		}
+	case 2:
+		if segments[0].Kind != "TabularSection" || segments[1].Kind != "Attribute" {
+			return false
+		}
+	default:
+		return false
+	}
+
+	if retainedAsNativeMetadataPath(topKey, segments, adoptedStubMetaDataRules) {
+		return false
+	}
+
+	return true
+}
+
+func parseMetadataPath(metadataPath string) (string, []metadataPathSegment, bool) {
+	parts := strings.Split(strings.TrimSpace(metadataPath), ".")
+	if len(parts) < 2 || len(parts)%2 != 0 {
+		return "", nil, false
+	}
+
+	topKey := strings.TrimSpace(parts[0]) + "." + strings.TrimSpace(parts[1])
+	if strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return "", nil, false
+	}
+
+	segments := make([]metadataPathSegment, 0, (len(parts)-2)/2)
+	for idx := 2; idx < len(parts); idx += 2 {
+		kind := strings.TrimSpace(parts[idx])
+		name := strings.TrimSpace(parts[idx+1])
+		if kind == "" || name == "" {
+			return "", nil, false
+		}
+		segments = append(segments, metadataPathSegment{Kind: kind, Name: name})
+	}
+
+	return topKey, segments, true
+}
+
+func retainedAsNativeMetadataPath(
+	topKey string,
+	segments []metadataPathSegment,
+	adoptedStubMetaDataRules map[string]adoptedStubMetaDataRule,
+) bool {
+	rule, ok := adoptedStubMetaDataRules[topKey]
+	if !ok || len(segments) == 0 {
+		return false
+	}
+
+	if len(segments) == 1 && segments[0].Kind == "Attribute" {
+		_, keep := rule.NativeAttributes[segments[0].Name]
+		return keep
+	}
+
+	if len(segments) == 1 && segments[0].Kind == "TabularSection" {
+		_, keep := rule.NativeTabularSections[segments[0].Name]
+		return keep
+	}
+
+	if len(segments) == 2 && segments[0].Kind == "TabularSection" && segments[1].Kind == "Attribute" {
+		attrs := rule.NativeTabularSections[segments[0].Name]
+		_, keep := attrs[segments[1].Name]
+		return keep
+	}
+
+	return false
 }
 
 func collectOwnedGUIDs(doc *etree.Document) map[string]struct{} {
@@ -4014,34 +4280,66 @@ func replaceGUIDs(value string, replacements map[string]string) (string, bool) {
 	return replaced, changed
 }
 
-func collectMetadataOriginalUUIDs(doc *etree.Document) map[*etree.Element]string {
-	result := make(map[*etree.Element]string)
-	if doc == nil || doc.Root() == nil {
+func collectMetadataBindingTargets(
+	doc *etree.Document,
+	ownerKey string,
+	baseBindings map[string]string,
+	decisions map[string]objectDecision,
+	adoptedStubMetaDataRules map[string]adoptedStubMetaDataRule,
+) map[*etree.Element]metadataBindingTarget {
+	result := make(map[*etree.Element]metadataBindingTarget)
+	target := metadataTargetElement(doc)
+	if target == nil {
 		return result
 	}
 
-	var walk func(*etree.Element)
-	walk = func(el *etree.Element) {
+	var walk func(*etree.Element, string)
+	walk = func(el *etree.Element, metadataPath string) {
 		if el == nil {
 			return
 		}
 
-		uuid := strings.TrimSpace(el.SelectAttrValue("uuid", ""))
+		uuid := normalizeGUIDValue(el.SelectAttrValue("uuid", ""))
 		if uuid != "" && el.FindElement("./Properties") != nil {
-			result[el] = uuid
+			baseObjectID := uuid
+			if shouldTrackIdentityMetadataPath(metadataPath, decisions, adoptedStubMetaDataRules) {
+				if bindingID := normalizeGUIDValue(baseBindings[metadataPath]); bindingID != "" {
+					baseObjectID = bindingID
+					log.Printf("binding applied: metadata=%s base_object_id=%s", metadataPath, bindingID)
+				} else {
+					log.Printf("missing base binding: metadata=%s", metadataPath)
+				}
+			}
+			result[el] = metadataBindingTarget{
+				MetadataPath: metadataPath,
+				BaseObjectID: baseObjectID,
+			}
 		}
 
-		for _, child := range el.ChildElements() {
-			walk(child)
+		childObjects := el.FindElement("./ChildObjects")
+		if childObjects == nil {
+			return
+		}
+
+		for _, child := range childObjects.ChildElements() {
+			childName := metadataChildName(child)
+			if childName == "" {
+				continue
+			}
+			childPath := strings.TrimSpace(localName(child.Tag)) + "." + childName
+			if metadataPath != "" {
+				childPath = metadataPath + "." + childPath
+			}
+			walk(child, childPath)
 		}
 	}
 
-	walk(doc.Root())
+	walk(target, ownerKey)
 	return result
 }
 
-func ensureAdoptedExtendedConfigurationObjects(doc *etree.Document, originalUUIDs map[*etree.Element]string) bool {
-	if doc == nil || doc.Root() == nil || len(originalUUIDs) == 0 {
+func ensureAdoptedExtendedConfigurationObjects(doc *etree.Document, bindingTargets map[*etree.Element]metadataBindingTarget) bool {
+	if doc == nil || doc.Root() == nil || len(bindingTargets) == 0 {
 		return false
 	}
 
@@ -4052,14 +4350,14 @@ func ensureAdoptedExtendedConfigurationObjects(doc *etree.Document, originalUUID
 			return
 		}
 
-		if originalUUID, ok := originalUUIDs[el]; ok {
+		if target, ok := bindingTargets[el]; ok {
 			properties := el.FindElement("./Properties")
 			if properties != nil {
 				preserveNative := strings.EqualFold(strings.TrimSpace(el.SelectAttrValue(preserveNativeObjectBelongingAttr, "")), "true")
 				if !preserveNative {
 					setObjectBelonging(properties, "Adopted")
-					if !modifyElement(properties, "ExtendedConfigurationObject", originalUUID) {
-						addElement(properties, "ExtendedConfigurationObject", originalUUID)
+					if !modifyElement(properties, "ExtendedConfigurationObject", target.BaseObjectID) {
+						addElement(properties, "ExtendedConfigurationObject", target.BaseObjectID)
 					}
 				} else if deleteElement(properties, "ExtendedConfigurationObject") {
 					changed = true

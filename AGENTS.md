@@ -2,6 +2,8 @@
 
 Сначала прочитай: [README.md](D:\Codex\files-converter_ver2\README.md), [.codex/context.md](D:\Codex\files-converter_ver2\.codex\context.md), [.codex/handoff.md](D:\Codex\files-converter_ver2\.codex\handoff.md), [docs/debugging.md](D:\Codex\files-converter_ver2\docs\debugging.md).
 
+`docs/technical-spec.md` — дополнительная пользовательская спецификация; читай ее при задачах на архитектуру, требования или синхронизацию документации.
+
 ## Правила работы с кодом и XML
 
 - Предпочитай минимальный дифф. Если поведение неоднозначно, выбирай наименьшее изменение, совместимое с текущим кодом.

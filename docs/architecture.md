@@ -7,7 +7,7 @@
 3. `internal/converter.RunConversion` выбирает `cfConvert` или `srcConvert`
 4. Конвертер подготавливает временные каталоги и временную 1С ИБ
 5. Метаданные выгружаются в файлы
-6. `internal/utils/xmlutil.ChangeFiles` переписывает выгрузку в XML, пригодный для загрузки как расширение
+6. `internal/utils/xmlutil.ChangeFiles` загружает persisted identity map для `Adopted-*`, применяет optional base bindings и переписывает выгрузку в XML, пригодный для загрузки как расширение
 7. При `stop_after_xml_dump=true` конвейер останавливается после переписывания XML
 8. Переписанные файлы загружаются как расширение и выгружаются в `.cfe`
 
