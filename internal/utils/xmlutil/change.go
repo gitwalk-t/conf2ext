@@ -6405,9 +6405,6 @@ func shouldIndexLiveCommandReferences(ctx *FileProcessingContext, decision objec
 	if ctx.FileName == "CommandInterface.xml" || ctx.FileName == "MainSectionCommandInterface.xml" {
 		return true
 	}
-	if strings.EqualFold(ctx.FileName, "Rights.xml") {
-		return true
-	}
 	return ctx.OwnerKind == "FunctionalOption" && ctx.Metadata && isTopLevelMetadataFile(ctx)
 }
 
@@ -6609,6 +6606,26 @@ func finalizeRetainedOwnerCommands(
 	stats := &retainedOwnerCommandFinalizationStats{}
 	removedPaths, dirtyOwners := diffRetainedOwnerCommands(retainedOwnerCommandCandidates, retainedOwnerCommands)
 	if len(removedPaths) == 0 {
+		for ownerKey := range adoptedStubMetaDataRules {
+			ctx := findTopLevelMetadataContextByOwnerKeyIndexed(indexes, contexts, ownerKey)
+			if ctx == nil || ctx.Doc == nil {
+				continue
+			}
+			decision, ok := decisions[ownerKey]
+			if !ok || decision.Excluded || decision.Belonging == "Native" {
+				continue
+			}
+
+			stats.FinalizedOwnerDocs++
+			if !stripPreserveNativeObjectBelongingMarkers(ctx.Doc) {
+				continue
+			}
+			stats.ChangedFiles++
+			if err := ctx.Doc.WriteToFile(ctx.Path); err != nil {
+				return stats, fmt.Errorf("ошибка при записи файла %s: %w", ctx.Path, err)
+			}
+			stats.WrittenFiles++
+		}
 		return stats, nil
 	}
 
@@ -6678,6 +6695,26 @@ func finalizeRetainedOwnerCommands(
 			changed = cleanupMissingFormCommandReferencesWithResolver(ctx.Doc, finalExists)
 		}
 
+		stats.AffectedDocs++
+		if !changed {
+			continue
+		}
+		stats.ChangedFiles++
+		if err := ctx.Doc.WriteToFile(ctx.Path); err != nil {
+			return stats, fmt.Errorf("ошибка при записи файла %s: %w", ctx.Path, err)
+		}
+		stats.WrittenFiles++
+	}
+
+	for _, ctx := range contexts {
+		if ctx == nil || ctx.Doc == nil || !strings.EqualFold(ctx.FileName, "Rights.xml") {
+			continue
+		}
+		if _, excluded := excludedPaths[ctx.Path]; excluded {
+			continue
+		}
+
+		changed := cleanupRoleDanglingMetadataRightsWithResolver(ctx.Doc, finalExists)
 		stats.AffectedDocs++
 		if !changed {
 			continue

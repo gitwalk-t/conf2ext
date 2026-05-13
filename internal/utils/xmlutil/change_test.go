@@ -2380,6 +2380,129 @@ func TestFilterRetainedOwnerCommandsSkipsExcludedAdoptedOwnerForm(t *testing.T) 
 	}
 }
 
+func TestFilterRetainedOwnerCommandsIgnoresRightsReference(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	ownerDoc := etree.NewDocument()
+	if err := ownerDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog>
+    <Properties>
+      <Name>Тест</Name>
+    </Properties>
+    <ChildObjects>
+      <Command>
+        <Properties>
+          <Name>ТестКоманда</Name>
+        </Properties>
+      </Command>
+    </ChildObjects>
+  </Catalog>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read owner xml: %v", err)
+	}
+
+	rightsDoc := etree.NewDocument()
+	if err := rightsDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<Rights xmlns="http://v8.1c.ru/8.2/roles">
+  <object>
+    <name>Catalog.Тест.Command.ТестКоманда</name>
+    <right>Read</right>
+  </object>
+</Rights>`); err != nil {
+		t.Fatalf("read rights xml: %v", err)
+	}
+
+	configDumpDoc := etree.NewDocument()
+	if err := configDumpDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo>
+  <Metadata name="Catalog.Тест" id="11111111-1111-1111-1111-111111111111">
+    <Metadata name="Catalog.Тест.Command.ТестКоманда" id="22222222-2222-2222-2222-222222222222"/>
+  </Metadata>
+</ConfigDumpInfo>`); err != nil {
+		t.Fatalf("read config dump xml: %v", err)
+	}
+
+	ownerPath := filepath.Join(root, "Catalogs", "Тест.xml")
+	if err := os.MkdirAll(filepath.Dir(ownerPath), 0o755); err != nil {
+		t.Fatalf("mkdir owner dir: %v", err)
+	}
+	if err := ownerDoc.WriteToFile(ownerPath); err != nil {
+		t.Fatalf("write owner xml: %v", err)
+	}
+
+	rightsPath := filepath.Join(root, "Roles", "ТестРоль", "Ext", "Rights.xml")
+	if err := os.MkdirAll(filepath.Dir(rightsPath), 0o755); err != nil {
+		t.Fatalf("mkdir rights dir: %v", err)
+	}
+	if err := rightsDoc.WriteToFile(rightsPath); err != nil {
+		t.Fatalf("write rights xml: %v", err)
+	}
+
+	configDumpPath := filepath.Join(root, configDumpInfo)
+	if err := configDumpDoc.WriteToFile(configDumpPath); err != nil {
+		t.Fatalf("write config dump xml: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{
+		{
+			Doc:              ownerDoc,
+			Path:             ownerPath,
+			RelPath:          "Catalogs/Тест.xml",
+			FileName:         "Тест.xml",
+			Metadata:         true,
+			TopLevelMetadata: true,
+			OwnerKey:         "Catalog.Тест",
+			OwnerKind:        "Catalog",
+		},
+		{
+			Doc:       rightsDoc,
+			Path:      rightsPath,
+			RelPath:   "Roles/ТестРоль/Ext/Rights.xml",
+			FileName:  "Rights.xml",
+			OwnerKey:  "Role.ТестРоль",
+			OwnerKind: "Role",
+		},
+		{
+			Doc:      configDumpDoc,
+			Path:     configDumpPath,
+			RelPath:  configDumpInfo,
+			FileName: configDumpInfo,
+		},
+	}
+	decisions := map[string]objectDecision{
+		"Catalog.Тест":  {Belonging: "AdoptedStub"},
+		"Role.ТестРоль": {Belonging: "Native"},
+	}
+
+	candidates := collectOwnerCommandCandidates(contexts, decisions)
+	if _, ok := candidates["Catalog.Тест"]["ТестКоманда"]; !ok {
+		t.Fatalf("expected command candidate from rights xml")
+	}
+
+	liveRefs := buildLiveCommandReferenceIndex(contexts, decisions, map[string]struct{}{})
+	retained := filterRetainedOwnerCommandsByLiveReferences(candidates, liveRefs)
+	if len(retained["Catalog.Тест"]) != 0 {
+		t.Fatalf("expected rights xml not to retain adopted owner command")
+	}
+
+	if _, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, nil, nil, candidates, retained, liveRefs); err != nil {
+		t.Fatalf("finalize retained commands: %v", err)
+	}
+
+	if commands := ownerDoc.FindElements("//*[local-name()='Catalog']/*[local-name()='ChildObjects']/*[local-name()='Command']"); len(commands) != 0 {
+		t.Fatalf("expected rights-only command to be removed from ChildObjects, got %d", len(commands))
+	}
+	if hasMetadataName(configDumpDoc, "Catalog.Тест.Command.ТестКоманда") {
+		t.Fatalf("expected rights-only command metadata to be removed from ConfigDumpInfo")
+	}
+	if objects := rightsDoc.FindElements("//*[local-name()='object']"); len(objects) != 0 {
+		t.Fatalf("expected dangling rights reference to be removed, got %d objects", len(objects))
+	}
+}
+
 func TestFinalizeRetainedOwnerCommandsStripsNativePreserveMarker(t *testing.T) {
 	t.Parallel()
 
@@ -2450,6 +2573,83 @@ func TestFinalizeRetainedOwnerCommandsStripsNativePreserveMarker(t *testing.T) {
 
 	if _, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, rules, nil, candidates, nil, buildLiveCommandReferenceIndex(contexts, decisions, map[string]struct{}{})); err != nil {
 		t.Fatalf("finalize retained commands: %v", err)
+	}
+
+	attr := doc.FindElement("//*[local-name()='Attribute']")
+	if attr == nil {
+		t.Fatalf("expected retained attribute")
+	}
+	if got := attr.SelectAttrValue(preserveNativeObjectBelongingAttr, ""); got != "" {
+		t.Fatalf("expected preserve marker to be stripped, got %q", got)
+	}
+}
+
+func TestFinalizeRetainedOwnerCommandsStripsNativePreserveMarkerWithoutRetainedDiff(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog>
+    <Properties>
+      <Name>НаправленияДеятельности</Name>
+      <ObjectBelonging>Adopted</ObjectBelonging>
+      <ExtendedConfigurationObject>base-id</ExtendedConfigurationObject>
+    </Properties>
+    <ChildObjects>
+      <Attribute codexPreserveNativeObjectBelonging="true">
+        <Properties>
+          <Name>упо_ЭлементПлана</Name>
+        </Properties>
+      </Attribute>
+    </ChildObjects>
+  </Catalog>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read xml: %v", err)
+	}
+
+	path := filepath.Join(root, "Catalogs", "НаправленияДеятельности.xml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir dir: %v", err)
+	}
+	if err := doc.WriteToFile(path); err != nil {
+		t.Fatalf("write xml: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{
+		{
+			Doc:              doc,
+			Path:             path,
+			RelPath:          "Catalogs/НаправленияДеятельности.xml",
+			FileName:         "НаправленияДеятельности.xml",
+			Metadata:         true,
+			TopLevelMetadata: true,
+			OwnerKey:         "Catalog.НаправленияДеятельности",
+			OwnerKind:        "Catalog",
+		},
+	}
+	rules := map[string]adoptedStubMetaDataRule{
+		"Catalog.НаправленияДеятельности": {
+			NativeAttributes: map[string]struct{}{
+				"упо_ЭлементПлана": {},
+			},
+		},
+	}
+	decisions := map[string]objectDecision{
+		"Catalog.НаправленияДеятельности": {Belonging: "AdoptedStub"},
+	}
+
+	retained := map[string]map[string]struct{}{
+		"Catalog.НаправленияДеятельности": {},
+	}
+
+	stats, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, rules, nil, retained, retained, buildLiveCommandReferenceIndex(contexts, decisions, map[string]struct{}{}))
+	if err != nil {
+		t.Fatalf("finalize retained commands: %v", err)
+	}
+	if stats.WrittenFiles == 0 {
+		t.Fatalf("expected preserve marker cleanup to write owner xml even without retained diff")
 	}
 
 	attr := doc.FindElement("//*[local-name()='Attribute']")
