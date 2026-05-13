@@ -253,6 +253,8 @@ type nodeMark struct {
 	computed       bool
 }
 
+type metadataTargetExistsFunc func(string) bool
+
 type excludedMetadataTraversalState struct {
 	prefixSet    map[string]struct{}
 	subtreeCache map[*etree.Element]nodeMark
@@ -323,7 +325,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 	promoteRegisterDocumentOwnersToNativeIndexed(contexts, indexes, decisions, cfg, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects, collectRegisterDocumentReferences(contexts))
 	applyFormDynamicListContracts(decisions, formDynamicListContracts, forbiddenAdoptedStubObjects)
 	applyAdoptedStubMetaDataRules(decisions, adoptedStubMetaDataRules, excludedObjects, forbiddenAdoptedStubObjects)
-	retainedOwnerCommands := collectRetainedOwnerCommands(contexts, decisions)
+	retainedOwnerCommandCandidates := collectOwnerCommandCandidates(contexts, decisions)
 	logXMLStepCompleted("promote referenced objects", promoteReferencedObjectsStartedAt, fmt.Sprintf("decisions=%d", len(decisions)))
 
 	log.Printf("xml step: collect cleanup sets")
@@ -447,7 +449,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 			ctx.OwnerKind != "DefinedType" && ctx.OwnerKind != "EventSubscription" {
 			changed = cleanupAdoptedObjectFormReferences(ctx.Properties) || changed
 			contract, hasContract := formDynamicListContracts[ctx.OwnerKey]
-			retainedCommands := retainedOwnerCommands[ctx.OwnerKey]
+			retainedCommands := retainedOwnerCommandCandidates[ctx.OwnerKey]
 			rule, hasRule := adoptedStubMetaDataRules[ctx.OwnerKey]
 			if hasContract && hasRule {
 				changed = normalizeAdoptedStubExtFormComposition(ctx.Doc, mergeAdoptedStubMetaDataIntoFormContract(contract, rule), retainedCommands) || changed
@@ -502,6 +504,17 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 	}
 	log.Printf("xml progress: apply object changes %d/%d file=done", len(contexts), len(contexts))
 	logXMLStepCompleted("apply object changes", applyObjectChangesStartedAt, fmt.Sprintf("changed_files=%d written_files=%d", changedFilesCount, writtenFilesCount))
+
+	log.Printf("xml step: filter retained owner commands")
+	filterRetainedOwnerCommandsStartedAt := time.Now()
+	retainedOwnerCommands := filterRetainedOwnerCommandsByLiveReferences(contexts, decisions, retainedOwnerCommandCandidates, excludedPaths)
+	finalizationChangedFiles, finalizationWrittenFiles, err := finalizeRetainedOwnerCommands(contexts, decisions, adoptedStubMetaDataRules, formDynamicListContracts, retainedOwnerCommands)
+	if err != nil {
+		return err
+	}
+	changedFilesCount += finalizationChangedFiles
+	writtenFilesCount += finalizationWrittenFiles
+	logXMLStepCompleted("filter retained owner commands", filterRetainedOwnerCommandsStartedAt, fmt.Sprintf("candidate_commands=%d retained_commands=%d changed_files=%d written_files=%d", countRetainedOwnerCommands(retainedOwnerCommandCandidates), countRetainedOwnerCommands(retainedOwnerCommands), finalizationChangedFiles, finalizationWrittenFiles))
 
 	if cfg.IsFormValidationEnabled() {
 		log.Printf("xml step: validate dynamic list contracts")
@@ -1707,11 +1720,16 @@ func promoteReferencedObjectsToAdoptedStubIndexed(
 			if !ok || decision.Excluded {
 				continue
 			}
-			if !isRefDrivenInclusionSource(ctx, decision) {
+			regularSource := isRefDrivenInclusionSource(ctx, decision)
+			functionalOptionStorageSource := isFunctionalOptionStorageReferenceSource(ctx, decision)
+			if !regularSource && !functionalOptionStorageSource {
 				continue
 			}
 
 			refs := referenceGraph[ctx.OwnerKey]
+			if !regularSource && functionalOptionStorageSource {
+				refs = collectFunctionalOptionStorageReferences(ctx.Doc)
+			}
 			adoptedStubExtRefs := adoptedStubExtReferenceGraph[ctx.OwnerKey]
 			if ctx.OwnerKey == "Configuration" {
 				refs = collectConfigurationChildObjectReferences(ctx.Doc.Root(), primaryNativeObjects)
@@ -1852,6 +1870,13 @@ func isRefDrivenInclusionSource(ctx *FileProcessingContext, decision objectDecis
 		!decision.Truncated
 }
 
+func isFunctionalOptionStorageReferenceSource(ctx *FileProcessingContext, decision objectDecision) bool {
+	return ctx != nil &&
+		ctx.OwnerKind == "FunctionalOption" &&
+		decision.Belonging == "AdoptedStub" &&
+		!decision.Excluded
+}
+
 func shouldUseAdoptedStubExtForReference(
 	sourceCtx *FileProcessingContext,
 	sourceDecision objectDecision,
@@ -1873,6 +1898,31 @@ func shouldUseAdoptedStubExtForReference(
 	}
 
 	return refCtx != nil && refCtx.OwnerKind == "DefinedType"
+}
+
+func collectFunctionalOptionStorageReferences(doc *etree.Document) map[string]struct{} {
+	result := make(map[string]struct{})
+	target := metadataTargetElement(doc)
+	if target == nil || !strings.EqualFold(localName(target.Tag), "FunctionalOption") {
+		return result
+	}
+
+	properties := target.FindElement("./Properties")
+	if properties == nil {
+		return result
+	}
+
+	for _, tag := range []string{"Location", "Storage"} {
+		el := properties.FindElement("./" + tag)
+		if el == nil {
+			continue
+		}
+		for ref := range collectMetadataReferences(el) {
+			result[ref] = struct{}{}
+		}
+	}
+
+	return result
 }
 
 func collectMetadataReferences(el *etree.Element) map[string]struct{} {
@@ -3384,6 +3434,12 @@ func removeForbiddenStandardCommands(doc *etree.Document) bool {
 }
 
 func cleanupMissingFormCommandReferences(doc *etree.Document, contexts []*FileProcessingContext) bool {
+	return cleanupMissingFormCommandReferencesWithResolver(doc, func(name string) bool {
+		return roleMetadataTargetExists(name, contexts)
+	})
+}
+
+func cleanupMissingFormCommandReferencesWithResolver(doc *etree.Document, exists metadataTargetExistsFunc) bool {
 	root := doc.Root()
 	if root == nil {
 		return false
@@ -3398,7 +3454,7 @@ func cleanupMissingFormCommandReferences(doc *etree.Document, contexts []*FilePr
 		children := parent.ChildElements()
 		for i := len(children) - 1; i >= 0; i-- {
 			child := children[i]
-			if shouldRemoveFormCommandReference(child, defined, contexts) {
+			if shouldRemoveFormCommandReference(child, defined, exists) {
 				if isCommandReferenceElement(child.Tag) && grandparent != nil {
 					grandparent.RemoveChild(parent)
 					changed = true
@@ -4128,7 +4184,7 @@ func collectDefinedFormCommands(root *etree.Element) map[string]struct{} {
 	return defined
 }
 
-func shouldRemoveFormCommandReference(el *etree.Element, defined map[string]struct{}, contexts []*FileProcessingContext) bool {
+func shouldRemoveFormCommandReference(el *etree.Element, defined map[string]struct{}, exists metadataTargetExistsFunc) bool {
 	tag := strings.ToLower(localName(el.Tag))
 	text := strings.TrimSpace(el.Text())
 
@@ -4149,7 +4205,7 @@ func shouldRemoveFormCommandReference(el *etree.Element, defined map[string]stru
 			return !ok
 		}
 		if isMetadataCommandReference(text) {
-			return !roleMetadataTargetExists(text, contexts)
+			return exists != nil && !exists(text)
 		}
 		return false
 	case "excludedcommand":
@@ -4372,6 +4428,32 @@ func ensureAdoptedExtendedConfigurationObjects(doc *etree.Document, bindingTarge
 			}
 		}
 
+		for _, child := range el.ChildElements() {
+			walk(child)
+		}
+	}
+
+	walk(doc.Root())
+	return changed
+}
+
+func stripPreserveNativeObjectBelongingMarkers(doc *etree.Document) bool {
+	if doc == nil || doc.Root() == nil {
+		return false
+	}
+
+	changed := false
+	var walk func(*etree.Element)
+	walk = func(el *etree.Element) {
+		if el == nil {
+			return
+		}
+		for i := len(el.Attr) - 1; i >= 0; i-- {
+			if el.Attr[i].Key == preserveNativeObjectBelongingAttr {
+				el.Attr = append(el.Attr[:i], el.Attr[i+1:]...)
+				changed = true
+			}
+		}
 		for _, child := range el.ChildElements() {
 			walk(child)
 		}
@@ -4922,6 +5004,12 @@ func cleanupRoleConfigurationRights(doc *etree.Document, configurationName strin
 }
 
 func cleanupRoleDanglingMetadataRights(doc *etree.Document, contexts []*FileProcessingContext) bool {
+	return cleanupRoleDanglingMetadataRightsWithResolver(doc, func(name string) bool {
+		return roleMetadataTargetExists(name, contexts)
+	})
+}
+
+func cleanupRoleDanglingMetadataRightsWithResolver(doc *etree.Document, exists metadataTargetExistsFunc) bool {
 	if doc == nil {
 		return false
 	}
@@ -4940,7 +5028,7 @@ func cleanupRoleDanglingMetadataRights(doc *etree.Document, contexts []*FileProc
 		if name == "" {
 			continue
 		}
-		if !roleMetadataTargetExists(name, contexts) {
+		if exists != nil && !exists(name) {
 			root.RemoveChild(object)
 			changed = true
 		}
@@ -4978,6 +5066,14 @@ func cleanupRoleExcludedMetadataRights(doc *etree.Document, decisions map[string
 }
 
 func roleMetadataTargetExists(name string, contexts []*FileProcessingContext) bool {
+	return roleMetadataTargetExistsWithOptions(name, contexts, nil, false)
+}
+
+func roleMetadataTargetExistsFinal(name string, contexts []*FileProcessingContext, decisions map[string]objectDecision) bool {
+	return roleMetadataTargetExistsWithOptions(name, contexts, decisions, true)
+}
+
+func roleMetadataTargetExistsWithOptions(name string, contexts []*FileProcessingContext, decisions map[string]objectDecision, disableFilesystemForNonNative bool) bool {
 	parts := strings.Split(strings.TrimSpace(name), ".")
 	if len(parts) < 2 {
 		return true
@@ -5008,6 +5104,12 @@ func roleMetadataTargetExists(name string, contexts []*FileProcessingContext) bo
 
 	if metadataPathExistsInElement(target, parts[2:]) {
 		return true
+	}
+
+	if disableFilesystemForNonNative {
+		if decision, ok := decisions[topKey]; ok && !decision.Excluded && decision.Belonging != "Native" {
+			return false
+		}
 	}
 
 	return metadataPathExistsInFilesystem(ctx.Path, parts[2:])
@@ -5100,6 +5202,12 @@ func metadataPathExistsInElement(parent *etree.Element, parts []string) bool {
 }
 
 func cleanupDanglingCommandInterfaceCommands(doc *etree.Document, contexts []*FileProcessingContext) bool {
+	return cleanupDanglingCommandInterfaceCommandsWithResolver(doc, func(name string) bool {
+		return roleMetadataTargetExists(name, contexts)
+	})
+}
+
+func cleanupDanglingCommandInterfaceCommandsWithResolver(doc *etree.Document, exists metadataTargetExistsFunc) bool {
 	if doc == nil {
 		return false
 	}
@@ -5115,7 +5223,7 @@ func cleanupDanglingCommandInterfaceCommands(doc *etree.Document, contexts []*Fi
 		for _, child := range append([]*etree.Element(nil), parent.ChildElements()...) {
 			if strings.EqualFold(localName(child.Tag), "Command") {
 				name := strings.TrimSpace(child.SelectAttrValue("name", ""))
-				if name != "" && !strings.Contains(name, ".StandardCommand.") && !roleMetadataTargetExists(name, contexts) {
+				if name != "" && !strings.Contains(name, ".StandardCommand.") && exists != nil && !exists(name) {
 					parent.RemoveChild(child)
 					changed = true
 					continue
@@ -5130,6 +5238,12 @@ func cleanupDanglingCommandInterfaceCommands(doc *etree.Document, contexts []*Fi
 }
 
 func cleanupConfigDumpInfoNonNativeChildren(doc *etree.Document, contexts []*FileProcessingContext, decisions map[string]objectDecision) bool {
+	return cleanupConfigDumpInfoNonNativeChildrenWithResolver(doc, decisions, func(name string) bool {
+		return roleMetadataTargetExists(name, contexts)
+	})
+}
+
+func cleanupConfigDumpInfoNonNativeChildrenWithResolver(doc *etree.Document, decisions map[string]objectDecision, exists metadataTargetExistsFunc) bool {
 	if doc == nil || len(decisions) == 0 {
 		return false
 	}
@@ -5161,7 +5275,7 @@ func cleanupConfigDumpInfoNonNativeChildren(doc *etree.Document, contexts []*Fil
 			for prefix := range nonNativePrefixes {
 				if strings.HasPrefix(name, prefix) {
 					if _, ok := configDumpInfoTopLevelKey(name); !ok {
-						if isDisallowedAdoptedModuleMetadata(name) || !roleMetadataTargetExists(name, contexts) {
+						if isDisallowedAdoptedModuleMetadata(name) || (exists != nil && !exists(name)) {
 							parent.RemoveChild(child)
 							changed = true
 							removed = true
@@ -5176,11 +5290,11 @@ func cleanupConfigDumpInfoNonNativeChildren(doc *etree.Document, contexts []*Fil
 
 			key, ok := configDumpInfoTopLevelKey(name)
 			if ok {
-				if decision, exists := decisions[key]; exists && !decision.Excluded && decision.Belonging != "Native" {
+				if decision, decisionExists := decisions[key]; decisionExists && !decision.Excluded && decision.Belonging != "Native" {
 					for _, nested := range append([]*etree.Element(nil), child.ChildElements()...) {
 						nestedName := strings.TrimSpace(nested.SelectAttrValue("name", ""))
 						if strings.EqualFold(localName(nested.Tag), "Metadata") &&
-							(isDisallowedAdoptedModuleMetadata(nestedName) || !roleMetadataTargetExists(nestedName, contexts)) {
+							(isDisallowedAdoptedModuleMetadata(nestedName) || (exists != nil && !exists(nestedName))) {
 							child.RemoveChild(nested)
 							changed = true
 						}
@@ -6145,7 +6259,90 @@ func normalizeRetainedAdoptedCommandChildObjects(childObjects *etree.Element, re
 	return changed
 }
 
-func collectRetainedOwnerCommands(contexts []*FileProcessingContext, decisions map[string]objectDecision) map[string]map[string]struct{} {
+func countRetainedOwnerCommands(commands map[string]map[string]struct{}) int {
+	total := 0
+	for _, ownerCommands := range commands {
+		total += len(ownerCommands)
+	}
+	return total
+}
+
+func finalizeRetainedOwnerCommands(
+	contexts []*FileProcessingContext,
+	decisions map[string]objectDecision,
+	adoptedStubMetaDataRules map[string]adoptedStubMetaDataRule,
+	formDynamicListContracts map[string]formDynamicListContract,
+	retainedOwnerCommands map[string]map[string]struct{},
+) (int, int, error) {
+	finalExists := func(name string) bool {
+		return roleMetadataTargetExistsFinal(name, contexts, decisions)
+	}
+
+	changedFiles := 0
+	writtenFiles := 0
+
+	for _, ctx := range contexts {
+		if ctx == nil || ctx.Doc == nil || ctx.Doc.Root() == nil {
+			continue
+		}
+
+		decision, ok := decisions[ctx.OwnerKey]
+		if ok && decision.Excluded {
+			continue
+		}
+
+		changed := false
+
+		if ok && decision.Belonging != "Native" && ctx.Metadata && isTopLevelMetadataFile(ctx) &&
+			ctx.OwnerKey != "Configuration" && ctx.OwnerKey != "Language.Русский" &&
+			ctx.OwnerKind != "DefinedType" && ctx.OwnerKind != "EventSubscription" {
+			retainedCommands := retainedOwnerCommands[ctx.OwnerKey]
+			contract, hasContract := formDynamicListContracts[ctx.OwnerKey]
+			rule, hasRule := adoptedStubMetaDataRules[ctx.OwnerKey]
+			if hasContract && hasRule {
+				changed = normalizeAdoptedStubExtFormComposition(ctx.Doc, mergeAdoptedStubMetaDataIntoFormContract(contract, rule), retainedCommands) || changed
+			} else if hasRule {
+				changed = normalizeAdoptedStubMetaDataComposition(ctx.Doc, ctx.OwnerKind, rule, retainedCommands) || changed
+			} else if hasContract {
+				changed = normalizeAdoptedStubExtFormComposition(ctx.Doc, contract, retainedCommands) || changed
+			} else {
+				changed = normalizeAdoptedObjectComposition(ctx.Doc, ctx.OwnerKind, retainedCommands) || changed
+			}
+		}
+
+		if ctx.FileName == configDumpInfo {
+			changed = cleanupConfigDumpInfoNonNativeChildrenWithResolver(ctx.Doc, decisions, finalExists) || changed
+		}
+
+		if ctx.FileName == "CommandInterface.xml" || ctx.FileName == "MainSectionCommandInterface.xml" {
+			changed = cleanupDanglingCommandInterfaceCommandsWithResolver(ctx.Doc, finalExists) || changed
+		}
+
+		if strings.EqualFold(ctx.FileName, "Rights.xml") {
+			changed = cleanupRoleDanglingMetadataRightsWithResolver(ctx.Doc, finalExists) || changed
+		}
+
+		if strings.Contains(filepath.ToSlash(ctx.RelPath), "/Forms/") {
+			changed = cleanupMissingFormCommandReferencesWithResolver(ctx.Doc, finalExists) || changed
+		}
+
+		changed = stripPreserveNativeObjectBelongingMarkers(ctx.Doc) || changed
+
+		if !changed {
+			continue
+		}
+
+		changedFiles++
+		if err := ctx.Doc.WriteToFile(ctx.Path); err != nil {
+			return changedFiles, writtenFiles, fmt.Errorf("ошибка при записи файла %s: %w", ctx.Path, err)
+		}
+		writtenFiles++
+	}
+
+	return changedFiles, writtenFiles, nil
+}
+
+func collectOwnerCommandCandidates(contexts []*FileProcessingContext, decisions map[string]objectDecision) map[string]map[string]struct{} {
 	result := make(map[string]map[string]struct{})
 
 	for _, ctx := range contexts {
@@ -6156,7 +6353,6 @@ func collectRetainedOwnerCommands(contexts []*FileProcessingContext, decisions m
 		if ok && decision.Excluded {
 			continue
 		}
-		fromForm := strings.Contains(filepath.ToSlash(ctx.RelPath), "/Forms/")
 
 		for _, value := range collectElementValues(ctx.Doc.Root()) {
 			if !isMetadataCommandReference(value) {
@@ -6171,9 +6367,6 @@ func collectRetainedOwnerCommands(contexts []*FileProcessingContext, decisions m
 			if ownerKey == "" || commandName == "" {
 				continue
 			}
-			if fromForm && ownerKey != ctx.OwnerKey {
-				continue
-			}
 			ownerDecision, exists := decisions[ownerKey]
 			if !exists || ownerDecision.Excluded || ownerDecision.Belonging == "Native" {
 				continue
@@ -6186,6 +6379,96 @@ func collectRetainedOwnerCommands(contexts []*FileProcessingContext, decisions m
 	}
 
 	return result
+}
+
+func filterRetainedOwnerCommandsByLiveReferences(
+	contexts []*FileProcessingContext,
+	decisions map[string]objectDecision,
+	candidates map[string]map[string]struct{},
+	excludedPaths map[string]struct{},
+) map[string]map[string]struct{} {
+	result := make(map[string]map[string]struct{})
+	if len(candidates) == 0 {
+		return result
+	}
+
+	for _, ctx := range contexts {
+		if ctx == nil || ctx.Doc == nil || ctx.Doc.Root() == nil {
+			continue
+		}
+		if _, excluded := excludedPaths[ctx.Path]; excluded {
+			continue
+		}
+		if ctx.FileName == configDumpInfo || isRootServiceFile(ctx) {
+			continue
+		}
+		if decision, ok := decisions[ctx.OwnerKey]; ok && decision.Excluded {
+			continue
+		}
+
+		for ownerKey, commands := range collectLiveOwnerCommandReferences(ctx) {
+			ownerCandidates := candidates[ownerKey]
+			if ownerCandidates == nil {
+				continue
+			}
+			ownerDecision, ok := decisions[ownerKey]
+			if !ok || ownerDecision.Excluded || ownerDecision.Belonging == "Native" {
+				continue
+			}
+			for commandName := range commands {
+				if _, ok := ownerCandidates[commandName]; !ok {
+					continue
+				}
+				if result[ownerKey] == nil {
+					result[ownerKey] = make(map[string]struct{})
+				}
+				result[ownerKey][commandName] = struct{}{}
+			}
+		}
+	}
+
+	return result
+}
+
+func collectLiveOwnerCommandReferences(ctx *FileProcessingContext) map[string]map[string]struct{} {
+	result := make(map[string]map[string]struct{})
+	if ctx == nil || ctx.Doc == nil || ctx.Doc.Root() == nil {
+		return result
+	}
+
+	root := ctx.Doc.Root()
+	if ctx.Metadata && isTopLevelMetadataFile(ctx) {
+		root = metadataTargetElement(ctx.Doc)
+	}
+	collectLiveOwnerCommandReferencesFromElement(root, ctx.Metadata && isTopLevelMetadataFile(ctx), result)
+	return result
+}
+
+func collectLiveOwnerCommandReferencesFromElement(el *etree.Element, skipChildObjects bool, result map[string]map[string]struct{}) {
+	if el == nil {
+		return
+	}
+
+	if isMetadataCommandReference(strings.TrimSpace(el.Text())) {
+		parts := strings.Split(strings.TrimSpace(el.Text()), ".")
+		if len(parts) >= 4 && strings.EqualFold(parts[2], "Command") {
+			ownerKey := strings.TrimSpace(parts[0] + "." + parts[1])
+			commandName := strings.TrimSpace(parts[3])
+			if ownerKey != "" && commandName != "" {
+				if result[ownerKey] == nil {
+					result[ownerKey] = make(map[string]struct{})
+				}
+				result[ownerKey][commandName] = struct{}{}
+			}
+		}
+	}
+
+	for _, child := range el.ChildElements() {
+		if skipChildObjects && strings.EqualFold(localName(child.Tag), "ChildObjects") {
+			continue
+		}
+		collectLiveOwnerCommandReferencesFromElement(child, false, result)
+	}
 }
 
 func syncCharacteristicPredefinedTypeQualifiers(typeEl *etree.Element, ownerTypeNodes []*etree.Element) bool {

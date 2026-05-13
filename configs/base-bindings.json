@@ -1,3 +1,58 @@
 {
-  "bindings": {}
+  "bindings": {
+    "CommonPicture.ЗаполнитьПоОснованию": {
+      "base_object_id": "99a6db22-6624-4c63-9d80-367db783df3f"
+    },
+    "Catalog.Валюты": {
+      "base_object_id": "dd096f26-1cbd-44c2-a139-9c8c10b07fb9"
+    },
+    "Catalog.ДоговорыКонтрагентов": {
+      "base_object_id": "f3485b53-c447-4b51-8a87-ed842c7cd798"
+    },
+    "Catalog.ЗначенияСвойствОбъектов": {
+      "base_object_id": "02eb864a-c046-4e26-ab09-d57934e0aba2"
+    },
+    "Catalog.Контрагенты": {
+      "base_object_id": "d31edcfb-c254-4df6-813c-45d97556c9a4"
+    },
+    "Catalog.НаправленияДеятельности": {
+      "base_object_id": "f5624993-60a2-4ba4-b780-de80c5043a1a"
+    },
+    "Catalog.Номенклатура": {
+      "base_object_id": "bea7f781-5f18-4219-997c-9a767fb284be"
+    },
+    "Catalog.Организации": {
+      "base_object_id": "6a3c1b05-ee48-4aa9-b2c1-4b66e3aeab70"
+    },
+    "Catalog.ПодразделенияОрганизаций": {
+      "base_object_id": "a220310c-67c9-4f74-b7af-3fb6b9ad0176"
+    },
+    "Catalog.Пользователи": {
+      "base_object_id": "fa1ef4b3-fc76-4b08-bb66-d89a7a1b66b1"
+    },
+    "Catalog.СтатьиДвиженияДенежныхСредств": {
+      "base_object_id": "c18aed98-9a38-4a4f-bee4-1b6977344491"
+    },
+    "FunctionalOption.ИспользоватьДатыЗапретаИзменения": {
+      "base_object_id": "d7dcd391-3a0e-4aa9-9b53-467a1de67593"
+    },
+    "FunctionalOption.ИспользоватьДополнительныеРеквизитыИСведения": {
+      "base_object_id": "618d13d5-fd1f-4b70-ad45-dd6a17a50730"
+    },
+    "FunctionalOption.ИспользоватьИнтеграциюС1СДокументооборот": {
+      "base_object_id": "25ca2e70-0293-4bd4-9e08-bbd39120b3cf"
+    },
+    "FunctionalOption.ИспользоватьИнтеграциюС1СДокументооборот3": {
+      "base_object_id": "11fc309e-7351-4f07-8ed6-0c852e5d1d4c"
+    },
+    "StyleItem.ТекстИнформационнойНадписи": {
+      "base_object_id": "2f371ed4-ea68-4329-9107-e6ae2fff85e4"
+    },
+    "StyleItem.ЦветТекстаНевыбраннойКартинки": {
+      "base_object_id": "bcf1a1a2-5826-4ef2-beac-2b0fdb9c3a2c"
+    },
+    "Subsystem.Администрирование": {
+      "base_object_id": "9737201c-26ff-4846-87ef-1a486b26046a"
+    }
+  }
 }

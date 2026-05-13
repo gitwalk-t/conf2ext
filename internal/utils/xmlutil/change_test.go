@@ -344,11 +344,11 @@ func TestCleanupMissingFormCommonAttributeDynamicListFields(t *testing.T) {
 
 	contexts := []*FileProcessingContext{
 		{
-			Doc:      ownerDoc,
-			Metadata: true,
-			OwnerKey: "Catalog.упо_ДокументыОбязательств",
+			Doc:       ownerDoc,
+			Metadata:  true,
+			OwnerKey:  "Catalog.упо_ДокументыОбязательств",
 			OwnerKind: "Catalog",
-			RelPath:  "Catalogs/упо_ДокументыОбязательств.xml",
+			RelPath:   "Catalogs/упо_ДокументыОбязательств.xml",
 		},
 	}
 	decisions := map[string]objectDecision{
@@ -1929,7 +1929,7 @@ func TestNormalizeAdoptedObjectCompositionKeepsReferencedCommands(t *testing.T) 
 	}
 }
 
-func TestCollectRetainedOwnerCommandsFromFunctionalOption(t *testing.T) {
+func TestCollectOwnerCommandCandidatesFromFunctionalOption(t *testing.T) {
 	t.Parallel()
 
 	doc := etree.NewDocument()
@@ -1960,13 +1960,112 @@ func TestCollectRetainedOwnerCommandsFromFunctionalOption(t *testing.T) {
 		"Catalog.Пользователи": {Belonging: "AdoptedStub"},
 	}
 
-	retained := collectRetainedOwnerCommands(contexts, decisions)
-	if _, ok := retained["Catalog.Пользователи"]["ПользователиИнформационнойБазы"]; !ok {
-		t.Fatalf("expected retained command to be collected from functional option content")
+	candidates := collectOwnerCommandCandidates(contexts, decisions)
+	if _, ok := candidates["Catalog.Пользователи"]["ПользователиИнформационнойБазы"]; !ok {
+		t.Fatalf("expected command candidate to be collected from functional option content")
 	}
 }
 
-func TestCollectRetainedOwnerCommandsFromRetainedOwnerForm(t *testing.T) {
+func TestPromoteReferencedObjectsFromFunctionalOptionStorageOnly(t *testing.T) {
+	t.Parallel()
+
+	functionalOptionDoc := etree.NewDocument()
+	if err := functionalOptionDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable">
+  <FunctionalOption>
+    <Properties>
+      <Name>ИспользоватьДатыЗапретаИзменения</Name>
+      <Location>Constant.ИспользоватьДатыЗапретаИзменения</Location>
+      <Content>
+        <xr:Object>Report.ДатыЗапретаИзменения</xr:Object>
+      </Content>
+    </Properties>
+  </FunctionalOption>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read functional option xml: %v", err)
+	}
+
+	constantDoc := etree.NewDocument()
+	if err := constantDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Constant>
+    <Properties>
+      <Name>ИспользоватьДатыЗапретаИзменения</Name>
+    </Properties>
+  </Constant>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read constant xml: %v", err)
+	}
+
+	reportDoc := etree.NewDocument()
+	if err := reportDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Report>
+    <Properties>
+      <Name>ДатыЗапретаИзменения</Name>
+    </Properties>
+  </Report>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read report xml: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{
+		{
+			Doc:       functionalOptionDoc,
+			RelPath:   "FunctionalOptions/ИспользоватьДатыЗапретаИзменения.xml",
+			Metadata:  true,
+			OwnerKey:  "FunctionalOption.ИспользоватьДатыЗапретаИзменения",
+			OwnerKind: "FunctionalOption",
+		},
+		{
+			Doc:       constantDoc,
+			RelPath:   "Constants/ИспользоватьДатыЗапретаИзменения.xml",
+			Metadata:  true,
+			OwnerKey:  "Constant.ИспользоватьДатыЗапретаИзменения",
+			OwnerKind: "Constant",
+		},
+		{
+			Doc:       reportDoc,
+			RelPath:   "Reports/ДатыЗапретаИзменения.xml",
+			Metadata:  true,
+			OwnerKey:  "Report.ДатыЗапретаИзменения",
+			OwnerKind: "Report",
+		},
+	}
+	decisions := map[string]objectDecision{
+		"FunctionalOption.ИспользоватьДатыЗапретаИзменения": {Belonging: "AdoptedStub"},
+		"Constant.ИспользоватьДатыЗапретаИзменения":         {Excluded: true},
+		"Report.ДатыЗапретаИзменения":                       {Excluded: true},
+	}
+
+	referenceGraph := collectReferenceGraph(contexts, &config.Configuration{}, nil)
+	incomingReferenceGraph := collectIncomingReferenceGraph(referenceGraph)
+
+	promoteReferencedObjectsToAdoptedStubIndexed(
+		contexts,
+		buildContextIndexes(contexts),
+		decisions,
+		&config.Configuration{},
+		referenceGraph,
+		incomingReferenceGraph,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	constantDecision := decisions["Constant.ИспользоватьДатыЗапретаИзменения"]
+	if constantDecision.Excluded || constantDecision.Belonging != "AdoptedStub" {
+		t.Fatalf("expected storage constant to be promoted to AdoptedStub, got %#v", constantDecision)
+	}
+
+	reportDecision := decisions["Report.ДатыЗапретаИзменения"]
+	if !reportDecision.Excluded {
+		t.Fatalf("expected functional option content report to stay excluded, got %#v", reportDecision)
+	}
+}
+
+func TestCollectOwnerCommandCandidatesFromRetainedOwnerForm(t *testing.T) {
 	t.Parallel()
 
 	doc := etree.NewDocument()
@@ -1995,10 +2094,369 @@ func TestCollectRetainedOwnerCommandsFromRetainedOwnerForm(t *testing.T) {
 		"Catalog.Пользователи": {Belonging: "Adopted"},
 	}
 
-	retained := collectRetainedOwnerCommands(contexts, decisions)
-	if _, ok := retained["Catalog.Пользователи"]["ПользователиИнформационнойБазы"]; !ok {
-		t.Fatalf("expected retained command to be collected from owner form command reference")
+	candidates := collectOwnerCommandCandidates(contexts, decisions)
+	if _, ok := candidates["Catalog.Пользователи"]["ПользователиИнформационнойБазы"]; !ok {
+		t.Fatalf("expected command candidate to be collected from owner form command reference")
 	}
+}
+
+func TestFilterRetainedOwnerCommandsDropsCleanedFunctionalOptionReference(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	ownerDoc := etree.NewDocument()
+	if err := ownerDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog>
+    <Properties>
+      <Name>Тест</Name>
+    </Properties>
+    <ChildObjects>
+      <Command>
+        <Properties>
+          <Name>ТестКоманда</Name>
+        </Properties>
+      </Command>
+    </ChildObjects>
+  </Catalog>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read owner xml: %v", err)
+	}
+
+	functionalOptionDoc := etree.NewDocument()
+	if err := functionalOptionDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable">
+  <FunctionalOption>
+    <Properties>
+      <Name>ТестОпция</Name>
+      <Content>
+        <xr:Object>Catalog.Тест.Command.ТестКоманда</xr:Object>
+      </Content>
+    </Properties>
+  </FunctionalOption>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read functional option xml: %v", err)
+	}
+
+	configDumpDoc := etree.NewDocument()
+	if err := configDumpDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo>
+  <Metadata name="Catalog.Тест" id="11111111-1111-1111-1111-111111111111">
+    <Metadata name="Catalog.Тест.Command.ТестКоманда" id="22222222-2222-2222-2222-222222222222"/>
+  </Metadata>
+  <Metadata name="Catalog.Тест.Command.ТестКоманда" id="33333333-3333-3333-3333-333333333333"/>
+</ConfigDumpInfo>`); err != nil {
+		t.Fatalf("read config dump xml: %v", err)
+	}
+
+	ownerPath := filepath.Join(root, "Catalogs", "Тест.xml")
+	if err := os.MkdirAll(filepath.Dir(ownerPath), 0o755); err != nil {
+		t.Fatalf("mkdir owner dir: %v", err)
+	}
+	if err := ownerDoc.WriteToFile(ownerPath); err != nil {
+		t.Fatalf("write owner xml: %v", err)
+	}
+
+	configDumpPath := filepath.Join(root, configDumpInfo)
+	if err := configDumpDoc.WriteToFile(configDumpPath); err != nil {
+		t.Fatalf("write config dump xml: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{
+		{
+			Doc:              ownerDoc,
+			Path:             ownerPath,
+			RelPath:          "Catalogs/Тест.xml",
+			FileName:         "Тест.xml",
+			Metadata:         true,
+			TopLevelMetadata: true,
+			OwnerKey:         "Catalog.Тест",
+			OwnerKind:        "Catalog",
+		},
+		{
+			Doc:       functionalOptionDoc,
+			Path:      filepath.Join(root, "FunctionalOptions", "ТестОпция.xml"),
+			RelPath:   "FunctionalOptions/ТестОпция.xml",
+			FileName:  "ТестОпция.xml",
+			Metadata:  true,
+			OwnerKey:  "FunctionalOption.ТестОпция",
+			OwnerKind: "FunctionalOption",
+		},
+		{
+			Doc:      configDumpDoc,
+			Path:     configDumpPath,
+			RelPath:  configDumpInfo,
+			FileName: configDumpInfo,
+		},
+	}
+	decisions := map[string]objectDecision{
+		"Catalog.Тест":               {Belonging: "AdoptedStub"},
+		"FunctionalOption.ТестОпция": {Belonging: "AdoptedStub"},
+	}
+
+	candidates := collectOwnerCommandCandidates(contexts, decisions)
+	if _, ok := candidates["Catalog.Тест"]["ТестКоманда"]; !ok {
+		t.Fatalf("expected command candidate from raw functional option content")
+	}
+
+	if objectRef := functionalOptionDoc.FindElement("//*[local-name()='Content']/*[local-name()='Object']"); objectRef == nil {
+		t.Fatalf("expected functional option content reference")
+	} else {
+		objectRef.SetText("")
+	}
+
+	retained := filterRetainedOwnerCommandsByLiveReferences(contexts, decisions, candidates, map[string]struct{}{})
+	if len(retained["Catalog.Тест"]) != 0 {
+		t.Fatalf("expected no live retained commands after cleanup, got %d", len(retained["Catalog.Тест"]))
+	}
+
+	changedFiles, writtenFiles, err := finalizeRetainedOwnerCommands(contexts, decisions, nil, nil, retained)
+	if err != nil {
+		t.Fatalf("finalize retained commands: %v", err)
+	}
+	if changedFiles == 0 || writtenFiles == 0 {
+		t.Fatalf("expected finalization to rewrite owner/config dump, got changed=%d written=%d", changedFiles, writtenFiles)
+	}
+
+	if commands := ownerDoc.FindElements("//*[local-name()='Catalog']/*[local-name()='ChildObjects']/*[local-name()='Command']"); len(commands) != 0 {
+		t.Fatalf("expected stale command to be removed from ChildObjects, got %d", len(commands))
+	}
+	if hasMetadataName(configDumpDoc, "Catalog.Тест.Command.ТестКоманда") {
+		t.Fatalf("expected stale command metadata to be removed from ConfigDumpInfo")
+	}
+}
+
+func TestFilterRetainedOwnerCommandsKeepsLiveNativeFormReference(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	ownerDoc := etree.NewDocument()
+	if err := ownerDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog>
+    <Properties>
+      <Name>Тест</Name>
+    </Properties>
+    <ChildObjects>
+      <Command>
+        <Properties>
+          <Name>ТестКоманда</Name>
+        </Properties>
+      </Command>
+    </ChildObjects>
+  </Catalog>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read owner xml: %v", err)
+	}
+
+	formDoc := etree.NewDocument()
+	if err := formDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <ChildItems>
+    <Item>
+      <Command>Catalog.Тест.Command.ТестКоманда</Command>
+    </Item>
+  </ChildItems>
+</Form>`); err != nil {
+		t.Fatalf("read form xml: %v", err)
+	}
+
+	configDumpDoc := etree.NewDocument()
+	if err := configDumpDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo>
+  <Metadata name="Catalog.Тест" id="11111111-1111-1111-1111-111111111111">
+    <Metadata name="Catalog.Тест.Command.ТестКоманда" id="22222222-2222-2222-2222-222222222222"/>
+  </Metadata>
+</ConfigDumpInfo>`); err != nil {
+		t.Fatalf("read config dump xml: %v", err)
+	}
+
+	ownerPath := filepath.Join(root, "Catalogs", "Тест.xml")
+	if err := os.MkdirAll(filepath.Dir(ownerPath), 0o755); err != nil {
+		t.Fatalf("mkdir owner dir: %v", err)
+	}
+	if err := ownerDoc.WriteToFile(ownerPath); err != nil {
+		t.Fatalf("write owner xml: %v", err)
+	}
+
+	configDumpPath := filepath.Join(root, configDumpInfo)
+	if err := configDumpDoc.WriteToFile(configDumpPath); err != nil {
+		t.Fatalf("write config dump xml: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{
+		{
+			Doc:              ownerDoc,
+			Path:             ownerPath,
+			RelPath:          "Catalogs/Тест.xml",
+			FileName:         "Тест.xml",
+			Metadata:         true,
+			TopLevelMetadata: true,
+			OwnerKey:         "Catalog.Тест",
+			OwnerKind:        "Catalog",
+		},
+		{
+			Doc:       formDoc,
+			Path:      filepath.Join(root, "Catalogs", "Носитель", "Forms", "ФормаСписка", "Ext", "Form.xml"),
+			RelPath:   "Catalogs/Носитель/Forms/ФормаСписка/Ext/Form.xml",
+			FileName:  "Form.xml",
+			OwnerKey:  "Catalog.Носитель",
+			OwnerKind: "Catalog",
+		},
+		{
+			Doc:      configDumpDoc,
+			Path:     configDumpPath,
+			RelPath:  configDumpInfo,
+			FileName: configDumpInfo,
+		},
+	}
+	decisions := map[string]objectDecision{
+		"Catalog.Тест":     {Belonging: "AdoptedStub"},
+		"Catalog.Носитель": {Belonging: "Native"},
+	}
+
+	candidates := collectOwnerCommandCandidates(contexts, decisions)
+	retained := filterRetainedOwnerCommandsByLiveReferences(contexts, decisions, candidates, map[string]struct{}{})
+	if _, ok := retained["Catalog.Тест"]["ТестКоманда"]; !ok {
+		t.Fatalf("expected live native form reference to retain adopted owner command")
+	}
+
+	if _, _, err := finalizeRetainedOwnerCommands(contexts, decisions, nil, nil, retained); err != nil {
+		t.Fatalf("finalize retained commands: %v", err)
+	}
+
+	if commands := ownerDoc.FindElements("//*[local-name()='Catalog']/*[local-name()='ChildObjects']/*[local-name()='Command']"); len(commands) != 1 {
+		t.Fatalf("expected retained command to stay in ChildObjects, got %d", len(commands))
+	}
+	if !hasMetadataName(configDumpDoc, "Catalog.Тест.Command.ТестКоманда") {
+		t.Fatalf("expected retained command metadata to stay in ConfigDumpInfo")
+	}
+}
+
+func TestFilterRetainedOwnerCommandsSkipsExcludedAdoptedOwnerForm(t *testing.T) {
+	t.Parallel()
+
+	formDoc := etree.NewDocument()
+	if err := formDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <ChildItems>
+    <Item>
+      <Command>Catalog.Тест.Command.ТестКоманда</Command>
+    </Item>
+  </ChildItems>
+</Form>`); err != nil {
+		t.Fatalf("read form xml: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{
+		{
+			Doc:       formDoc,
+			Path:      filepath.Join(t.TempDir(), "Catalogs", "Тест", "Forms", "ФормаСписка", "Ext", "Form.xml"),
+			RelPath:   "Catalogs/Тест/Forms/ФормаСписка/Ext/Form.xml",
+			FileName:  "Form.xml",
+			OwnerKey:  "Catalog.Тест",
+			OwnerKind: "Catalog",
+		},
+	}
+	decisions := map[string]objectDecision{
+		"Catalog.Тест": {Belonging: "AdoptedStub"},
+	}
+
+	candidates := collectOwnerCommandCandidates(contexts, decisions)
+	if _, ok := candidates["Catalog.Тест"]["ТестКоманда"]; !ok {
+		t.Fatalf("expected command candidate from raw adopted owner form")
+	}
+
+	retained := filterRetainedOwnerCommandsByLiveReferences(contexts, decisions, candidates, map[string]struct{}{
+		contexts[0].Path: {},
+	})
+	if len(retained["Catalog.Тест"]) != 0 {
+		t.Fatalf("expected excluded adopted owner form not to keep command alive")
+	}
+}
+
+func TestFinalizeRetainedOwnerCommandsStripsNativePreserveMarker(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog>
+    <Properties>
+      <Name>НаправленияДеятельности</Name>
+      <ObjectBelonging>Adopted</ObjectBelonging>
+      <ExtendedConfigurationObject>base-id</ExtendedConfigurationObject>
+    </Properties>
+    <ChildObjects>
+      <Attribute codexPreserveNativeObjectBelonging="true">
+        <Properties>
+          <Name>упо_ЭлементПлана</Name>
+        </Properties>
+      </Attribute>
+    </ChildObjects>
+  </Catalog>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read xml: %v", err)
+	}
+
+	path := filepath.Join(root, "Catalogs", "НаправленияДеятельности.xml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir dir: %v", err)
+	}
+	if err := doc.WriteToFile(path); err != nil {
+		t.Fatalf("write xml: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{
+		{
+			Doc:              doc,
+			Path:             path,
+			RelPath:          "Catalogs/НаправленияДеятельности.xml",
+			FileName:         "НаправленияДеятельности.xml",
+			Metadata:         true,
+			TopLevelMetadata: true,
+			OwnerKey:         "Catalog.НаправленияДеятельности",
+			OwnerKind:        "Catalog",
+		},
+	}
+
+	rules := map[string]adoptedStubMetaDataRule{
+		"Catalog.НаправленияДеятельности": {
+			NativeAttributes: map[string]struct{}{
+				"упо_ЭлементПлана": {},
+			},
+		},
+	}
+	decisions := map[string]objectDecision{
+		"Catalog.НаправленияДеятельности": {Belonging: "AdoptedStub"},
+	}
+
+	if _, _, err := finalizeRetainedOwnerCommands(contexts, decisions, rules, nil, nil); err != nil {
+		t.Fatalf("finalize retained commands: %v", err)
+	}
+
+	attr := doc.FindElement("//*[local-name()='Attribute']")
+	if attr == nil {
+		t.Fatalf("expected retained attribute")
+	}
+	if got := attr.SelectAttrValue(preserveNativeObjectBelongingAttr, ""); got != "" {
+		t.Fatalf("expected preserve marker to be stripped, got %q", got)
+	}
+}
+
+func hasMetadataName(doc *etree.Document, name string) bool {
+	if doc == nil {
+		return false
+	}
+	for _, metadata := range doc.FindElements("//*[local-name()='Metadata']") {
+		if strings.TrimSpace(metadata.SelectAttrValue("name", "")) == name {
+			return true
+		}
+	}
+	return false
 }
 
 func textOrEmpty(el *etree.Element) string {
