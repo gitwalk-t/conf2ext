@@ -131,6 +131,12 @@ XML-конвейер должен классифицировать top-level о�
 - поддерживать alias стандартных атрибутов (`Ref`, `Recorder`, `Period`, `LineNumber`, `Active` и т.д.)
 - чистить invalid form bindings, если они ссылаются на отсутствующие metadata-path
 
+Отдельные уже зафиксированные требования:
+
+- для manual-query dynamic list без `MainTable` не оставлять невалидные standard row commands
+- удалять form-controls и declared fields, если они ссылаются на отсутствующий `CommonAttribute.X`, а owner metadata такого поля не содержит
+- удалять form-elements с висячими metadata-command ссылками
+
 ### 7. Поддержка type-bearing XML
 
 Нужно корректно обрабатывать:
@@ -139,11 +145,24 @@ XML-конвейер должен классифицировать top-level о�
 - `DefinedType`
 - `ChartsOfCharacteristicTypes/.../Ext/Predefined.xml`
 
+Обязательные требования:
+
+- cleanup metadata-ссылок должен работать независимо от namespace alias
+- current-config alias вроде `d4p1:` нельзя агрессивно переписывать в `cfg:`
+- qualifier-блоки (`StringQualifiers`, `NumberQualifiers`, `DateQualifiers`, `BinaryDataQualifiers`) должны быть согласованы между owner type-set и predefined item
+
 ### 8. Специальная обработка через макеты
 
 Сейчас в рабочем коде активна только дополнительная обработка:
 
 - `AdditionalProcessing.Use_MetaDataFile`
+
+Она должна:
+
+- читать общий макет `упо_MetaDataFile`
+- переводить перечисленные объекты в режим `AdoptedStubMetaData`
+- сохранять только разрешенный retained child-состав с префиксом `упо_`
+- не возвращать объект в состав, если он уже soft-excluded
 
 `AdditionalProcessing.Use_упо_SearchResult` в текущем репозитории остается зарезервированным флагом без рабочего поведения.
 
@@ -197,3 +216,123 @@ output/_state/identity-map.json
 
 - key — metadata-path;
 - `extension_id` — стабильный идентификатор объекта расширения.
+
+### Правила генерации
+
+При генерации Adopted-объекта:
+
+- если metadata-path уже существует в `identity-map.json`, нужно использовать сохраненный `extension_id`;
+- иначе нужно:
+  - сгенерировать новый идентификатор;
+  - сохранить его в `identity-map.json`.
+
+Повторная генерация расширения не должна менять `extension_id` уже известных Adopted-объектов.
+
+### Привязка к конфигурации-приемнику
+
+Система должна поддерживать отдельный пользовательский binding-файл:
+
+```text
+configs/base-bindings.json
+```
+
+Формат:
+
+```json
+{
+  "bindings": {
+    "Catalog.Пользователи": {
+      "base_object_id": "..."
+    }
+  }
+}
+```
+
+Где:
+
+- `base_object_id` — идентификатор объекта конфигурации-приемника;
+- binding применяется только к Adopted-объектам.
+
+### Источник binding identifiers
+
+Binding identifiers не извлекаются автоматически.
+
+Рабочий сценарий:
+
+1. пользователь вручную исправляет расширение;
+2. пользователь выгружает XML рабочего расширения;
+3. агент сравнивает:
+   - автоматически сгенерированный XML;
+   - вручную исправленный XML;
+4. найденные binding identifiers переносятся в `base-bindings.json`.
+
+### Важное разделение идентичностей
+
+Система должна различать:
+
+- `extension_id` — идентификатор объекта внутри расширения;
+- `base_object_id` — привязку к объекту конфигурации-приемника.
+
+Эти идентификаторы нельзя смешивать.
+
+### Обязательные ограничения
+
+Persisted identity mapping не должен:
+
+- менять поведение `Native`;
+- менять `RefDrivenInclusion`;
+- менять XML cleanup semantics;
+- менять классификацию объектов;
+- менять existing GUID semantics для Native metadata.
+
+## Нефункциональные требования
+
+### 1. Минимальный дифф
+
+При изменениях в коде нужно:
+
+- предпочитать локальные правки
+- не делать широкий рефакторинг, особенно в [`../internal/utils/xmlutil/change.go`](../internal/utils/xmlutil/change.go)
+- не менять бизнес-правила ради косметики
+
+### 2. Надежность расследований
+
+Инструмент должен быть пригоден для долгой итеративной отладки:
+
+- логи и диагностические артефакты живут в `output/_log`
+- временные XML и ИБ — в `output/_tmp`
+- при `keep_xml_dump=true` копия дампа сохраняется в `output/_log/xml_dumps/<v8_src*>`
+
+### 3. Совместимость
+
+Нельзя ломать:
+
+- старые алиасы полей конфига
+- уже зафиксированные XML-правила
+- текущий словарь терминов (`Native`, `AdoptedStub`, `excluded`, `forbidden`, `RefDrivenInclusion`)
+
+## Ограничения
+
+- проект не анализирует BSL как источник правил
+- CI в репозитории нет
+- автоматическая проверка в 1С не формализована, финальная валидация по-прежнему опирается на локальный прогон
+- основное узкое место и главный риск проекта — [`../internal/utils/xmlutil/change.go`](../internal/utils/xmlutil/change.go)
+
+## Источники истины
+
+Если требования расходятся, в первую очередь ориентироваться на:
+
+1. [`../configs/config.json`](../configs/config.json)
+2. [`../internal/utils/xmlutil/change.go`](../internal/utils/xmlutil/change.go)
+3. [`../.codex/decisions.md`](../.codex/decisions.md)
+4. [`./debugging.md`](./debugging.md)
+
+## Связанные документы
+
+- [`../README.md`](../README.md)
+- [`./architecture.md`](./architecture.md)
+- [`./conventions.md`](./conventions.md)
+- [`./debugging.md`](./debugging.md)
+- [`../.codex/context.md`](../.codex/context.md)
+- [`../.codex/decisions.md`](../.codex/decisions.md)
+- [`../.codex/tasks.md`](../.codex/tasks.md)
