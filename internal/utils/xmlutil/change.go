@@ -5500,59 +5500,57 @@ func cleanupFunctionalOptionsParameterUseNativeChildRefs(
 			continue
 		}
 
-		if !shouldRemoveFunctionalOptionsParameterUseRef(el.Text(), decisions, nativePrefixes) {
+		replacement, shouldReplace := replacementFunctionalOptionsParameterUseRef(el.Text(), decisions, nativePrefixes)
+		if !shouldReplace {
 			continue
 		}
-
-		use.RemoveChild(el)
+		if strings.TrimSpace(el.Text()) == replacement {
+			continue
+		}
+		el.SetText(replacement)
 		changed = true
 	}
 
-	if !changed {
-		return false
-	}
-
-	hasElements := false
-	for _, child := range use.Child {
-		if _, ok := child.(*etree.Element); ok {
-			hasElements = true
-			break
-		}
-	}
-	if !hasElements {
-		properties.RemoveChild(use)
-	}
-
-	return true
+	return changed
 }
 
-func shouldRemoveFunctionalOptionsParameterUseRef(
+func replacementFunctionalOptionsParameterUseRef(
 	ref string,
 	decisions map[string]objectDecision,
 	nativePrefixes []string,
-) bool {
+) (string, bool) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
-		return false
+		return "", false
 	}
 
 	parts := strings.Split(ref, ".")
 	if len(parts) < 4 {
-		return false
+		return "", false
 	}
 
 	topKey := metadataDecisionKey(ref)
 	if topKey == "" {
-		return false
+		return "", false
 	}
 
 	decision, exists := decisions[topKey]
 	if !exists || decision.Excluded || decision.Belonging != "Native" {
-		return false
+		return "", false
 	}
 
-	_, ownerName := splitObjectKey(topKey)
-	return hasNativePrefix(ownerName, nativePrefixes)
+	ownerKind, ownerName := splitObjectKey(topKey)
+	if !hasNativePrefix(ownerName, nativePrefixes) {
+		return "", false
+	}
+
+	replacementTopKey := ownerKind + ".Удалить_" + ownerName
+	replacementDecision, exists := decisions[replacementTopKey]
+	if !exists || replacementDecision.Excluded {
+		return "", false
+	}
+
+	return strings.Replace(ref, topKey, replacementTopKey, 1), true
 }
 
 func cleanupAdoptedObjectFormReferences(properties *etree.Element) bool {
@@ -6836,18 +6834,9 @@ func collectLiveOwnerCommandReferencesFromElement(el *etree.Element, skipChildOb
 		return
 	}
 
-	if isMetadataCommandReference(strings.TrimSpace(el.Text())) {
-		parts := strings.Split(strings.TrimSpace(el.Text()), ".")
-		if len(parts) >= 4 && strings.EqualFold(parts[2], "Command") {
-			ownerKey := strings.TrimSpace(parts[0] + "." + parts[1])
-			commandName := strings.TrimSpace(parts[3])
-			if ownerKey != "" && commandName != "" {
-				if result[ownerKey] == nil {
-					result[ownerKey] = make(map[string]struct{})
-				}
-				result[ownerKey][commandName] = struct{}{}
-			}
-		}
+	addLiveOwnerCommandReference(result, strings.TrimSpace(el.Text()))
+	for _, attr := range el.Attr {
+		addLiveOwnerCommandReference(result, strings.TrimSpace(attr.Value))
 	}
 
 	for _, child := range el.ChildElements() {
@@ -6856,6 +6845,28 @@ func collectLiveOwnerCommandReferencesFromElement(el *etree.Element, skipChildOb
 		}
 		collectLiveOwnerCommandReferencesFromElement(child, false, result)
 	}
+}
+
+func addLiveOwnerCommandReference(result map[string]map[string]struct{}, value string) {
+	if !isMetadataCommandReference(value) {
+		return
+	}
+
+	parts := strings.Split(value, ".")
+	if len(parts) < 4 || !strings.EqualFold(parts[2], "Command") {
+		return
+	}
+
+	ownerKey := strings.TrimSpace(parts[0] + "." + parts[1])
+	commandName := strings.TrimSpace(parts[3])
+	if ownerKey == "" || commandName == "" {
+		return
+	}
+
+	if result[ownerKey] == nil {
+		result[ownerKey] = make(map[string]struct{})
+	}
+	result[ownerKey][commandName] = struct{}{}
 }
 
 func syncCharacteristicPredefinedTypeQualifiers(typeEl *etree.Element, ownerTypeNodes []*etree.Element) bool {

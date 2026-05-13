@@ -2337,6 +2337,118 @@ func TestFilterRetainedOwnerCommandsKeepsLiveNativeFormReference(t *testing.T) {
 	}
 }
 
+func TestFilterRetainedOwnerCommandsKeepsLiveCommandInterfaceAttributeReference(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	ownerDoc := etree.NewDocument()
+	if err := ownerDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog>
+    <Properties>
+      <Name>Тест</Name>
+    </Properties>
+    <ChildObjects>
+      <Command>
+        <Properties>
+          <Name>ТестКоманда</Name>
+        </Properties>
+      </Command>
+    </ChildObjects>
+  </Catalog>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read owner xml: %v", err)
+	}
+
+	commandInterfaceDoc := etree.NewDocument()
+	if err := commandInterfaceDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<CommandInterface xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <CommandsVisibility>
+    <Command name="Catalog.Тест.Command.ТестКоманда"/>
+  </CommandsVisibility>
+</CommandInterface>`); err != nil {
+		t.Fatalf("read command interface xml: %v", err)
+	}
+
+	configDumpDoc := etree.NewDocument()
+	if err := configDumpDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo>
+  <Metadata name="Catalog.Тест" id="11111111-1111-1111-1111-111111111111">
+    <Metadata name="Catalog.Тест.Command.ТестКоманда" id="22222222-2222-2222-2222-222222222222"/>
+  </Metadata>
+</ConfigDumpInfo>`); err != nil {
+		t.Fatalf("read config dump xml: %v", err)
+	}
+
+	ownerPath := filepath.Join(root, "Catalogs", "Тест.xml")
+	if err := os.MkdirAll(filepath.Dir(ownerPath), 0o755); err != nil {
+		t.Fatalf("mkdir owner dir: %v", err)
+	}
+	if err := ownerDoc.WriteToFile(ownerPath); err != nil {
+		t.Fatalf("write owner xml: %v", err)
+	}
+
+	commandInterfacePath := filepath.Join(root, "Ext", "CommandInterface.xml")
+	if err := os.MkdirAll(filepath.Dir(commandInterfacePath), 0o755); err != nil {
+		t.Fatalf("mkdir command interface dir: %v", err)
+	}
+	if err := commandInterfaceDoc.WriteToFile(commandInterfacePath); err != nil {
+		t.Fatalf("write command interface xml: %v", err)
+	}
+
+	configDumpPath := filepath.Join(root, configDumpInfo)
+	if err := configDumpDoc.WriteToFile(configDumpPath); err != nil {
+		t.Fatalf("write config dump xml: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{
+		{
+			Doc:              ownerDoc,
+			Path:             ownerPath,
+			RelPath:          "Catalogs/Тест.xml",
+			FileName:         "Тест.xml",
+			Metadata:         true,
+			TopLevelMetadata: true,
+			OwnerKey:         "Catalog.Тест",
+			OwnerKind:        "Catalog",
+		},
+		{
+			Doc:      commandInterfaceDoc,
+			Path:     commandInterfacePath,
+			RelPath:  "Ext/CommandInterface.xml",
+			FileName: "CommandInterface.xml",
+		},
+		{
+			Doc:      configDumpDoc,
+			Path:     configDumpPath,
+			RelPath:  configDumpInfo,
+			FileName: configDumpInfo,
+		},
+	}
+	decisions := map[string]objectDecision{
+		"Catalog.Тест": {Belonging: "AdoptedStub"},
+	}
+
+	candidates := collectOwnerCommandCandidates(contexts, decisions)
+	liveRefs := buildLiveCommandReferenceIndex(contexts, decisions, map[string]struct{}{})
+	retained := filterRetainedOwnerCommandsByLiveReferences(candidates, liveRefs)
+	if _, ok := retained["Catalog.Тест"]["ТестКоманда"]; !ok {
+		t.Fatalf("expected live command interface attribute reference to retain adopted owner command")
+	}
+
+	if _, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, nil, nil, candidates, retained, liveRefs); err != nil {
+		t.Fatalf("finalize retained commands: %v", err)
+	}
+
+	if commands := ownerDoc.FindElements("//*[local-name()='Catalog']/*[local-name()='ChildObjects']/*[local-name()='Command']"); len(commands) != 1 {
+		t.Fatalf("expected retained command to stay in ChildObjects, got %d", len(commands))
+	}
+	if !hasMetadataName(configDumpDoc, "Catalog.Тест.Command.ТестКоманда") {
+		t.Fatalf("expected retained command metadata to stay in ConfigDumpInfo")
+	}
+}
+
 func TestFilterRetainedOwnerCommandsSkipsExcludedAdoptedOwnerForm(t *testing.T) {
 	t.Parallel()
 
@@ -2661,7 +2773,7 @@ func TestFinalizeRetainedOwnerCommandsStripsNativePreserveMarkerWithoutRetainedD
 	}
 }
 
-func TestCleanupFunctionalOptionsParameterUseNativeChildRefsRemovesNativePrefixedChildRef(t *testing.T) {
+func TestCleanupFunctionalOptionsParameterUseNativeChildRefsRewritesToDeletedTwin(t *testing.T) {
 	t.Parallel()
 
 	doc := etree.NewDocument()
@@ -2684,15 +2796,16 @@ func TestCleanupFunctionalOptionsParameterUseNativeChildRefsRemovesNativePrefixe
 	changed := cleanupFunctionalOptionsParameterUseNativeChildRefs(
 		properties,
 		map[string]objectDecision{
-			"InformationRegister.упо_ОтображатьКомандуОпцийПроектнойМоделиУровняОбъектПлана": {Belonging: "Native"},
+			"InformationRegister.упо_ОтображатьКомандуОпцийПроектнойМоделиУровняОбъектПлана":         {Belonging: "Native"},
+			"InformationRegister.Удалить_упо_ОтображатьКомандуОпцийПроектнойМоделиУровняОбъектПлана": {Belonging: "Native"},
 		},
 		[]string{"упо_"},
 	)
 	if !changed {
 		t.Fatalf("expected cleanup to report change")
 	}
-	if use := properties.FindElement("./Use"); use != nil {
-		t.Fatalf("expected Use element to be removed after dropping the last native child reference")
+	if got := textOrEmpty(properties.FindElement("./Use/*[1]")); got != "InformationRegister.Удалить_упо_ОтображатьКомандуОпцийПроектнойМоделиУровняОбъектПлана.Dimension.ТипОбъекта" {
+		t.Fatalf("unexpected rewritten Use reference: %q", got)
 	}
 }
 
@@ -2727,6 +2840,41 @@ func TestCleanupFunctionalOptionsParameterUseNativeChildRefsKeepsNonPrefixedRef(
 		t.Fatalf("expected non-prefixed native child reference to stay intact")
 	}
 	if got := textOrEmpty(properties.FindElement("./Use/*[1]")); got != "InformationRegister.НастройкиВерсионированияОбъектов.Dimension.ТипОбъекта" {
+		t.Fatalf("unexpected Use reference after cleanup: %q", got)
+	}
+}
+
+func TestCleanupFunctionalOptionsParameterUseNativeChildRefsKeepsRefWithoutDeletedTwin(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<FunctionalOptionsParameter xmlns="http://v8.1c.ru/8.3/MDClasses" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable">
+  <Properties>
+    <Use>
+      <xr:Item xsi:type="xr:MDObjectRef" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">InformationRegister.упо_ТестовыйРегистр.Dimension.Тест</xr:Item>
+    </Use>
+  </Properties>
+</FunctionalOptionsParameter>`); err != nil {
+		t.Fatalf("read xml: %v", err)
+	}
+
+	properties := doc.FindElement("//*[local-name()='Properties']")
+	if properties == nil {
+		t.Fatalf("expected properties")
+	}
+
+	changed := cleanupFunctionalOptionsParameterUseNativeChildRefs(
+		properties,
+		map[string]objectDecision{
+			"InformationRegister.упо_ТестовыйРегистр": {Belonging: "Native"},
+		},
+		[]string{"упо_"},
+	)
+	if changed {
+		t.Fatalf("expected Use reference without deleted twin to stay intact")
+	}
+	if got := textOrEmpty(properties.FindElement("./Use/*[1]")); got != "InformationRegister.упо_ТестовыйРегистр.Dimension.Тест" {
 		t.Fatalf("unexpected Use reference after cleanup: %q", got)
 	}
 }
