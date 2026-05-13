@@ -2206,17 +2206,18 @@ func TestFilterRetainedOwnerCommandsDropsCleanedFunctionalOptionReference(t *tes
 		objectRef.SetText("")
 	}
 
-	retained := filterRetainedOwnerCommandsByLiveReferences(contexts, decisions, candidates, map[string]struct{}{})
+	liveRefs := buildLiveCommandReferenceIndex(contexts, decisions, map[string]struct{}{})
+	retained := filterRetainedOwnerCommandsByLiveReferences(candidates, liveRefs)
 	if len(retained["Catalog.Тест"]) != 0 {
 		t.Fatalf("expected no live retained commands after cleanup, got %d", len(retained["Catalog.Тест"]))
 	}
 
-	changedFiles, writtenFiles, err := finalizeRetainedOwnerCommands(contexts, decisions, nil, nil, retained)
+	stats, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, nil, nil, candidates, retained, liveRefs)
 	if err != nil {
 		t.Fatalf("finalize retained commands: %v", err)
 	}
-	if changedFiles == 0 || writtenFiles == 0 {
-		t.Fatalf("expected finalization to rewrite owner/config dump, got changed=%d written=%d", changedFiles, writtenFiles)
+	if stats.ChangedFiles == 0 || stats.WrittenFiles == 0 {
+		t.Fatalf("expected finalization to rewrite owner/config dump, got changed=%d written=%d", stats.ChangedFiles, stats.WrittenFiles)
 	}
 
 	if commands := ownerDoc.FindElements("//*[local-name()='Catalog']/*[local-name()='ChildObjects']/*[local-name()='Command']"); len(commands) != 0 {
@@ -2318,12 +2319,13 @@ func TestFilterRetainedOwnerCommandsKeepsLiveNativeFormReference(t *testing.T) {
 	}
 
 	candidates := collectOwnerCommandCandidates(contexts, decisions)
-	retained := filterRetainedOwnerCommandsByLiveReferences(contexts, decisions, candidates, map[string]struct{}{})
+	liveRefs := buildLiveCommandReferenceIndex(contexts, decisions, map[string]struct{}{})
+	retained := filterRetainedOwnerCommandsByLiveReferences(candidates, liveRefs)
 	if _, ok := retained["Catalog.Тест"]["ТестКоманда"]; !ok {
 		t.Fatalf("expected live native form reference to retain adopted owner command")
 	}
 
-	if _, _, err := finalizeRetainedOwnerCommands(contexts, decisions, nil, nil, retained); err != nil {
+	if _, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, nil, nil, candidates, retained, liveRefs); err != nil {
 		t.Fatalf("finalize retained commands: %v", err)
 	}
 
@@ -2369,9 +2371,10 @@ func TestFilterRetainedOwnerCommandsSkipsExcludedAdoptedOwnerForm(t *testing.T) 
 		t.Fatalf("expected command candidate from raw adopted owner form")
 	}
 
-	retained := filterRetainedOwnerCommandsByLiveReferences(contexts, decisions, candidates, map[string]struct{}{
+	liveRefs := buildLiveCommandReferenceIndex(contexts, decisions, map[string]struct{}{
 		contexts[0].Path: {},
 	})
+	retained := filterRetainedOwnerCommandsByLiveReferences(candidates, liveRefs)
 	if len(retained["Catalog.Тест"]) != 0 {
 		t.Fatalf("expected excluded adopted owner form not to keep command alive")
 	}
@@ -2391,6 +2394,11 @@ func TestFinalizeRetainedOwnerCommandsStripsNativePreserveMarker(t *testing.T) {
       <ExtendedConfigurationObject>base-id</ExtendedConfigurationObject>
     </Properties>
     <ChildObjects>
+      <Command>
+        <Properties>
+          <Name>ТестКоманда</Name>
+        </Properties>
+      </Command>
       <Attribute codexPreserveNativeObjectBelonging="true">
         <Properties>
           <Name>упо_ЭлементПлана</Name>
@@ -2434,7 +2442,13 @@ func TestFinalizeRetainedOwnerCommandsStripsNativePreserveMarker(t *testing.T) {
 		"Catalog.НаправленияДеятельности": {Belonging: "AdoptedStub"},
 	}
 
-	if _, _, err := finalizeRetainedOwnerCommands(contexts, decisions, rules, nil, nil); err != nil {
+	candidates := map[string]map[string]struct{}{
+		"Catalog.НаправленияДеятельности": {
+			"ТестКоманда": {},
+		},
+	}
+
+	if _, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, rules, nil, candidates, nil, buildLiveCommandReferenceIndex(contexts, decisions, map[string]struct{}{})); err != nil {
 		t.Fatalf("finalize retained commands: %v", err)
 	}
 
@@ -2444,6 +2458,76 @@ func TestFinalizeRetainedOwnerCommandsStripsNativePreserveMarker(t *testing.T) {
 	}
 	if got := attr.SelectAttrValue(preserveNativeObjectBelongingAttr, ""); got != "" {
 		t.Fatalf("expected preserve marker to be stripped, got %q", got)
+	}
+}
+
+func TestCleanupFunctionalOptionsParameterUseNativeChildRefsRemovesNativePrefixedChildRef(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<FunctionalOptionsParameter xmlns="http://v8.1c.ru/8.3/MDClasses" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable">
+  <Properties>
+    <Use>
+      <xr:Item xsi:type="xr:MDObjectRef" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">InformationRegister.упо_ОтображатьКомандуОпцийПроектнойМоделиУровняОбъектПлана.Dimension.ТипОбъекта</xr:Item>
+    </Use>
+  </Properties>
+</FunctionalOptionsParameter>`); err != nil {
+		t.Fatalf("read xml: %v", err)
+	}
+
+	properties := doc.FindElement("//*[local-name()='Properties']")
+	if properties == nil {
+		t.Fatalf("expected properties")
+	}
+
+	changed := cleanupFunctionalOptionsParameterUseNativeChildRefs(
+		properties,
+		map[string]objectDecision{
+			"InformationRegister.упо_ОтображатьКомандуОпцийПроектнойМоделиУровняОбъектПлана": {Belonging: "Native"},
+		},
+		[]string{"упо_"},
+	)
+	if !changed {
+		t.Fatalf("expected cleanup to report change")
+	}
+	if use := properties.FindElement("./Use"); use != nil {
+		t.Fatalf("expected Use element to be removed after dropping the last native child reference")
+	}
+}
+
+func TestCleanupFunctionalOptionsParameterUseNativeChildRefsKeepsNonPrefixedRef(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<FunctionalOptionsParameter xmlns="http://v8.1c.ru/8.3/MDClasses" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable">
+  <Properties>
+    <Use>
+      <xr:Item xsi:type="xr:MDObjectRef" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">InformationRegister.НастройкиВерсионированияОбъектов.Dimension.ТипОбъекта</xr:Item>
+    </Use>
+  </Properties>
+</FunctionalOptionsParameter>`); err != nil {
+		t.Fatalf("read xml: %v", err)
+	}
+
+	properties := doc.FindElement("//*[local-name()='Properties']")
+	if properties == nil {
+		t.Fatalf("expected properties")
+	}
+
+	changed := cleanupFunctionalOptionsParameterUseNativeChildRefs(
+		properties,
+		map[string]objectDecision{
+			"InformationRegister.НастройкиВерсионированияОбъектов": {Belonging: "Native"},
+		},
+		[]string{"упо_"},
+	)
+	if changed {
+		t.Fatalf("expected non-prefixed native child reference to stay intact")
+	}
+	if got := textOrEmpty(properties.FindElement("./Use/*[1]")); got != "InformationRegister.НастройкиВерсионированияОбъектов.Dimension.ТипОбъекта" {
+		t.Fatalf("unexpected Use reference after cleanup: %q", got)
 	}
 }
 
