@@ -4,8 +4,8 @@ import (
 	"log"
 	"os"
 
-	pkgconfig "github.com/firstBitSportivnaya/files-converter/pkg/config"
-	xmlutils "github.com/firstBitSportivnaya/files-converter/internal/utils/xmlutil"
+	pkgconfig "github.com/gitwalk-m/conf2ext/pkg/config"
+	xmlutils "github.com/gitwalk-m/conf2ext/internal/utils/xmlutil"
 )
 
 func main() {

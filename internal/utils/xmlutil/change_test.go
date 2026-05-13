@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/beevik/etree"
-	"github.com/firstBitSportivnaya/files-converter/internal/config"
+	"github.com/gitwalk-m/conf2ext/internal/config"
 )
 
 func TestCollectGUIDReplacementsFromConfigDumpReusesPersistedAdoptedIDs(t *testing.T) {

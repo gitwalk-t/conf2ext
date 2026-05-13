@@ -1,6 +1,6 @@
 package config
 
-import internalconfig "github.com/firstBitSportivnaya/files-converter/internal/config"
+import internalconfig "github.com/gitwalk-m/conf2ext/internal/config"
 
 type Configuration = internalconfig.Configuration
 

@@ -3,7 +3,7 @@ package converter
 import (
 	"fmt"
 
-	"github.com/firstBitSportivnaya/files-converter/internal/config"
+	"github.com/gitwalk-m/conf2ext/internal/config"
 )
 
 func RunConversion(cfg *config.Configuration) error {

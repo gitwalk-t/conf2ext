@@ -6,9 +6,9 @@ import (
 	"log"
 	"os"
 
-	"github.com/firstBitSportivnaya/files-converter/internal/config"
-	publicconfig "github.com/firstBitSportivnaya/files-converter/pkg/config"
-	publicconverter "github.com/firstBitSportivnaya/files-converter/pkg/converter"
+	"github.com/gitwalk-m/conf2ext/internal/config"
+	publicconfig "github.com/gitwalk-m/conf2ext/pkg/config"
+	publicconverter "github.com/gitwalk-m/conf2ext/pkg/converter"
 	"github.com/spf13/cobra"
 )
 

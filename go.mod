@@ -1,4 +1,4 @@
-module github.com/firstBitSportivnaya/files-converter
+module github.com/gitwalk-m/conf2ext
 
 go 1.23.0
 

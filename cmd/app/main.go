@@ -7,8 +7,8 @@ import (
 	"os"
 	"time"
 
-	publicconfig "github.com/firstBitSportivnaya/files-converter/pkg/config"
-	publicconverter "github.com/firstBitSportivnaya/files-converter/pkg/converter"
+	publicconfig "github.com/gitwalk-m/conf2ext/pkg/config"
+	publicconverter "github.com/gitwalk-m/conf2ext/pkg/converter"
 )
 
 var loadConfig = publicconfig.Load

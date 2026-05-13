@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/firstBitSportivnaya/files-converter/internal/config"
-	"github.com/firstBitSportivnaya/files-converter/internal/export_format"
-	"github.com/firstBitSportivnaya/files-converter/internal/utils/fileutil"
-	xmlutil "github.com/firstBitSportivnaya/files-converter/internal/utils/xmlutil"
+	"github.com/gitwalk-m/conf2ext/internal/config"
+	"github.com/gitwalk-m/conf2ext/internal/export_format"
+	"github.com/gitwalk-m/conf2ext/internal/utils/fileutil"
+	xmlutil "github.com/gitwalk-m/conf2ext/internal/utils/xmlutil"
 
 	v8 "github.com/v8platform/api"
 	"github.com/v8platform/runner"

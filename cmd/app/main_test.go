@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	publicconfig "github.com/firstBitSportivnaya/files-converter/pkg/config"
+	publicconfig "github.com/gitwalk-m/conf2ext/pkg/config"
 )
 
 func TestRunCheckConfigSkipsConversion(t *testing.T) {
