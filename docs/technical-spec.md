@@ -28,7 +28,7 @@
 Основной запуск:
 
 ```powershell
-go run . --config .\configs\config.json
+go run . --config .\\configs\\config.json
 ```
 
 Базовые проверки перед завершением любой правки:
@@ -163,6 +163,116 @@ XML-конвейер должен классифицировать top-level о�
 - не возвращать объект в состав, если он уже soft-excluded
 
 `AdditionalProcessing.Use_упо_SearchResult` в текущем репозитории остается зарезервированным флагом без рабочего поведения.
+
+## 9. Persisted identity mapping для Adopted-объектов
+
+Для обновляемых расширений система должна сохранять идентификаторы только Adopted-объектов между повторными генерациями.
+
+### Область применения
+
+Persisted identity mapping применяется только к:
+
+- `AdoptedStub`
+- `AdoptedStubExt(Form)`
+- `AdoptedStubExt(DefinedType)`
+- `AdoptedStubExt(EventSubscription)`
+- `AdoptedStubMetaData`
+
+`Native`-объекты не участвуют в identity mapping и всегда сохраняют исходные идентификаторы конфигурации.
+
+### Persisted state
+
+Система должна поддерживать persisted state-файл:
+
+```text
+output/_state/identity-map.json
+```
+
+Формат:
+
+```json
+{
+  "version": 1,
+  "objects": {
+    "Catalog.Пользователи": {
+      "extension_id": "..."
+    }
+  }
+}
+```
+
+Где:
+
+- key — metadata-path;
+- `extension_id` — стабильный идентификатор объекта расширения.
+
+### Правила генерации
+
+При генерации Adopted-объекта:
+
+- если metadata-path уже существует в `identity-map.json`, нужно использовать сохраненный `extension_id`;
+- иначе нужно:
+  - сгенерировать новый идентификатор;
+  - сохранить его в `identity-map.json`.
+
+Повторная генерация расширения не должна менять `extension_id` уже известных Adopted-объектов.
+
+### Привязка к конфигурации-приемнику
+
+Система должна поддерживать отдельный пользовательский binding-файл:
+
+```text
+configs/base-bindings.json
+```
+
+Формат:
+
+```json
+{
+  "bindings": {
+    "Catalog.Пользователи": {
+      "base_object_id": "..."
+    }
+  }
+}
+```
+
+Где:
+
+- `base_object_id` — идентификатор объекта конфигурации-приемника;
+- binding применяется только к Adopted-объектам.
+
+### Источник binding identifiers
+
+Binding identifiers не извлекаются автоматически.
+
+Рабочий сценарий:
+
+1. пользователь вручную исправляет расширение;
+2. пользователь выгружает XML рабочего расширения;
+3. агент сравнивает:
+   - автоматически сгенерированный XML;
+   - вручную исправленный XML;
+4. найденные binding identifiers переносятся в `base-bindings.json`.
+
+### Важное разделение идентичностей
+
+Система должна различать:
+
+- `extension_id` — идентификатор объекта внутри расширения;
+- `base_object_id` — привязку к объекту конфигурации-приемника.
+
+Эти идентификаторы нельзя смешивать.
+
+### Обязательные ограничения
+
+Persisted identity mapping не должен:
+
+- менять поведение `Native`;
+- менять `RefDrivenInclusion`;
+- менять XML cleanup semantics;
+- менять классификацию объектов;
+- менять existing GUID semantics для Native metadata.
 
 ## Нефункциональные требования
 
