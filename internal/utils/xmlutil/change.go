@@ -515,10 +515,17 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 			changed = cleanupMissingFormConstantsSetReferencesIndexed(ctx.Doc, contexts, indexes, decisions) || changed
 			changed = cleanupMissingFormCommonAttributeDynamicListFieldsIndexed(ctx.Doc, contexts, indexes, decisions) || changed
 			changed = cleanupMissingFormCommandReferences(ctx.Doc, contexts) || changed
+			if decision.Belonging != "Native" {
+				changed = cleanupNonNativeManualQueryOrphanReferences(ctx.Doc) || changed
+				ownerCtx := findTopLevelMetadataContextByOwnerKeyIndexed(indexes, contexts, ctx.OwnerKey)
+				changed = cleanupMissingFormOwnerObjectReferences(ctx.Doc, ownerCtx) || changed
+				changed = cleanupNonNativeFormLifecycleEvents(ctx.Doc) || changed
+				changed = cleanupNonNativeFormStandardCommands(ctx.Doc) || changed
+			}
 		}
 
 		if ctx.OwnerKind == "FunctionalOptionsParameter" && ctx.Properties != nil {
-			changed = cleanupFunctionalOptionsParameterUseNativeChildRefs(ctx.Properties, decisions, cfg.NativePrefixes) || changed
+			changed = cleanupFunctionalOptionsParameterUseNativeChildRefs(ctx.Properties, decisions) || changed
 		}
 
 		if ctx.OwnerKey == "Language.Русский" {
@@ -588,6 +595,13 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 	}
 	log.Printf("xml progress: apply object changes %d/%d file=done", len(contexts), len(contexts))
 	logXMLStepCompleted("apply object changes", applyObjectChangesStartedAt, fmt.Sprintf("changed_files=%d written_files=%d", changedFilesCount, writtenFilesCount))
+
+	postFormCleanupChanged, postFormCleanupWritten, err := cleanupFinalNonNativeFormNoise(contexts, indexes, decisions)
+	if err != nil {
+		return err
+	}
+	changedFilesCount += postFormCleanupChanged
+	writtenFilesCount += postFormCleanupWritten
 
 	log.Printf("xml step: filter retained owner commands")
 	filterRetainedOwnerCommandsStartedAt := time.Now()
@@ -2493,14 +2507,28 @@ func collectDynamicListDeclaredFields(attr *etree.Element) map[string]struct{} {
 	if attr == nil {
 		return result
 	}
+	attrName := strings.TrimSpace(attr.SelectAttrValue("name", ""))
 
 	for _, field := range attr.FindElements(".//Field") {
+		if len(field.ChildElements()) == 0 {
+			name := strings.TrimSpace(field.Text())
+			if normalized, ok := extractDynamicListFieldName(name, attrName); ok {
+				name = normalized
+			}
+			if name != "" {
+				result[name] = struct{}{}
+			}
+			continue
+		}
 		for _, child := range field.ChildElements() {
 			tag := localName(child.Tag)
 			if !strings.EqualFold(tag, "dataPath") && !strings.EqualFold(tag, "field") {
 				continue
 			}
 			name := strings.TrimSpace(child.Text())
+			if normalized, ok := extractDynamicListFieldName(name, attrName); ok {
+				name = normalized
+			}
 			if name == "" {
 				continue
 			}
@@ -3313,7 +3341,7 @@ func buildSearchResultModuleContent(modulePath string, groups []string, markerGr
 		exactMismatchMessage = formatSearchResultMarkerMismatch(modulePath, groups, markerGroups, lines, true)
 	}
 
-	if len(selectedBlocks) == 0 && len(selectedMethods) == 0 && !exactTemplates {
+	if len(selectedBlocks) == 0 && len(selectedMethods) == 0 {
 		if exactMismatchMessage != "" {
 			writeSearchResultDiagnostics(diagnosticsPath, exactMismatchMessage)
 		}
@@ -3334,10 +3362,7 @@ func buildSearchResultModuleContent(modulePath string, groups []string, markerGr
 			mismatchMessage = formatSearchResultMarkerMismatch(modulePath, groups, markerGroups, lines, exactTemplates)
 		}
 		writeSearchResultDiagnostics(diagnosticsPath, mismatchMessage)
-		if len(collectSearchResultFoundGroups(lines, markerGroups)) == 0 {
-			return "", fmt.Errorf("%s", mismatchMessage)
-		}
-		return "", fmt.Errorf("%s", mismatchMessage)
+		return "", nil
 	}
 
 	rendered := make([]string, 0, len(selectedBlocks)+len(selectedMethods)*6)
@@ -4458,6 +4483,15 @@ func cleanupMissingFormConstantsSetReferencesIndexed(doc *etree.Document, contex
 	}
 
 	changed := false
+	for _, field := range append([]*etree.Element(nil), root.FindElements(".//Field")...) {
+		if !shouldRemoveMissingFormConstantsSetField(field, contexts, indexes, decisions) {
+			continue
+		}
+		if parent := field.Parent(); parent != nil {
+			parent.RemoveChild(field)
+			changed = true
+		}
+	}
 
 	var walk func(parent, grandparent *etree.Element)
 	walk = func(parent, grandparent *etree.Element) {
@@ -4481,22 +4515,35 @@ func cleanupMissingFormConstantsSetReferencesIndexed(doc *etree.Document, contex
 	return changed
 }
 
+func shouldRemoveMissingFormConstantsSetField(el *etree.Element, contexts []*FileProcessingContext, indexes *contextIndexes, decisions map[string]objectDecision) bool {
+	if el == nil || !strings.EqualFold(localName(el.Tag), "Field") {
+		return false
+	}
+	constantName := missingFormConstantSetReferenceName(strings.TrimSpace(el.Text()))
+	if constantName == "" {
+		return false
+	}
+	return !topLevelMetadataIncludedIndexed("Constant."+constantName, contexts, indexes, decisions)
+}
+
 func shouldRemoveMissingFormConstantsSetReference(el *etree.Element, contexts []*FileProcessingContext, indexes *contextIndexes, decisions map[string]objectDecision) bool {
 	if el == nil || !strings.EqualFold(localName(el.Tag), "DataPath") {
 		return false
 	}
 
-	text := strings.TrimSpace(el.Text())
-	if !strings.HasPrefix(text, "НаборКонстант.") {
-		return false
-	}
-
-	constantName := strings.TrimPrefix(text, "НаборКонстант.")
+	constantName := missingFormConstantSetReferenceName(strings.TrimSpace(el.Text()))
 	if constantName == "" {
 		return false
 	}
 
 	return !topLevelMetadataIncludedIndexed("Constant."+constantName, contexts, indexes, decisions)
+}
+
+func missingFormConstantSetReferenceName(text string) string {
+	if !strings.HasPrefix(text, "НаборКонстант.") {
+		return ""
+	}
+	return strings.TrimPrefix(text, "НаборКонстант.")
 }
 
 func cleanupMissingFormCommonAttributeDynamicListFields(doc *etree.Document, contexts []*FileProcessingContext, decisions map[string]objectDecision) bool {
@@ -4552,6 +4599,64 @@ func cleanupMissingFormCommonAttributeDynamicListFieldsIndexed(doc *etree.Docume
 
 	walk(root, nil)
 	return changed
+}
+
+func cleanupMissingFormOwnerObjectReferences(doc *etree.Document, ownerCtx *FileProcessingContext) bool {
+	if doc == nil || ownerCtx == nil {
+		return false
+	}
+
+	available := collectAvailableDynamicListFields(ownerCtx)
+	if len(available) == 0 {
+		return false
+	}
+
+	root := doc.Root()
+	if root == nil {
+		return false
+	}
+
+	changed := false
+	var walk func(parent, grandparent *etree.Element)
+	walk = func(parent, grandparent *etree.Element) {
+		children := parent.ChildElements()
+		for i := len(children) - 1; i >= 0; i-- {
+			child := children[i]
+			if shouldRemoveMissingFormOwnerObjectReference(child, ownerCtx, available) {
+				if grandparent != nil {
+					grandparent.RemoveChild(parent)
+				} else {
+					parent.RemoveChild(child)
+				}
+				changed = true
+				continue
+			}
+			walk(child, parent)
+		}
+	}
+
+	walk(root, nil)
+	return changed
+}
+
+func shouldRemoveMissingFormOwnerObjectReference(el *etree.Element, ownerCtx *FileProcessingContext, available map[string]struct{}) bool {
+	if el == nil || !strings.EqualFold(localName(el.Tag), "DataPath") {
+		return false
+	}
+
+	text := strings.TrimSpace(el.Text())
+	if !strings.HasPrefix(text, "Объект.") {
+		return false
+	}
+
+	field := strings.TrimPrefix(text, "Объект.")
+	if field == "" {
+		return false
+	}
+	if _, ok := available[field]; ok {
+		return false
+	}
+	return !isKnownDynamicListVirtualField(ownerCtx.OwnerKind, field)
 }
 
 func collectMissingFormCommonAttributeDynamicListFields(root *etree.Element, contexts []*FileProcessingContext, indexes *contextIndexes, decisions map[string]objectDecision) map[string]map[string]struct{} {
@@ -4740,6 +4845,184 @@ func cleanupNonNativeDynamicListMainTables(doc *etree.Document, decisions map[st
 	return changed
 }
 
+func cleanupNonNativeManualQueryOrphanReferences(doc *etree.Document) bool {
+	if doc == nil {
+		return false
+	}
+
+	root := doc.Root()
+	if root == nil {
+		return false
+	}
+
+	attrsWithoutMainTable := make(map[string]map[string]struct{})
+	for _, attr := range root.FindElements(".//Attribute") {
+		if !isDynamicListAttribute(attr) || !isDynamicListManualQuery(attr) {
+			continue
+		}
+
+		attrName := strings.TrimSpace(attr.SelectAttrValue("name", ""))
+		if attrName == "" {
+			continue
+		}
+		if strings.TrimSpace(textOfFirst(attr, ".//Settings/MainTable")) != "" {
+			continue
+		}
+
+		attrsWithoutMainTable[attrName] = collectDynamicListSchemaDeclaredFields(attr)
+	}
+
+	if len(attrsWithoutMainTable) == 0 {
+		return false
+	}
+
+	changed := false
+	for _, field := range append([]*etree.Element(nil), root.FindElements(".//Field")...) {
+		if !shouldRemoveNonNativeManualQueryOrphanField(field, attrsWithoutMainTable) {
+			continue
+		}
+		if parent := field.Parent(); parent != nil {
+			parent.RemoveChild(field)
+			changed = true
+		}
+	}
+
+	for _, rowPicture := range append([]*etree.Element(nil), root.FindElements(".//RowPictureDataPath")...) {
+		if !shouldRemoveNonNativeManualQueryOrphanPath(rowPicture, attrsWithoutMainTable) {
+			continue
+		}
+		if parent := rowPicture.Parent(); parent != nil {
+			parent.RemoveChild(rowPicture)
+			changed = true
+		}
+	}
+
+	for _, titleDataPath := range append([]*etree.Element(nil), root.FindElements(".//TitleDataPath")...) {
+		if !shouldRemoveNonNativeManualQueryOrphanPath(titleDataPath, attrsWithoutMainTable) {
+			continue
+		}
+		if parent := titleDataPath.Parent(); parent != nil {
+			parent.RemoveChild(titleDataPath)
+			changed = true
+		}
+	}
+
+	var walk func(parent, grandparent *etree.Element)
+	walk = func(parent, grandparent *etree.Element) {
+		children := parent.ChildElements()
+		for i := len(children) - 1; i >= 0; i-- {
+			child := children[i]
+			if shouldRemoveNonNativeManualQueryOrphanPath(child, attrsWithoutMainTable) {
+				if grandparent != nil {
+					grandparent.RemoveChild(parent)
+				} else {
+					parent.RemoveChild(child)
+				}
+				changed = true
+				continue
+			}
+			walk(child, parent)
+		}
+	}
+
+	walk(root, nil)
+	return changed
+}
+
+func collectDynamicListSchemaDeclaredFields(attr *etree.Element) map[string]struct{} {
+	result := make(map[string]struct{})
+	if attr == nil {
+		return result
+	}
+
+	attrName := strings.TrimSpace(attr.SelectAttrValue("name", ""))
+	for _, field := range attr.FindElements(".//Settings//Field") {
+		if len(field.ChildElements()) == 0 {
+			name := strings.TrimSpace(field.Text())
+			if normalized, ok := extractDynamicListFieldName(name, attrName); ok {
+				name = normalized
+			}
+			if name != "" {
+				result[name] = struct{}{}
+			}
+			continue
+		}
+		for _, child := range field.ChildElements() {
+			tag := localName(child.Tag)
+			if !strings.EqualFold(tag, "dataPath") && !strings.EqualFold(tag, "field") {
+				continue
+			}
+			name := strings.TrimSpace(child.Text())
+			if normalized, ok := extractDynamicListFieldName(name, attrName); ok {
+				name = normalized
+			}
+			if name != "" {
+				result[name] = struct{}{}
+			}
+		}
+	}
+
+	for field := range collectDynamicListCalculatedFields(attr) {
+		result[field] = struct{}{}
+	}
+
+	return result
+}
+
+func shouldRemoveNonNativeManualQueryOrphanField(el *etree.Element, attrsWithoutMainTable map[string]map[string]struct{}) bool {
+	if el == nil || !strings.EqualFold(localName(el.Tag), "Field") {
+		return false
+	}
+
+	attrName, field, ok := extractNonNativeManualQueryAttrFieldReference(strings.TrimSpace(el.Text()), attrsWithoutMainTable)
+	if !ok {
+		return false
+	}
+	_, allowed := attrsWithoutMainTable[attrName][field]
+	return !allowed
+}
+
+func shouldRemoveNonNativeManualQueryOrphanPath(el *etree.Element, attrsWithoutMainTable map[string]map[string]struct{}) bool {
+	if el == nil {
+		return false
+	}
+
+	tag := localName(el.Tag)
+	if !strings.EqualFold(tag, "DataPath") && !strings.EqualFold(tag, "TitleDataPath") && !strings.EqualFold(tag, "RowPictureDataPath") {
+		return false
+	}
+
+	attrName, field, ok := extractNonNativeManualQueryAttrFieldReference(strings.TrimSpace(el.Text()), attrsWithoutMainTable)
+	if !ok {
+		return false
+	}
+	_, allowed := attrsWithoutMainTable[attrName][field]
+	return !allowed
+}
+
+func extractNonNativeManualQueryAttrFieldReference(value string, attrsWithoutMainTable map[string]map[string]struct{}) (string, string, bool) {
+	value = strings.TrimSpace(strings.TrimPrefix(value, "~"))
+	if value == "" {
+		return "", "", false
+	}
+
+	for attrName := range attrsWithoutMainTable {
+		if field, ok := extractDynamicListFieldName(value, attrName); ok {
+			return attrName, field, true
+		}
+
+		currentDataPrefix := "Items." + attrName + ".CurrentData."
+		if strings.HasPrefix(value, currentDataPrefix) {
+			field := strings.TrimSpace(strings.TrimPrefix(value, currentDataPrefix))
+			if field != "" {
+				return attrName, field, true
+			}
+		}
+	}
+
+	return "", "", false
+}
+
 func normalizeManualQueryWithoutMainTable(doc *etree.Document) bool {
 	if doc == nil {
 		return false
@@ -4767,6 +5050,9 @@ func normalizeManualQueryWithoutMainTable(doc *etree.Document) bool {
 		}
 
 		declaredFields := collectDynamicListDeclaredFields(attr)
+		for field := range collectDynamicListAttributeFields(root, attrName) {
+			declaredFields[field] = struct{}{}
+		}
 		if queryEl := attr.FindElement(".//Settings/QueryText"); queryEl != nil {
 			if normalized, ok := normalizeManualQuerySelectAliases(queryEl.Text(), declaredFields); ok {
 				queryEl.SetText(normalized)
@@ -4797,6 +5083,16 @@ func normalizeManualQueryWithoutMainTable(doc *etree.Document) bool {
 					parent.RemoveChild(excluded)
 					changed = true
 				}
+			}
+		}
+
+		for _, rowPicture := range append([]*etree.Element(nil), table.FindElements("./RowPictureDataPath")...) {
+			if strings.TrimSpace(rowPicture.Text()) != dataPath+".DefaultPicture" {
+				continue
+			}
+			if parent := rowPicture.Parent(); parent != nil {
+				parent.RemoveChild(rowPicture)
+				changed = true
 			}
 		}
 
@@ -4871,17 +5167,29 @@ func normalizeManualQuerySelectAliases(queryText string, declaredFields map[stri
 		}
 
 		alias := expr[lastDot+1:]
-		if _, ok := declaredFields[alias]; !ok {
-			continue
+		targetAlias := alias
+		if _, ok := declaredFields[targetAlias]; !ok {
+			aliases := dynamicListStandardMetadataNameAliases(alias)
+			matched := false
+			for _, candidate := range aliases {
+				if _, ok := declaredFields[candidate]; ok {
+					targetAlias = candidate
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
 		}
 
-		if nestedFields := collectDirectNestedDeclaredFields(alias, declaredFields); len(nestedFields) > 0 {
-			lines[i] = buildNestedManualQuerySelect(match[1], expr, alias, nestedFields, match[3])
+		if nestedFields := collectDirectNestedDeclaredFields(targetAlias, declaredFields); len(nestedFields) > 0 {
+			lines[i] = buildNestedManualQuerySelect(match[1], expr, targetAlias, nestedFields, match[3])
 			changed = true
 			continue
 		}
 
-		lines[i] = match[1] + expr + " КАК " + alias + match[3]
+		lines[i] = match[1] + expr + " КАК " + targetAlias + match[3]
 		changed = true
 	}
 
@@ -4890,6 +5198,41 @@ func normalizeManualQuerySelectAliases(queryText string, declaredFields map[stri
 	}
 
 	return strings.Join(lines, "\n") + rest, true
+}
+
+func dynamicListStandardMetadataNameAliases(field string) []string {
+	switch field {
+	case "Ссылка":
+		return []string{"Ref"}
+	case "Наименование":
+		return []string{"Description"}
+	case "Код":
+		return []string{"Code"}
+	case "Номер":
+		return []string{"Number"}
+	case "Дата":
+		return []string{"Date"}
+	case "ПометкаУдаления":
+		return []string{"DeletionMark"}
+	case "ЭтоГруппа":
+		return []string{"IsFolder"}
+	case "Владелец":
+		return []string{"Owner"}
+	case "Родитель":
+		return []string{"Parent"}
+	case "Проведен":
+		return []string{"Posted"}
+	case "Регистратор":
+		return []string{"Recorder"}
+	case "Период":
+		return []string{"Period"}
+	case "НомерСтроки":
+		return []string{"LineNumber"}
+	case "Активность":
+		return []string{"Active"}
+	default:
+		return nil
+	}
 }
 
 func collectDirectNestedDeclaredFields(parent string, declaredFields map[string]struct{}) []string {
@@ -5118,6 +5461,136 @@ func cleanupUniversalFormNoise(doc *etree.Document) bool {
 
 	walk(root, nil)
 	return changed
+}
+
+func cleanupNonNativeFormLifecycleEvents(doc *etree.Document) bool {
+	root := doc.Root()
+	if root == nil {
+		return false
+	}
+
+	events := root.FindElements("./Events/Event")
+	if len(events) == 0 {
+		return false
+	}
+
+	blocked := map[string]struct{}{
+		"AfterWrite":         {},
+		"AfterWriteAtServer": {},
+		"BeforeWrite":        {},
+		"BeforeWriteAtServer": {},
+		"OnReadAtServer":     {},
+		"OnWriteAtServer":    {},
+	}
+
+	changed := false
+	for _, event := range append([]*etree.Element(nil), events...) {
+		name := strings.TrimSpace(event.SelectAttrValue("name", ""))
+		if _, ok := blocked[name]; !ok {
+			continue
+		}
+		if parent := event.Parent(); parent != nil {
+			parent.RemoveChild(event)
+			changed = true
+		}
+	}
+
+	return changed
+}
+
+func cleanupNonNativeFormStandardCommands(doc *etree.Document) bool {
+	root := doc.Root()
+	if root == nil {
+		return false
+	}
+
+	changed := false
+	var walk func(parent, grandparent *etree.Element)
+	walk = func(parent, grandparent *etree.Element) {
+		children := parent.ChildElements()
+		for i := len(children) - 1; i >= 0; i-- {
+			child := children[i]
+			if shouldRemoveNonNativeFormStandardCommand(child) {
+				if removesWholeFormNoiseElement(child) && grandparent != nil {
+					grandparent.RemoveChild(parent)
+				} else {
+					parent.RemoveChild(child)
+				}
+				changed = true
+				continue
+			}
+			walk(child, parent)
+		}
+	}
+
+	walk(root, nil)
+	return changed
+}
+
+func cleanupFinalNonNativeFormNoise(contexts []*FileProcessingContext, indexes *contextIndexes, decisions map[string]objectDecision) (changedFiles int, writtenFiles int, err error) {
+	for _, ctx := range contexts {
+		if ctx == nil || ctx.Doc == nil {
+			continue
+		}
+		if !strings.Contains(filepath.ToSlash(ctx.RelPath), "/Forms/") {
+			continue
+		}
+
+		decision, ok := decisions[ctx.OwnerKey]
+		if !ok || decision.Excluded || decision.Belonging == "Native" {
+			continue
+		}
+
+		ownerCtx := findTopLevelMetadataContextByOwnerKeyIndexed(indexes, contexts, ctx.OwnerKey)
+		changed := false
+		changed = normalizeManualQueryWithoutMainTable(ctx.Doc) || changed
+		changed = cleanupNonNativeManualQueryOrphanReferences(ctx.Doc) || changed
+		changed = cleanupMissingFormOwnerObjectReferences(ctx.Doc, ownerCtx) || changed
+		changed = cleanupNonNativeFormLifecycleEvents(ctx.Doc) || changed
+		changed = cleanupNonNativeFormStandardCommands(ctx.Doc) || changed
+		if !changed {
+			continue
+		}
+
+		changedFiles++
+		if writeErr := ctx.Doc.WriteToFile(ctx.Path); writeErr != nil {
+			return changedFiles, writtenFiles, fmt.Errorf("ошибка при записи файла %s: %w", ctx.Path, writeErr)
+		}
+		writtenFiles++
+	}
+
+	return changedFiles, writtenFiles, nil
+}
+
+func shouldRemoveNonNativeFormStandardCommand(el *etree.Element) bool {
+	if el == nil {
+		return false
+	}
+
+	tag := strings.ToLower(localName(el.Tag))
+	text := strings.TrimSpace(el.Text())
+	if text == "" {
+		return false
+	}
+
+	if tag != "commandname" && tag != "command" && tag != "excludedcommand" {
+		return false
+	}
+
+	switch text {
+	case "WriteAndClose", "Create", "Delete", "Copy", "Change", "MoveItem", "List", "HierarchicalList", "Tree":
+		return true
+	}
+
+	return strings.HasSuffix(text, ".StandardCommand.Create") ||
+		strings.HasSuffix(text, ".StandardCommand.Copy") ||
+		strings.HasSuffix(text, ".StandardCommand.Change") ||
+		strings.HasSuffix(text, ".StandardCommand.Delete") ||
+		strings.HasSuffix(text, ".StandardCommand.MoveItem") ||
+		strings.HasSuffix(text, ".StandardCommand.List") ||
+		strings.HasSuffix(text, ".StandardCommand.HierarchicalList") ||
+		strings.HasSuffix(text, ".StandardCommand.Tree") ||
+		strings.HasSuffix(text, ".StandardCommand.WriteAndClose")
 }
 
 func shouldRemoveUniversalFormNoise(el *etree.Element) bool {
@@ -6424,15 +6897,27 @@ func normalizeLanguageObject(properties *etree.Element) bool {
 func cleanupFunctionalOptionsParameterUseNativeChildRefs(
 	properties *etree.Element,
 	decisions map[string]objectDecision,
-	nativePrefixes []string,
 ) bool {
-	if properties == nil || len(decisions) == 0 || len(nativePrefixes) == 0 {
+	if properties == nil || len(decisions) == 0 {
 		return false
 	}
 
 	use := properties.FindElement("./Use")
 	if use == nil {
 		return false
+	}
+
+	topLevelRefs := make(map[string]struct{})
+	for _, child := range use.ChildElements() {
+		ref := strings.TrimSpace(child.Text())
+		if ref == "" {
+			continue
+		}
+		topKey := metadataDecisionKey(ref)
+		if topKey == "" || topKey != ref {
+			continue
+		}
+		topLevelRefs[topKey] = struct{}{}
 	}
 
 	changed := false
@@ -6442,57 +6927,45 @@ func cleanupFunctionalOptionsParameterUseNativeChildRefs(
 			continue
 		}
 
-		replacement, shouldReplace := replacementFunctionalOptionsParameterUseRef(el.Text(), decisions, nativePrefixes)
-		if !shouldReplace {
+		if !shouldRemoveFunctionalOptionsParameterUseRef(strings.TrimSpace(el.Text()), decisions, topLevelRefs) {
 			continue
 		}
-		if strings.TrimSpace(el.Text()) == replacement {
-			continue
-		}
-		el.SetText(replacement)
+		use.RemoveChild(el)
 		changed = true
 	}
 
 	return changed
 }
 
-func replacementFunctionalOptionsParameterUseRef(
+func shouldRemoveFunctionalOptionsParameterUseRef(
 	ref string,
 	decisions map[string]objectDecision,
-	nativePrefixes []string,
-) (string, bool) {
+	topLevelRefs map[string]struct{},
+) bool {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
-		return "", false
+		return false
 	}
 
 	parts := strings.Split(ref, ".")
 	if len(parts) < 4 {
-		return "", false
+		return false
 	}
 
 	topKey := metadataDecisionKey(ref)
 	if topKey == "" {
-		return "", false
+		return false
+	}
+	if _, ok := topLevelRefs[topKey]; !ok {
+		return false
 	}
 
 	decision, exists := decisions[topKey]
 	if !exists || decision.Excluded || decision.Belonging != "Native" {
-		return "", false
+		return false
 	}
 
-	ownerKind, ownerName := splitObjectKey(topKey)
-	if !hasNativePrefix(ownerName, nativePrefixes) {
-		return "", false
-	}
-
-	replacementTopKey := ownerKind + ".Удалить_" + ownerName
-	replacementDecision, exists := decisions[replacementTopKey]
-	if !exists || replacementDecision.Excluded {
-		return "", false
-	}
-
-	return strings.Replace(ref, topKey, replacementTopKey, 1), true
+	return true
 }
 
 func cleanupAdoptedObjectFormReferences(properties *etree.Element) bool {

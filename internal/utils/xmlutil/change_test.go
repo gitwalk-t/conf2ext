@@ -1352,6 +1352,111 @@ func TestNormalizeManualQueryWithoutMainTableKeepsChildItemDataPaths(t *testing.
 	}
 }
 
+func TestCleanupNonNativeManualQueryOrphanReferencesRemovesUndeclaredListBindings(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform" xmlns:v8="http://v8.1c.ru/8.1/data/core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ChildItems>
+    <Table name="Список">
+      <DataPath>Список</DataPath>
+      <RowPictureDataPath>Список.НомерКартинки</RowPictureDataPath>
+      <ChildItems>
+        <LabelField name="Наименование">
+          <DataPath>Список.Наименование</DataPath>
+        </LabelField>
+      </ChildItems>
+    </Table>
+    <UsualGroup name="Комментарий">
+      <TitleDataPath>Items.Список.CurrentData.Наименование</TitleDataPath>
+      <ChildItems>
+        <InputField name="КомментарийПоле">
+          <DataPath>Items.Список.CurrentData.Комментарий</DataPath>
+        </InputField>
+      </ChildItems>
+    </UsualGroup>
+  </ChildItems>
+  <Attributes>
+    <Attribute name="Список">
+      <Type>
+        <v8:Type>cfg:DynamicList</v8:Type>
+      </Type>
+      <UseAlways>
+        <Field>Список.Ссылка</Field>
+      </UseAlways>
+      <Settings xsi:type="DynamicList">
+        <ManualQuery>true</ManualQuery>
+      </Settings>
+    </Attribute>
+  </Attributes>
+</Form>`); err != nil {
+		t.Fatalf("read xml: %v", err)
+	}
+
+	if !cleanupNonNativeManualQueryOrphanReferences(doc) {
+		t.Fatalf("expected orphan manual-query bindings to be removed")
+	}
+
+	if doc.FindElement("//RowPictureDataPath") != nil {
+		t.Fatalf("expected row picture data path to be removed")
+	}
+	if doc.FindElement("//TitleDataPath") != nil {
+		t.Fatalf("expected title data path to be removed")
+	}
+	if len(doc.FindElements("//UseAlways/Field")) != 0 {
+		t.Fatalf("expected UseAlways field to be removed")
+	}
+	if len(doc.FindElements("//InputField")) != 0 {
+		t.Fatalf("expected input field bound to orphan current data to be removed")
+	}
+	if len(doc.FindElements("//LabelField")) != 0 {
+		t.Fatalf("expected label field bound to orphan list field to be removed")
+	}
+}
+
+func TestCleanupNonNativeManualQueryOrphanReferencesKeepsSchemaDeclaredField(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform" xmlns:v8="http://v8.1c.ru/8.1/data/core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ChildItems>
+    <Table name="Список">
+      <DataPath>Список</DataPath>
+      <ChildItems>
+        <LabelField name="RefField">
+          <DataPath>Список.Ref</DataPath>
+        </LabelField>
+      </ChildItems>
+    </Table>
+  </ChildItems>
+  <Attributes>
+    <Attribute name="Список">
+      <Type>
+        <v8:Type>cfg:DynamicList</v8:Type>
+      </Type>
+      <Settings xsi:type="DynamicList">
+        <ManualQuery>true</ManualQuery>
+        <Field>
+          <dataPath>Ref</dataPath>
+          <field>Ref</field>
+        </Field>
+      </Settings>
+    </Attribute>
+  </Attributes>
+</Form>`); err != nil {
+		t.Fatalf("read xml: %v", err)
+	}
+
+	if cleanupNonNativeManualQueryOrphanReferences(doc) {
+		t.Fatalf("expected schema-declared field binding to stay")
+	}
+	if got := textOfFirst(doc.Root(), ".//LabelField/DataPath"); got != "Список.Ref" {
+		t.Fatalf("unexpected remaining data path: %q", got)
+	}
+}
+
 func TestCleanupMissingFormConstantsSetReferencesRemovesMissingConstantControl(t *testing.T) {
 	t.Parallel()
 
@@ -1406,6 +1511,198 @@ func TestCleanupMissingFormConstantsSetReferencesRemovesMissingConstantControl(t
 
 	if len(names) != 1 || names[0] != "Оставляемый" {
 		t.Fatalf("unexpected remaining form items: %#v", names)
+	}
+}
+
+func TestCleanupMissingFormConstantsSetReferencesRemovesMissingConstantField(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform">
+  <Attributes>
+    <Attribute name="НаборКонстант" id="1">
+      <UseAlways>
+        <Field>НаборКонстант.УдаляемаяКонстанта</Field>
+        <Field>НаборКонстант.ОставляемаяКонстанта</Field>
+      </UseAlways>
+    </Attribute>
+  </Attributes>
+</Form>`); err != nil {
+		t.Fatalf("read xml: %v", err)
+	}
+
+	constantDoc := etree.NewDocument()
+	if err := constantDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Constant><Properties><Name>ОставляемаяКонстанта</Name></Properties></Constant>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read constant xml: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{{
+		Doc:        constantDoc,
+		Metadata:   true,
+		OwnerKey:   "Constant.ОставляемаяКонстанта",
+		OwnerKind:  "Constant",
+		OwnerName:  "ОставляемаяКонстанта",
+		RelPath:    "Constants/ОставляемаяКонстанта.xml",
+		FileName:   "ОставляемаяКонстанта.xml",
+		Properties: constantDoc.FindElement("//Properties"),
+	}}
+
+	decisions := map[string]objectDecision{
+		"Constant.ОставляемаяКонстанта": {Belonging: "Native"},
+	}
+
+	if !cleanupMissingFormConstantsSetReferences(doc, contexts, decisions) {
+		t.Fatalf("expected missing constant field to be removed")
+	}
+
+	fields := []string{}
+	for _, el := range doc.FindElements("//Attribute[@name='НаборКонстант']//Field") {
+		fields = append(fields, strings.TrimSpace(el.Text()))
+	}
+	if len(fields) != 1 || fields[0] != "НаборКонстант.ОставляемаяКонстанта" {
+		t.Fatalf("unexpected remaining fields: %#v", fields)
+	}
+}
+
+func TestCleanupMissingFormOwnerObjectReferencesRemovesUnavailableObjectField(t *testing.T) {
+	t.Parallel()
+
+	formDoc := etree.NewDocument()
+	if err := formDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform">
+  <ChildItems>
+    <InputField name="Недействителен"><DataPath>Объект.Недействителен</DataPath></InputField>
+    <InputField name="Комментарий"><DataPath>Объект.Комментарий</DataPath></InputField>
+  </ChildItems>
+</Form>`); err != nil {
+		t.Fatalf("read form xml: %v", err)
+	}
+
+	ownerDoc := etree.NewDocument()
+	if err := ownerDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog>
+    <Properties><Name>Пользователи</Name></Properties>
+    <ChildObjects>
+      <Attribute><Properties><Name>Недействителен</Name></Properties></Attribute>
+    </ChildObjects>
+  </Catalog>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read owner xml: %v", err)
+	}
+
+	ownerCtx := &FileProcessingContext{
+		Doc:        ownerDoc,
+		Metadata:   true,
+		OwnerKey:   "Catalog.Пользователи",
+		OwnerKind:  "Catalog",
+		OwnerName:  "Пользователи",
+		RelPath:    "Catalogs/Пользователи.xml",
+		FileName:   "Пользователи.xml",
+		Properties: ownerDoc.FindElement("//Properties"),
+	}
+
+	if !cleanupMissingFormOwnerObjectReferences(formDoc, ownerCtx) {
+		t.Fatalf("expected unavailable object field to be removed")
+	}
+
+	names := []string{}
+	for _, el := range formDoc.FindElements("//ChildItems/*") {
+		names = append(names, el.SelectAttrValue("name", ""))
+	}
+	if len(names) != 1 || names[0] != "Недействителен" {
+		t.Fatalf("unexpected remaining object fields: %#v", names)
+	}
+}
+
+func TestCleanupNonNativeFormStandardCommandsAndEvents(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform">
+  <Events>
+    <Event name="AfterWrite">ПослеЗаписи</Event>
+    <Event name="OnOpen">ПриОткрытии</Event>
+  </Events>
+  <ChildItems>
+    <Button name="Удаляемая"><CommandName>Form.StandardCommand.Create</CommandName></Button>
+    <Button name="Оставляемая"><CommandName>Form.StandardCommand.Help</CommandName></Button>
+  </ChildItems>
+  <ExcludedCommand>WriteAndClose</ExcludedCommand>
+</Form>`); err != nil {
+		t.Fatalf("read xml: %v", err)
+	}
+
+	if !cleanupNonNativeFormLifecycleEvents(doc) {
+		t.Fatalf("expected non-native lifecycle event cleanup")
+	}
+	if !cleanupNonNativeFormStandardCommands(doc) {
+		t.Fatalf("expected non-native standard command cleanup")
+	}
+
+	if events := doc.FindElements("//Events/Event"); len(events) != 1 || events[0].SelectAttrValue("name", "") != "OnOpen" {
+		t.Fatalf("unexpected remaining events")
+	}
+
+	names := []string{}
+	for _, el := range doc.FindElements("//ChildItems/*") {
+		names = append(names, el.SelectAttrValue("name", ""))
+	}
+	if len(names) != 1 || names[0] != "Оставляемая" {
+		t.Fatalf("unexpected remaining buttons: %#v", names)
+	}
+	if len(doc.FindElements("//ExcludedCommand")) != 0 {
+		t.Fatalf("expected write-and-close excluded command to be removed")
+	}
+}
+
+func TestNormalizeManualQueryWithoutMainTableAddsStandardAliasAndRemovesDefaultPicture(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ChildItems>
+    <Table name="Список" id="1">
+      <DataPath>Список</DataPath>
+      <RowPictureDataPath>Список.DefaultPicture</RowPictureDataPath>
+    </Table>
+  </ChildItems>
+  <Attributes>
+    <Attribute name="Список" id="1">
+      <Type><v8:Type xmlns:v8="http://v8.1c.ru/8.1/data/core">cfg:DynamicList</v8:Type></Type>
+      <UseAlways>
+        <Field>Список.Ref</Field>
+      </UseAlways>
+      <Settings xsi:type="DynamicList">
+        <ManualQuery>true</ManualQuery>
+        <QueryText>ВЫБРАТЬ
+  Справочник.Ссылка,
+  Справочник.ПометкаУдаления
+ИЗ
+  Справочник.Пользователи КАК Справочник</QueryText>
+      </Settings>
+    </Attribute>
+  </Attributes>
+</Form>`); err != nil {
+		t.Fatalf("read xml: %v", err)
+	}
+
+	if !normalizeManualQueryWithoutMainTable(doc) {
+		t.Fatalf("expected manual query normalization to change form")
+	}
+
+	queryText := textOfFirst(doc.Root(), ".//Attribute[@name='Список']//QueryText")
+	if !strings.Contains(queryText, "Справочник.Ссылка КАК Ref") {
+		t.Fatalf("expected query to get standard alias, got:\n%s", queryText)
+	}
+	if doc.FindElement("//Table/RowPictureDataPath") != nil {
+		t.Fatalf("expected default picture row data path to be removed")
 	}
 }
 
@@ -2773,7 +3070,7 @@ func TestFinalizeRetainedOwnerCommandsStripsNativePreserveMarkerWithoutRetainedD
 	}
 }
 
-func TestCleanupFunctionalOptionsParameterUseNativeChildRefsRewritesToDeletedTwin(t *testing.T) {
+func TestCleanupFunctionalOptionsParameterUseNativeChildRefsRemovesPrefixNativeChildRefWhenTopLevelExists(t *testing.T) {
 	t.Parallel()
 
 	doc := etree.NewDocument()
@@ -2781,7 +3078,8 @@ func TestCleanupFunctionalOptionsParameterUseNativeChildRefsRewritesToDeletedTwi
 <FunctionalOptionsParameter xmlns="http://v8.1c.ru/8.3/MDClasses" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable">
   <Properties>
     <Use>
-      <xr:Item xsi:type="xr:MDObjectRef" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">InformationRegister.упо_ОтображатьКомандуОпцийПроектнойМоделиУровняОбъектПлана.Dimension.ТипОбъекта</xr:Item>
+      <xr:Item xsi:type="xr:MDObjectRef" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">Catalog.упо_Тест</xr:Item>
+      <xr:Item xsi:type="xr:MDObjectRef" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">Catalog.упо_Тест.Attribute.Реквизит</xr:Item>
     </Use>
   </Properties>
 </FunctionalOptionsParameter>`); err != nil {
@@ -2796,20 +3094,18 @@ func TestCleanupFunctionalOptionsParameterUseNativeChildRefsRewritesToDeletedTwi
 	changed := cleanupFunctionalOptionsParameterUseNativeChildRefs(
 		properties,
 		map[string]objectDecision{
-			"InformationRegister.упо_ОтображатьКомандуОпцийПроектнойМоделиУровняОбъектПлана":         {Belonging: "Native"},
-			"InformationRegister.Удалить_упо_ОтображатьКомандуОпцийПроектнойМоделиУровняОбъектПлана": {Belonging: "Native"},
+			"Catalog.упо_Тест": {Belonging: "Native"},
 		},
-		[]string{"упо_"},
 	)
 	if !changed {
 		t.Fatalf("expected cleanup to report change")
 	}
-	if got := textOrEmpty(properties.FindElement("./Use/*[1]")); got != "InformationRegister.Удалить_упо_ОтображатьКомандуОпцийПроектнойМоделиУровняОбъектПлана.Dimension.ТипОбъекта" {
-		t.Fatalf("unexpected rewritten Use reference: %q", got)
+	if got := functionalOptionsParameterUseRefs(properties); len(got) != 1 || got[0] != "Catalog.упо_Тест" {
+		t.Fatalf("unexpected Use refs after cleanup: %#v", got)
 	}
 }
 
-func TestCleanupFunctionalOptionsParameterUseNativeChildRefsKeepsNonPrefixedRef(t *testing.T) {
+func TestCleanupFunctionalOptionsParameterUseNativeChildRefsRemovesIncludedNativeChildRefWithoutPrefix(t *testing.T) {
 	t.Parallel()
 
 	doc := etree.NewDocument()
@@ -2817,7 +3113,8 @@ func TestCleanupFunctionalOptionsParameterUseNativeChildRefsKeepsNonPrefixedRef(
 <FunctionalOptionsParameter xmlns="http://v8.1c.ru/8.3/MDClasses" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable">
   <Properties>
     <Use>
-      <xr:Item xsi:type="xr:MDObjectRef" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">InformationRegister.НастройкиВерсионированияОбъектов.Dimension.ТипОбъекта</xr:Item>
+      <xr:Item xsi:type="xr:MDObjectRef" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">Catalog.Тест</xr:Item>
+      <xr:Item xsi:type="xr:MDObjectRef" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">Catalog.Тест.Attribute.Реквизит</xr:Item>
     </Use>
   </Properties>
 </FunctionalOptionsParameter>`); err != nil {
@@ -2832,19 +3129,18 @@ func TestCleanupFunctionalOptionsParameterUseNativeChildRefsKeepsNonPrefixedRef(
 	changed := cleanupFunctionalOptionsParameterUseNativeChildRefs(
 		properties,
 		map[string]objectDecision{
-			"InformationRegister.НастройкиВерсионированияОбъектов": {Belonging: "Native"},
+			"Catalog.Тест": {Belonging: "Native"},
 		},
-		[]string{"упо_"},
 	)
-	if changed {
-		t.Fatalf("expected non-prefixed native child reference to stay intact")
+	if !changed {
+		t.Fatalf("expected cleanup to report change")
 	}
-	if got := textOrEmpty(properties.FindElement("./Use/*[1]")); got != "InformationRegister.НастройкиВерсионированияОбъектов.Dimension.ТипОбъекта" {
-		t.Fatalf("unexpected Use reference after cleanup: %q", got)
+	if got := functionalOptionsParameterUseRefs(properties); len(got) != 1 || got[0] != "Catalog.Тест" {
+		t.Fatalf("unexpected Use refs after cleanup: %#v", got)
 	}
 }
 
-func TestCleanupFunctionalOptionsParameterUseNativeChildRefsKeepsRefWithoutDeletedTwin(t *testing.T) {
+func TestCleanupFunctionalOptionsParameterUseNativeChildRefsKeepsChildRefWithoutTopLevelOwner(t *testing.T) {
 	t.Parallel()
 
 	doc := etree.NewDocument()
@@ -2852,7 +3148,7 @@ func TestCleanupFunctionalOptionsParameterUseNativeChildRefsKeepsRefWithoutDelet
 <FunctionalOptionsParameter xmlns="http://v8.1c.ru/8.3/MDClasses" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable">
   <Properties>
     <Use>
-      <xr:Item xsi:type="xr:MDObjectRef" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">InformationRegister.упо_ТестовыйРегистр.Dimension.Тест</xr:Item>
+      <xr:Item xsi:type="xr:MDObjectRef" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">Catalog.Тест.Attribute.Реквизит</xr:Item>
     </Use>
   </Properties>
 </FunctionalOptionsParameter>`); err != nil {
@@ -2867,15 +3163,49 @@ func TestCleanupFunctionalOptionsParameterUseNativeChildRefsKeepsRefWithoutDelet
 	changed := cleanupFunctionalOptionsParameterUseNativeChildRefs(
 		properties,
 		map[string]objectDecision{
-			"InformationRegister.упо_ТестовыйРегистр": {Belonging: "Native"},
+			"Catalog.Тест": {Belonging: "Native"},
 		},
-		[]string{"упо_"},
 	)
 	if changed {
-		t.Fatalf("expected Use reference without deleted twin to stay intact")
+		t.Fatalf("expected child ref without top-level owner to stay intact")
 	}
-	if got := textOrEmpty(properties.FindElement("./Use/*[1]")); got != "InformationRegister.упо_ТестовыйРегистр.Dimension.Тест" {
-		t.Fatalf("unexpected Use reference after cleanup: %q", got)
+	if got := functionalOptionsParameterUseRefs(properties); len(got) != 1 || got[0] != "Catalog.Тест.Attribute.Реквизит" {
+		t.Fatalf("unexpected Use refs after cleanup: %#v", got)
+	}
+}
+
+func TestCleanupFunctionalOptionsParameterUseNativeChildRefsKeepsNonNativeOwnerChildRef(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<FunctionalOptionsParameter xmlns="http://v8.1c.ru/8.3/MDClasses" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable">
+  <Properties>
+    <Use>
+      <xr:Item xsi:type="xr:MDObjectRef" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">Catalog.Тест</xr:Item>
+      <xr:Item xsi:type="xr:MDObjectRef" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">Catalog.Тест.Attribute.Реквизит</xr:Item>
+    </Use>
+  </Properties>
+</FunctionalOptionsParameter>`); err != nil {
+		t.Fatalf("read xml: %v", err)
+	}
+
+	properties := doc.FindElement("//*[local-name()='Properties']")
+	if properties == nil {
+		t.Fatalf("expected properties")
+	}
+
+	changed := cleanupFunctionalOptionsParameterUseNativeChildRefs(
+		properties,
+		map[string]objectDecision{
+			"Catalog.Тест": {Belonging: "AdoptedStub"},
+		},
+	)
+	if changed {
+		t.Fatalf("expected non-native child ref to stay intact")
+	}
+	if got := functionalOptionsParameterUseRefs(properties); len(got) != 2 || got[0] != "Catalog.Тест" || got[1] != "Catalog.Тест.Attribute.Реквизит" {
+		t.Fatalf("unexpected Use refs after cleanup: %#v", got)
 	}
 }
 
@@ -2966,7 +3296,7 @@ func TestBuildSearchResultModuleContentPreservesDirectiveOrderAndComments(t *tes
 	}
 }
 
-func TestBuildSearchResultModuleContentStrictMismatchReportsFoundGroups(t *testing.T) {
+func TestBuildSearchResultModuleContentStrictMismatchLogsAndFallsBackToSoftTransfer(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -2983,15 +3313,15 @@ func TestBuildSearchResultModuleContentStrictMismatchReportsFoundGroups(t *testi
 		t.Fatalf("write module: %v", err)
 	}
 
-	_, err := buildSearchResultModuleContent(modulePath, []string{"PM"}, map[string][]string{
+	content, err := buildSearchResultModuleContent(modulePath, []string{"PM"}, map[string][]string{
 		"PM":       {"//{PM}", "// {PM}"},
 		"НеМодуль": {"// {PM.НеМодуль}"},
 	}, "упо_", true, diagnosticsPath)
-	if err == nil {
-		t.Fatalf("expected strict mismatch error")
+	if err != nil {
+		t.Fatalf("build search result module content: %v", err)
 	}
-	if !strings.Contains(err.Error(), "ожидает точные метки групп [PM]") || !strings.Contains(err.Error(), "найдены только группы [НеМодуль]") {
-		t.Fatalf("unexpected strict mismatch error: %v", err)
+	if !strings.Contains(content, "&После(\"Тест\")\nПроцедура упо_Тест()") {
+		t.Fatalf("expected strict mismatch to fall back to general transfer, got:\n%s", content)
 	}
 
 	data, readErr := os.ReadFile(diagnosticsPath)
@@ -3270,6 +3600,23 @@ func TestWriteSearchResultModuleFilesSkipsNativeOwners(t *testing.T) {
 	if string(data) != "старый" {
 		t.Fatalf("expected native owner module to stay untouched, got %q", string(data))
 	}
+}
+
+func functionalOptionsParameterUseRefs(properties *etree.Element) []string {
+	if properties == nil {
+		return nil
+	}
+
+	use := properties.FindElement("./Use")
+	if use == nil {
+		return nil
+	}
+
+	refs := make([]string, 0, len(use.ChildElements()))
+	for _, child := range use.ChildElements() {
+		refs = append(refs, strings.TrimSpace(child.Text()))
+	}
+	return refs
 }
 
 func TestValidateSearchResultAdoptedObjectsRequiresAdoptedTopLevelXML(t *testing.T) {

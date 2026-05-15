@@ -166,7 +166,7 @@ XML-конвейер должен классифицировать top-level о�
 
 `AdditionalProcessing.Use_упо_SearchResult` включает дополнительный overlay `AdoptedStubCode` для adopted-части состава.
 Он не вводит новый `ObjectBelonging` и не меняет базовую классификацию `Native` / `AdoptedStub` / `AdoptedStubExt` / `AdoptedStubMetaData`.
-Дополнительный параметр `AdditionalProcessing.UseExactTemplates` управляет строгостью сопоставления шаблонов; по умолчанию используется strict-режим.
+Дополнительный параметр `AdditionalProcessing.UseExactTemplates` управляет строгостью сопоставления шаблонов; по умолчанию используется strict-режим. Если exact-match не сошелся, конвертер пишет запись в `output/_log/searchresult-template-errors.log`, но продолжает перенос по общей fallback-логике без остановки прогона.
 
 При включенном `Use_упо_SearchResult` конвертер:
 

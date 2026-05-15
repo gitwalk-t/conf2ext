@@ -5,7 +5,7 @@
     "enable_form_validation": false,
     "AdditionalProcessing": {
         "Use_MetaDataFile": true,
-        "Use_упо_SearchResult": false
+        "Use_упо_SearchResult": true
     },
     "extension": "УправлениеПроектами",
     "prefix": "упо_",
@@ -35,7 +35,10 @@
         "CommonPicture.Информация33",
         "CommonPicture.Информация34",
         "CommonModule.упо_ИнтеграцияERP",
-        "CommonModule.упо_ИнтеграцияERPКлиентСервер"
+        "CommonModule.упо_ИнтеграцияERPКлиентСервер",
+        "CommonForm.упо_НастройкиPM5",
+        "Role.упо_ЧтениеВидыРабочегоВремени",
+        "Role.упо_ДобавлениеИзменениеВидыРабочегоВремени"
     ],
     "included_AdoptedStub_objects": [
         "CommandGroup.Информация"
