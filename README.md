@@ -33,6 +33,7 @@ go test ./...
 - для реальной конвертации нужна локально доступная платформа 1С нужной версии
 - если `--config` не передан, CLI по умолчанию берет `./configs/config.json`
 - `input_path` и `output_path` в конфиге можно задавать абсолютными путями или путями от корня проекта; для checked-in конфига используется краткая форма вроде `/input` и `/output/demo.cfe`
+- имя, префикс и стабильный идентификатор расширения теперь живут в `extension_properties`; старые `extension` / `prefix` остаются как backward-compatible alias
 
 ## Основные модули
 
@@ -76,6 +77,8 @@ go test ./...
 - `AdditionalProcessing.Use_упо_SearchResult`: включает дополнительный overlay `AdoptedStubCode` для adopted-части состава; он читает `searchingTemplateText.json` рядом с активным конфигом и `CommonTemplates/упо_SearchResult/Ext/Template.txt`, может поднять default-excluded объект в `AdoptedStub`, сохранить нужные формы/команды/modules и наложить текст модулей, не переводя объект в `Native`
 - при `AdditionalProcessing.Use_упо_SearchResult=true` конвертер дополнительно проверяет, что объекты, реально выбранные из `упо_SearchResult`, дошли до итогового XML-дампа как top-level adopted-объекты
 - `AdditionalProcessing.UseExactTemplates`: управляет строгостью сопоставления шаблонов для `Use_упо_SearchResult`; по умолчанию `true`, а mismatch в strict-режиме пишется в `output/_log/searchresult-template-errors.log` и переводит перенос кода на общий fallback без падения прогона
+- `extension_properties.identifier`: стабильный `uuid` корня расширения; он не генерируется заново и записывается в `Configuration.xml`
+- `target.xml_dump`: optional XML-выгрузка конфигурации-приемника; сейчас используется для cleanup `DefinedType` и `EventSubscription` по реальному составу приемника
 
 ## Identity mapping
 

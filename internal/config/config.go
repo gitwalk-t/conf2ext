@@ -155,6 +155,16 @@ func MergeConfigurations(defaultCfg, cfg *Configuration) {
 		defaultCfg.Prefix = cfg.Prefix
 	}
 
+	if cfg.ExtensionProperties.Name != "" {
+		defaultCfg.ExtensionProperties.Name = cfg.ExtensionProperties.Name
+	}
+	if cfg.ExtensionProperties.Prefix != "" {
+		defaultCfg.ExtensionProperties.Prefix = cfg.ExtensionProperties.Prefix
+	}
+	if cfg.ExtensionProperties.Identifier != "" {
+		defaultCfg.ExtensionProperties.Identifier = cfg.ExtensionProperties.Identifier
+	}
+
 	if len(cfg.NativePrefixes) > 0 {
 		defaultCfg.NativePrefixes = append([]string{}, cfg.NativePrefixes...)
 	}
@@ -181,6 +191,12 @@ func MergeConfigurations(defaultCfg, cfg *Configuration) {
 
 	if cfg.OutputPath != "" {
 		defaultCfg.OutputPath = cfg.OutputPath
+	}
+	if cfg.Target.Base != "" {
+		defaultCfg.Target.Base = cfg.Target.Base
+	}
+	if cfg.Target.XMLDump != "" {
+		defaultCfg.Target.XMLDump = cfg.Target.XMLDump
 	}
 
 	if cfg.ConversionType != "" {
@@ -221,6 +237,19 @@ func normalizeLegacyConfigFields(cfg *Configuration) {
 		return
 	}
 
+	if cfg.ExtensionProperties.Name == "" {
+		cfg.ExtensionProperties.Name = strings.TrimSpace(cfg.Extension)
+	}
+	if cfg.ExtensionProperties.Prefix == "" {
+		cfg.ExtensionProperties.Prefix = strings.TrimSpace(cfg.Prefix)
+	}
+	if cfg.Extension == "" {
+		cfg.Extension = cfg.ExtensionProperties.Name
+	}
+	if cfg.Prefix == "" {
+		cfg.Prefix = cfg.ExtensionProperties.Prefix
+	}
+
 	if len(cfg.IncludedObjects) > 0 {
 		cfg.IncludedAdoptedStubObjects = append(cfg.IncludedAdoptedStubObjects, cfg.IncludedObjects...)
 		cfg.IncludedObjects = nil
@@ -244,6 +273,11 @@ func normalizeConfigPaths(config *Configuration, configPath string) error {
 	config.OutputPath, err = NormalizeProjectPath(config.OutputPath, baseDir)
 	if err != nil {
 		return fmt.Errorf("не удалось нормализовать путь к выходному файлу: %w", err)
+	}
+
+	config.Target.XMLDump, err = NormalizeProjectPath(config.Target.XMLDump, baseDir)
+	if err != nil {
+		return fmt.Errorf("не удалось нормализовать путь к XML-дампу конфигурации-приемника: %w", err)
 	}
 
 	return nil

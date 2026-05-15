@@ -16,7 +16,7 @@
 - `AdoptedStub`:
   технический режим урезанного заимствованного объекта. Термин не переводим и не подменяем на просто `Adopted`, потому что в коде и текущей модели это не одно и то же.
 - `Use_упо_SearchResult`:
-  дополнительный overlay `AdoptedStubCode` поверх уже принятого adopted-решения. Отдельного нового `ObjectBelonging` для него нет: базовая классификация остается в рамках `Native`, `AdoptedStub`, `AdoptedStubExt` и `AdoptedStubMetaData`.
+  дополнительный overlay `AdoptedStubCode` поверх уже принятого adopted-решения. Отдельного нового `ObjectBelonging` для него нет: базовая классификация остается в рамках `Native`, `AdoptedStub`, `AdoptedStubExt` и `AdoptedStubMetaData`. Если переносимый SearchResult-метод уже начинается с `упо_` или `Подключаемый_упо`, его переносим как есть, без добавления `&После`.
 - У `AdoptedStub` не переносим тексты `ManagerModule` и `ObjectModule`; для adopted-констант по тому же правилу не переносим `ValueManagerModule`; для adopted общих модулей не переносим `Module`; для adopted команд не переносим `CommandModule`. Если adopted-объект уже не `Native`, такие child-записи нужно вычищать и из `ConfigDumpInfo.xml`; для `CommonModule` еще и удалять `CommonModules/<Имя>/Ext/Module.bsl`, а для команд — `Ext/CommandModule.bsl`.
 - `AdoptedStubMetaData`:
 частный случай `AdoptedStub`, который включается флагом `AdditionalProcessing.Use_MetaDataFile`. Объект попадает в adopted-режим по списку из `CommonTemplate.упо_MetaDataFile`, а child metadata из множеств `Реквизиты` и `ТабличныеЧасти` сохраняются только для реквизитов с префиксом `упо_`.
@@ -49,8 +49,8 @@
     Ссылки `style:Имя` внутри `Native`-форм тоже считаем XML-ссылками на `StyleItem.Имя`, но только если такой `StyleItem` реально существует в исходном XML-составе. Встроенные style-константы вроде `style:ButtonTextColor` метаданными не считаем.
   - “переписывание XML”:
     предпочтительная формулировка для XML rewrite.
-- `extension` и `prefix`:
-  это единственный источник имени и префикса корня. Их нужно синхронно отражать в `Configuration.xml` и `ConfigDumpInfo.xml`.
+- `extension_properties`:
+  основной JSON-блок для имени, префикса и стабильного `identifier` корня расширения. Старые `extension` и `prefix` остаются backward-compatible alias. Имя и префикс нужно синхронно отражать в `Configuration.xml` и `ConfigDumpInfo.xml`, а `identifier` — в `Configuration/@uuid`.
 - У корня `Configuration.xml` обязаны быть `InternalInfo/xr:PropertyState`, `Caption`, `ShortCaption`, `Language.Русский`.
 - `ChildObjects` корня должны отражать весь фактический top-level состав расширения:
   все top-level `Native` и `AdoptedStub`-объекты, которые не исключены итоговым решением. Нельзя чистить корень по правилу "оставить только native-prefix".

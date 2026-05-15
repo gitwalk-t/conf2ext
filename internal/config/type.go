@@ -34,6 +34,17 @@ type AdditionalProcessing struct {
 	UseExactTemplates *bool `json:"UseExactTemplates,omitempty"`
 }
 
+type ExtensionProperties struct {
+	Name       string `json:"name"`
+	Prefix     string `json:"prefix"`
+	Identifier string `json:"identifier"`
+}
+
+type Target struct {
+	Base    string `json:"base"`
+	XMLDump string `json:"xml_dump"`
+}
+
 type BaseBinding struct {
 	BaseObjectID string `json:"base_object_id"`
 }
@@ -46,6 +57,7 @@ type Configuration struct {
 	PlatformVersion             string               `json:"platform_version"`
 	Extension                   string               `json:"extension"`
 	Prefix                      string               `json:"prefix"`
+	ExtensionProperties         ExtensionProperties  `json:"extension_properties"`
 	KeepXMLDump                 bool                 `json:"keep_xml_dump,omitempty"`
 	StopAfterXMLDump            bool                 `json:"stop_after_xml_dump,omitempty"`
 	EnableFormValidation        *bool                `json:"enable_form_validation,omitempty"`
@@ -57,6 +69,7 @@ type Configuration struct {
 	ForbiddenAdoptedStubObjects []string             `json:"forbidden_AdoptedStub_objects"`
 	InputPath                   string               `json:"input_path" env-required:"true"`
 	OutputPath                  string               `json:"output_path" env-required:"true"`
+	Target                      Target               `json:"target,omitempty"`
 	ConversionType              ConvertType          `json:"conversion_type" env-required:"true"`
 	XMLFiles                    []*FileOperation     `json:"xml_file_changes"`
 	AdditionalProcessing        AdditionalProcessing `json:"AdditionalProcessing,omitempty"`
@@ -93,4 +106,31 @@ func (cfg *Configuration) IsExactSearchResultTemplatesEnabled() bool {
 		return true
 	}
 	return *cfg.AdditionalProcessing.UseExactTemplates
+}
+
+func (cfg *Configuration) ExtensionName() string {
+	if cfg == nil {
+		return ""
+	}
+	if value := cfg.ExtensionProperties.Name; value != "" {
+		return value
+	}
+	return cfg.Extension
+}
+
+func (cfg *Configuration) ExtensionPrefix() string {
+	if cfg == nil {
+		return ""
+	}
+	if value := cfg.ExtensionProperties.Prefix; value != "" {
+		return value
+	}
+	return cfg.Prefix
+}
+
+func (cfg *Configuration) ExtensionIdentifier() string {
+	if cfg == nil {
+		return ""
+	}
+	return cfg.ExtensionProperties.Identifier
 }

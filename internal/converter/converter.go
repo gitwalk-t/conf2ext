@@ -169,7 +169,7 @@ func ConvertToCfe(cfg *config.Configuration) error {
 		return nil
 	}
 
-	extension := cfg.Extension
+	extension := cfg.ExtensionName()
 	if extension == "" {
 		extension = dumpInfo.ConfigName
 	}

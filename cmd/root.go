@@ -61,7 +61,7 @@ func runMain(cmd *cobra.Command, args []string) {
 func changeXmlFiles(cfg *config.Configuration) {
 	for _, xmlFile := range cfg.XMLFiles {
 		if xmlFile.FileName == "Configuration.xml" {
-			setNamePrefix(xmlFile, cfg.Prefix)
+			setNamePrefix(xmlFile, cfg.ExtensionPrefix())
 		}
 	}
 }

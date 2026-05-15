@@ -7,8 +7,11 @@
         "Use_MetaDataFile": true,
         "Use_упо_SearchResult": true
     },
-    "extension": "УправлениеПроектами",
-    "prefix": "упо_",
+    "extension_properties": {
+        "name": "УправлениеПроектамиКОРП",
+        "prefix": "упо_",
+        "identifier": "83b63dda-4eec-11f1-b61f-e0d55ee14481"
+    },
     "native_prefixes": [
         "упо_",
         "слк",
@@ -36,7 +39,6 @@
         "CommonPicture.Информация34",
         "CommonModule.упо_ИнтеграцияERP",
         "CommonModule.упо_ИнтеграцияERPКлиентСервер",
-        "CommonForm.упо_НастройкиPM5",
         "Role.упо_ЧтениеВидыРабочегоВремени",
         "Role.упо_ДобавлениеИзменениеВидыРабочегоВремени"
     ],
@@ -55,9 +57,16 @@
         "CommonAttribute.упо_СлужебнаяГруппаПроверкаНаличияПолномочий",
         "CommonTemplate.ИзображенияМетаданных",
         "Enum.ХозяйственныеОперации",
-        "DataProcessor.упо_ОграничениеДоступаПоОбъектамPM"
+        "DataProcessor.упо_ОграничениеДоступаПоОбъектамPM",
+        "Catalog.ДоговорыКонтрагентов.Form.ФормаВыбора",
+        "Catalog.Контрагенты.Form.ФормаВыбора"
+
     ],
-    "input_path": "/input",
+    "input_path": "/input/source",
     "output_path": "/output/demo.cfe",
+    "target": {
+        "base": "",
+        "xml_dump": "/input/target"
+    },
     "conversion_type": "srcConvert"
 }

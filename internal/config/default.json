@@ -7,6 +7,9 @@
         "Use_MetaDataFile": false,
         "Use_упо_SearchResult": false
     },
+    "extension_properties": {
+        "identifier": "83b63dda-4eec-11f1-b61f-e0d55ee14481"
+    },
     "native_prefixes": [
         "упо_",
         "слк",
@@ -34,6 +37,10 @@
         "InformationRegister.ОтражениеДокументовВМеждународномУчете",
         "Catalog.ИсторияПроверкиИКорректировкиДанных"
     ],
+    "target": {
+        "base": "",
+        "xml_dump": ""
+    },
     "xml_file_changes": [
         {
             "file_name": "Configuration.xml",

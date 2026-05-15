@@ -38,6 +38,7 @@
 - очистку ссылок на жестко исключенные объекты из `forbidden_*`
 - нормализацию adopted stub
 - замену GUID
+- отдельный binding-pass для `base_object_id`: он переписывает ссылки на связанные Adopted-объекты по итоговым XML-документам, но не подменяет их собственные `uuid`
 - очистку forbidden movements
 - запись файлов и проверку отсутствия old GUID
 
@@ -93,7 +94,9 @@
 - если `AccumulationRegister`/`InformationRegister`/другой регистр остается `Native`, его документы-registrators тоже дотягиваются в `Native`, чтобы в `RegisterRecords` не исчезала регистрация документа
 - для `DefinedType` и `EventSubscription` общий cleanup мягко исключенных ссылок не применяется, их состав сохраняется целиком
 - для `AdoptedStubExt(Form)` источником решения служит не только `MainTable`, но и field contract dynamic list: `DataPath`, `Field`, `RowPictureDataPath` и родственные поля. Этот контракт должен проверяться конвертером до загрузки в 1С.
-- `extension` / `prefix` — единственный источник имени и префикса корня; они должны совпадать одновременно в `Configuration.xml` и `ConfigDumpInfo.xml`
+- `extension_properties.name` / `extension_properties.prefix` — основной источник имени и префикса корня; старые `extension` / `prefix` поддерживаются как алиасы совместимости и тоже должны сходиться с `Configuration.xml` и `ConfigDumpInfo.xml`
+- `extension_properties.identifier` — стабильный `uuid` корня `Configuration.xml`; он не должен генерироваться заново между прогонами
+- если задан `target.xml_dump`, `DefinedType` и `EventSubscription` в итоговом составе ограничиваются реальным top-level набором XML-выгрузки конфигурации-приемника
 - у корня `Configuration.xml` обязаны быть `InternalInfo/xr:PropertyState`, `Caption`, `ShortCaption`, `Language.Русский`
 - `ChildObjects` корня должны совпадать с итоговым top-level составом: top-level `Native` и `AdoptedStub`, не помеченные как excluded/forbidden
 - при `normalizeAdoptedObjectComposition` сохраняем каркас формата: если у исходного top-level metadata был `ChildObjects`, после очистки он должен остаться хотя бы пустым

@@ -295,7 +295,9 @@ type metadataPathSegment struct {
 
 type metadataBindingTarget struct {
 	MetadataPath string
+	CurrentID    string
 	BaseObjectID string
+	HasBinding   bool
 }
 
 type contextIndexes struct {
@@ -390,6 +392,12 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 		return err
 	}
 
+	targetMetadataKeys, err := collectTargetXMLDumpMetadataKeys(cfg)
+	if err != nil {
+		return err
+	}
+	applyTargetMetadataIntersection(decisions, targetMetadataKeys)
+
 	log.Printf("xml step: promote referenced objects")
 	promoteReferencedObjectsStartedAt := time.Now()
 	referenceGraph := collectReferenceGraph(contexts, cfg, primaryNativeObjects, decisions, searchResultState)
@@ -415,19 +423,21 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 	}
 	excludedRefs := collectExcludedReferences(decisions)
 	blockedForbiddenObjectKeys := collectBlockedForbiddenObjectKeys(decisions, forbiddenAdoptedStubObjects)
+	forbiddenChildMetadataPaths := collectForbiddenChildMetadataPaths(blockedForbiddenObjectKeys)
 	blockedForbiddenRefs := collectReferenceMapFromObjectKeys(blockedForbiddenObjectKeys)
 	excludedRefs = mergeReferenceMaps(excludedRefs, blockedForbiddenRefs)
 	excludedMetadataPrefixes := collectExcludedMetadataPrefixes(excludedRefs)
 	truncatedKeys := collectTruncatedKeys(decisions)
 	truncatedChildPrefixes := collectTruncatedChildPrefixes(truncatedKeys)
 	guidReplacements := collectGUIDReplacements(contexts, decisions, identityMap, adoptedStubMetaDataRules)
+	bindingTargetsByDoc := collectMetadataBindingTargetsByDoc(contexts, baseBindings, decisions, adoptedStubMetaDataRules)
+	baseBindingReplacements := collectBaseBindingReferenceReplacements(bindingTargetsByDoc, guidReplacements)
 	if err := saveIdentityMapState(cfg, identityMap); err != nil {
 		return err
 	}
 	// Для DefinedType режем только hard forbidden: мягко исключенные типы
 	// должны сохраняться в составе и дотягиваться по RefDrivenInclusion.
 	blockedDefinedTypeObjects := blockedForbiddenObjectKeys
-
 	excludedPaths := make(map[string]struct{})
 	logXMLStepCompleted("collect cleanup sets", collectCleanupSetsStartedAt)
 
@@ -486,11 +496,13 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 			changed = normalizeRootConfiguration(ctx.Properties, cfg) || changed
 			changed = normalizeRootConfigurationInternalInfo(ctx.Doc) || changed
 			changed = normalizeRootConfigurationChildObjects(ctx.Doc, contexts, decisions) || changed
+			changed = cleanupRootConfigurationModuleTexts(ctx.Doc) || changed
 		}
 
 		if ctx.FileName == configDumpInfo {
-			changed = normalizeConfigDumpInfoRootNames(ctx.Doc, config.GetDumpInfo().ConfigName, cfg.Extension) || changed
-			changed = cleanupConfigDumpInfoRootServiceEntries(ctx.Doc, cfg.Extension) || changed
+			changed = normalizeConfigDumpInfoRootNames(ctx.Doc, config.GetDumpInfo().ConfigName, cfg.ExtensionName()) || changed
+			changed = cleanupConfigDumpInfoRootServiceEntries(ctx.Doc, cfg.ExtensionName()) || changed
+			changed = cleanupConfigDumpInfoForbiddenMetadata(ctx.Doc, blockedForbiddenObjectKeys) || changed
 			changed = cleanupConfigDumpInfoNonNativeChildren(ctx.Doc, contexts, decisions, searchResultState.PreservedConfigDumpInfo) || changed
 		}
 
@@ -576,11 +588,15 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 		if ctx.OwnerKind != "DefinedType" && ctx.OwnerKind != "EventSubscription" {
 			changed = cleanupExcludedReferences(ctx.Doc, excludedRefs, excludedMetadataPrefixes, truncatedKeys, truncatedChildPrefixes) || changed
 		}
-		bindingTargets := collectMetadataBindingTargets(ctx.Doc, ctx.OwnerKey, baseBindings, decisions, adoptedStubMetaDataRules)
+		bindingTargets := bindingTargetsByDoc[ctx.Doc]
 		changed = replaceGUIDsInDoc(ctx.Doc, guidReplacements) || changed
+		changed = replaceBaseBindingGUIDsInDoc(ctx.Doc, baseBindingReplacements) || changed
 		if decision.Belonging != "Native" && ctx.Metadata && isTopLevelMetadataFile(ctx) &&
 			ctx.OwnerKey != "Configuration" && ctx.OwnerKey != "Language.Русский" {
 			changed = ensureAdoptedExtendedConfigurationObjects(ctx.Doc, bindingTargets) || changed
+		}
+		if ctx.Metadata && isTopLevelMetadataFile(ctx) {
+			changed = cleanupForbiddenChildMetadataPaths(ctx.Doc, ctx.OwnerKey, forbiddenChildMetadataPaths) || changed
 		}
 
 		indexLiveCommandReferences(liveCommandRefs, ctx, decision, excludedPaths)
@@ -610,7 +626,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 
 	log.Printf("xml step: finalize retained owner commands")
 	finalizeRetainedOwnerCommandsStartedAt := time.Now()
-	finalizationStats, err := finalizeRetainedOwnerCommands(contexts, indexes, decisions, excludedPaths, adoptedStubMetaDataRules, formDynamicListContracts, retainedOwnerCommandCandidates, retainedOwnerCommands, liveCommandRefs, searchResultState)
+	finalizationStats, err := finalizeRetainedOwnerCommands(contexts, indexes, decisions, excludedPaths, adoptedStubMetaDataRules, formDynamicListContracts, retainedOwnerCommandCandidates, retainedOwnerCommands, liveCommandRefs, searchResultState, blockedForbiddenObjectKeys)
 	if err != nil {
 		return err
 	}
@@ -821,6 +837,12 @@ func buildChangeFilesState(cfg *config.Configuration, dir string) (*changeFilesS
 		return nil, err
 	}
 
+	targetMetadataKeys, err := collectTargetXMLDumpMetadataKeys(cfg)
+	if err != nil {
+		return nil, err
+	}
+	applyTargetMetadataIntersection(decisions, targetMetadataKeys)
+
 	log.Printf("xml step: promote referenced objects")
 	promoteReferencedObjectsStartedAt := time.Now()
 	referenceGraph := collectReferenceGraph(contexts, cfg, primaryNativeObjects, decisions, searchResultState)
@@ -834,6 +856,7 @@ func buildChangeFilesState(cfg *config.Configuration, dir string) (*changeFilesS
 	logXMLStepCompleted("promote referenced objects", promoteReferencedObjectsStartedAt, fmt.Sprintf("decisions=%d", len(decisions)))
 
 	collectCleanupSetsStartedAt := time.Now()
+	forbiddenChildMetadataPaths := collectForbiddenChildMetadataPaths(collectBlockedForbiddenObjectKeys(decisions, forbiddenAdoptedStubObjects))
 	excludedPaths := make(map[string]struct{})
 	for _, ctx := range contexts {
 		decision := decisions[ctx.OwnerKey]
@@ -850,8 +873,11 @@ func buildChangeFilesState(cfg *config.Configuration, dir string) (*changeFilesS
 			excludedPaths[ctx.Path] = struct{}{}
 		}
 	}
+	collectAdoptedCodeModulePaths(contexts, decisions, excludedPaths)
 	collectAdoptedCommonModuleModulePaths(dir, decisions, excludedPaths)
 	collectAdoptedCommandModulePaths(contexts, decisions, excludedPaths)
+	collectForbiddenMetadataFilePaths(contexts, forbiddenChildMetadataPaths, excludedPaths)
+	collectRootConfigurationModulePaths(dir, excludedPaths)
 	applySearchResultStateToExcludedPaths(searchResultState, excludedPaths)
 	logXMLStepCompleted("collect cleanup sets", collectCleanupSetsStartedAt, fmt.Sprintf("excluded_paths=%d", len(excludedPaths)))
 
@@ -1313,6 +1339,62 @@ func loadBaseBindings(cfg *config.Configuration) (map[string]string, error) {
 	return result, nil
 }
 
+func collectTargetXMLDumpMetadataKeys(cfg *config.Configuration) (map[string]struct{}, error) {
+	if cfg == nil {
+		return nil, nil
+	}
+	if strings.TrimSpace(cfg.Target.XMLDump) == "" {
+		log.Printf("xml step: skip target metadata intersection xml_dump is empty")
+		return nil, nil
+	}
+
+	info, err := os.Stat(cfg.Target.XMLDump)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось получить доступ к XML-дампу конфигурации-приемника %s: %w", cfg.Target.XMLDump, err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("путь xml_dump должен указывать на каталог XML-выгрузки конфигурации-приемника: %s", cfg.Target.XMLDump)
+	}
+
+	contexts, err := loadXMLContexts(cfg.Target.XMLDump)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось загрузить XML-дамп конфигурации-приемника %s: %w", cfg.Target.XMLDump, err)
+	}
+
+	result := make(map[string]struct{}, len(contexts))
+	for _, ctx := range contexts {
+		if ctx == nil || !ctx.Metadata || !isTopLevelMetadataFile(ctx) || strings.TrimSpace(ctx.OwnerKey) == "" {
+			continue
+		}
+		result[ctx.OwnerKey] = struct{}{}
+	}
+
+	return result, nil
+}
+
+func applyTargetMetadataIntersection(decisions map[string]objectDecision, targetMetadataKeys map[string]struct{}) {
+	if len(decisions) == 0 || len(targetMetadataKeys) == 0 {
+		return
+	}
+
+	for key, decision := range decisions {
+		if decision.Excluded {
+			continue
+		}
+		kind, _ := splitObjectKey(key)
+		if kind != "DefinedType" && kind != "EventSubscription" {
+			continue
+		}
+		if _, exists := targetMetadataKeys[key]; exists {
+			continue
+		}
+		decision.Excluded = true
+		decision.Belonging = ""
+		decision.Truncated = false
+		decisions[key] = decision
+	}
+}
+
 func normalizeGUIDValue(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -1494,6 +1576,34 @@ func collectBlockedForbiddenObjectKeys(decisions map[string]objectDecision, forb
 		result[key] = struct{}{}
 	}
 	return result
+}
+
+func collectForbiddenChildMetadataPaths(forbidden map[string]struct{}) map[string]map[string]struct{} {
+	result := make(map[string]map[string]struct{})
+	for path := range forbidden {
+		ownerKey := metadataDecisionKey(path)
+		if ownerKey == "" || ownerKey == path {
+			continue
+		}
+		if result[ownerKey] == nil {
+			result[ownerKey] = make(map[string]struct{})
+		}
+		result[ownerKey][path] = struct{}{}
+	}
+	return result
+}
+
+func isForbiddenMetadataPath(forbidden map[string]struct{}, path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" || len(forbidden) == 0 {
+		return false
+	}
+	for key := range forbidden {
+		if key == path || strings.HasPrefix(key, path+".") || strings.HasPrefix(path, key+".") {
+			return true
+		}
+	}
+	return false
 }
 
 func collectExcludedDecisionKeys(decisions map[string]objectDecision) map[string]struct{} {
@@ -2790,6 +2900,7 @@ type searchResultParsedMethod struct {
 	HeaderLine     string
 	BodyLines      []string
 	GeneratedName  string
+	DirectTransfer bool
 }
 
 func newSearchResultState() *searchResultState {
@@ -2905,7 +3016,7 @@ func collectSearchResultState(
 		state.ExpectedAdoptedObjects[key] = struct{}{}
 
 		for _, place := range places {
-			if err := registerSearchResultPlace(state, dir, topCtx, place, markerGroups, cfg.Prefix, cfg.IsExactSearchResultTemplatesEnabled(), searchResultDiagnosticsPath(cfg)); err != nil {
+			if err := registerSearchResultPlace(state, dir, topCtx, place, markerGroups, cfg.ExtensionPrefix(), cfg.IsExactSearchResultTemplatesEnabled(), searchResultDiagnosticsPath(cfg)); err != nil {
 				return nil, err
 			}
 		}
@@ -3324,7 +3435,12 @@ func buildSearchResultModuleContent(modulePath string, groups []string, markerGr
 		outsideBlock = outsideBlock[:0]
 
 		allMethodNames[method.Name] = struct{}{}
-		method.GeneratedName = prefix + method.Name
+		method.DirectTransfer = shouldTransferSearchResultMethodDirectly(method.Name)
+		if method.DirectTransfer {
+			method.GeneratedName = method.Name
+		} else {
+			method.GeneratedName = prefix + method.Name
+		}
 		allMethods = append(allMethods, method)
 		i = next
 	}
@@ -3351,6 +3467,9 @@ func buildSearchResultModuleContent(modulePath string, groups []string, markerGr
 	}
 
 	for _, method := range selectedMethods {
+		if method.DirectTransfer {
+			continue
+		}
 		if _, exists := allMethodNames[method.GeneratedName]; exists {
 			return "", fmt.Errorf("в модуле %s уже существует метод %s; SearchResult не может безопасно наложить код", modulePath, method.GeneratedName)
 		}
@@ -3375,12 +3494,15 @@ func buildSearchResultModuleContent(modulePath string, groups []string, markerGr
 
 	for idx, method := range selectedMethods {
 		rendered = append(rendered, method.DirectiveLines...)
-		if method.IsFunction {
+		if method.DirectTransfer {
+			rendered = append(rendered, method.HeaderLine)
+		} else if method.IsFunction {
 			rendered = append(rendered, `&ИзменениеИКонтроль("`+method.Name+`")`)
+			rendered = append(rendered, renameSearchResultMethodHeader(method.HeaderLine, method.Name, method.GeneratedName))
 		} else {
 			rendered = append(rendered, `&После("`+method.Name+`")`)
+			rendered = append(rendered, renameSearchResultMethodHeader(method.HeaderLine, method.Name, method.GeneratedName))
 		}
-		rendered = append(rendered, renameSearchResultMethodHeader(method.HeaderLine, method.Name, method.GeneratedName))
 		rendered = append(rendered, method.BodyLines...)
 		if idx != len(selectedMethods)-1 {
 			rendered = append(rendered, "")
@@ -3589,6 +3711,11 @@ func renameSearchResultMethodHeader(headerLine, originalName, generatedName stri
 		return headerLine
 	}
 	return headerLine[:nameStart] + generatedName + headerLine[nameEnd:]
+}
+
+func shouldTransferSearchResultMethodDirectly(name string) bool {
+	name = strings.TrimSpace(name)
+	return strings.HasPrefix(name, "упо_") || strings.HasPrefix(name, "Подключаемый_упо")
 }
 
 func writeSearchResultModuleFiles(state *searchResultState, decisions map[string]objectDecision) error {
@@ -5783,6 +5910,54 @@ func replaceGUIDs(value string, replacements map[string]string) (string, bool) {
 	return replaced, changed
 }
 
+func replaceBaseBindingGUIDsInDoc(doc *etree.Document, replacements map[string]string) bool {
+	root := doc.Root()
+	if root == nil || len(replacements) == 0 {
+		return false
+	}
+
+	changed := false
+
+	var walk func(el *etree.Element)
+	walk = func(el *etree.Element) {
+		tag := strings.ToLower(localName(el.Tag))
+		if tag != "classid" {
+			replacedText, textChanged := replaceGUIDs(el.Text(), replacements)
+			if textChanged {
+				el.SetText(replacedText)
+				changed = true
+			}
+		}
+
+		hasProperties := el.FindElement("./Properties") != nil
+		isMetadataDumpEntry := strings.EqualFold(localName(el.Tag), "Metadata")
+		for i, attr := range el.Attr {
+			key := localName(attr.Key)
+			if strings.EqualFold(key, "ClassId") {
+				continue
+			}
+			if strings.EqualFold(key, "uuid") && hasProperties {
+				continue
+			}
+			if strings.EqualFold(key, "id") && isMetadataDumpEntry {
+				continue
+			}
+			replacedValue, valueChanged := replaceGUIDs(attr.Value, replacements)
+			if valueChanged {
+				el.Attr[i].Value = replacedValue
+				changed = true
+			}
+		}
+
+		for _, child := range el.ChildElements() {
+			walk(child)
+		}
+	}
+
+	walk(root)
+	return changed
+}
+
 func collectMetadataBindingTargets(
 	doc *etree.Document,
 	ownerKey string,
@@ -5805,9 +5980,11 @@ func collectMetadataBindingTargets(
 		uuid := normalizeGUIDValue(el.SelectAttrValue("uuid", ""))
 		if uuid != "" && el.FindElement("./Properties") != nil {
 			baseObjectID := uuid
+			hasBinding := false
 			if shouldTrackIdentityMetadataPath(metadataPath, decisions, adoptedStubMetaDataRules) {
 				if bindingID := normalizeGUIDValue(baseBindings[metadataPath]); bindingID != "" {
 					baseObjectID = bindingID
+					hasBinding = true
 					log.Printf("binding applied: metadata=%s base_object_id=%s", metadataPath, bindingID)
 				} else {
 					log.Printf("missing base binding: metadata=%s", metadataPath)
@@ -5815,7 +5992,9 @@ func collectMetadataBindingTargets(
 			}
 			result[el] = metadataBindingTarget{
 				MetadataPath: metadataPath,
+				CurrentID:    uuid,
 				BaseObjectID: baseObjectID,
+				HasBinding:   hasBinding,
 			}
 		}
 
@@ -5838,6 +6017,50 @@ func collectMetadataBindingTargets(
 	}
 
 	walk(target, ownerKey)
+	return result
+}
+
+func collectMetadataBindingTargetsByDoc(
+	contexts []*FileProcessingContext,
+	baseBindings map[string]string,
+	decisions map[string]objectDecision,
+	adoptedStubMetaDataRules map[string]adoptedStubMetaDataRule,
+) map[*etree.Document]map[*etree.Element]metadataBindingTarget {
+	result := make(map[*etree.Document]map[*etree.Element]metadataBindingTarget)
+	for _, ctx := range contexts {
+		if ctx == nil || ctx.Doc == nil || ctx.OwnerKey == "" {
+			continue
+		}
+		targets := collectMetadataBindingTargets(ctx.Doc, ctx.OwnerKey, baseBindings, decisions, adoptedStubMetaDataRules)
+		if len(targets) == 0 {
+			continue
+		}
+		result[ctx.Doc] = targets
+	}
+	return result
+}
+
+func collectBaseBindingReferenceReplacements(
+	bindingTargetsByDoc map[*etree.Document]map[*etree.Element]metadataBindingTarget,
+	guidReplacements map[string]string,
+) map[string]string {
+	result := make(map[string]string)
+	for _, targets := range bindingTargetsByDoc {
+		for _, target := range targets {
+			if !target.HasBinding {
+				continue
+			}
+			currentID := normalizeGUIDValue(target.CurrentID)
+			baseObjectID := normalizeGUIDValue(target.BaseObjectID)
+			if currentID == "" || baseObjectID == "" {
+				continue
+			}
+			result[currentID] = baseObjectID
+			if extensionID := normalizeGUIDValue(guidReplacements[currentID]); extensionID != "" {
+				result[extensionID] = baseObjectID
+			}
+		}
+	}
 	return result
 }
 
@@ -6226,7 +6449,18 @@ func normalizeRootConfiguration(properties *etree.Element, cfg *config.Configura
 		return false
 	}
 
-	name := strings.TrimSpace(cfg.Extension)
+	configuration := properties.Parent()
+	identifier := ""
+	if configuration != nil {
+		identifier = normalizeGUIDValue(configuration.SelectAttrValue("uuid", ""))
+	}
+	if cfg != nil {
+		if configured := normalizeGUIDValue(cfg.ExtensionIdentifier()); configured != "" {
+			identifier = configured
+		}
+	}
+
+	name := strings.TrimSpace(cfg.ExtensionName())
 	if name == "" {
 		name = strings.TrimSpace(textOf(properties, "Name"))
 	}
@@ -6242,7 +6476,14 @@ func normalizeRootConfiguration(properties *etree.Element, cfg *config.Configura
 		compatibility = "Version8_3_27"
 	}
 
+	vendor := strings.TrimSpace(textOf(properties, "Vendor"))
+	version := strings.TrimSpace(textOf(properties, "Version"))
+
 	removeAllChildren(properties)
+	if configuration != nil && identifier != "" {
+		configuration.RemoveAttr("uuid")
+		configuration.CreateAttr("uuid", identifier)
+	}
 
 	addSimpleElement(properties, "ObjectBelonging", "Adopted")
 	addSimpleElement(properties, "Name", name)
@@ -6251,13 +6492,13 @@ func normalizeRootConfiguration(properties *etree.Element, cfg *config.Configura
 	addSimpleElement(properties, "Comment", "")
 	addSimpleElement(properties, "ConfigurationExtensionPurpose", "Customization")
 	addSimpleElement(properties, "KeepMappingToExtendedConfigurationObjectsByIDs", "true")
-	addSimpleElement(properties, "NamePrefix", cfg.Prefix)
+	addSimpleElement(properties, "NamePrefix", cfg.ExtensionPrefix())
 	addSimpleElement(properties, "ConfigurationExtensionCompatibilityMode", compatibility)
 	addSimpleElement(properties, "DefaultRunMode", "ManagedApplication")
 	addUsePurposes(properties)
 	addSimpleElement(properties, "ScriptVariant", "Russian")
-	addSimpleElement(properties, "Vendor", "")
-	addSimpleElement(properties, "Version", "")
+	addSimpleElement(properties, "Vendor", vendor)
+	addSimpleElement(properties, "Version", version)
 	addSimpleElement(properties, "Caption", "")
 	addSimpleElement(properties, "ShortCaption", "")
 	addSimpleElement(properties, "BriefInformation", "")
@@ -6418,6 +6659,38 @@ func cleanupConfigDumpInfoRootServiceEntries(doc *etree.Document, extension stri
 	return changed
 }
 
+func cleanupConfigDumpInfoForbiddenMetadata(doc *etree.Document, forbidden map[string]struct{}) bool {
+	if doc == nil || len(forbidden) == 0 {
+		return false
+	}
+
+	root := doc.Root()
+	if root == nil {
+		return false
+	}
+
+	changed := false
+	var walk func(*etree.Element)
+	walk = func(parent *etree.Element) {
+		children := parent.ChildElements()
+		for i := len(children) - 1; i >= 0; i-- {
+			child := children[i]
+			if strings.EqualFold(localName(child.Tag), "Metadata") {
+				name := strings.TrimSpace(child.SelectAttrValue("name", ""))
+				if isForbiddenMetadataPath(forbidden, name) {
+					parent.RemoveChild(child)
+					changed = true
+					continue
+				}
+			}
+			walk(child)
+		}
+	}
+
+	walk(root)
+	return changed
+}
+
 func cleanupRoleConfigurationRights(doc *etree.Document, configurationName string) bool {
 	if doc == nil {
 		return false
@@ -6447,6 +6720,31 @@ func cleanupRoleConfigurationRights(doc *etree.Document, configurationName strin
 		changed = true
 	}
 
+	return changed
+}
+
+func cleanupRootConfigurationModuleTexts(doc *etree.Document) bool {
+	if doc == nil {
+		return false
+	}
+
+	root := doc.Root()
+	if root == nil {
+		return false
+	}
+
+	configuration := metadataTargetElement(doc)
+	if configuration == nil || !strings.EqualFold(localName(configuration.Tag), "Configuration") {
+		return false
+	}
+
+	changed := false
+	for _, tag := range []string{"ManagedApplicationModule", "SessionModule", "ExternalConnectionModule", "OrdinaryApplicationModule"} {
+		for _, el := range configuration.FindElements("./" + tag) {
+			configuration.RemoveChild(el)
+			changed = true
+		}
+	}
 	return changed
 }
 
@@ -6778,6 +7076,35 @@ func isDisallowedAdoptedModuleMetadata(name string) bool {
 		strings.HasSuffix(name, ".ValueManagerModule")
 }
 
+func collectAdoptedCodeModulePaths(contexts []*FileProcessingContext, decisions map[string]objectDecision, excludedPaths map[string]struct{}) {
+	if len(contexts) == 0 || len(decisions) == 0 || excludedPaths == nil {
+		return
+	}
+
+	for _, ctx := range contexts {
+		if ctx == nil || !ctx.Metadata || !isTopLevelMetadataFile(ctx) {
+			continue
+		}
+
+		decision, ok := decisions[ctx.OwnerKey]
+		if !ok || decision.Excluded || decision.Belonging == "Native" {
+			continue
+		}
+
+		objectDir := strings.TrimSuffix(ctx.Path, filepath.Ext(ctx.Path))
+		if objectDir == "" {
+			continue
+		}
+
+		for _, name := range []string{"ManagerModule.bsl", "ObjectModule.bsl", "ValueManagerModule.bsl"} {
+			modulePath := filepath.Join(objectDir, "Ext", name)
+			if _, err := os.Stat(modulePath); err == nil {
+				excludedPaths[modulePath] = struct{}{}
+			}
+		}
+	}
+}
+
 func collectAdoptedCommonModuleModulePaths(root string, decisions map[string]objectDecision, excludedPaths map[string]struct{}) {
 	if root == "" || len(decisions) == 0 || excludedPaths == nil {
 		return
@@ -6797,6 +7124,66 @@ func collectAdoptedCommonModuleModulePaths(root string, decisions map[string]obj
 		if _, err := os.Stat(modulePath); err == nil {
 			excludedPaths[modulePath] = struct{}{}
 		}
+	}
+}
+
+func collectForbiddenMetadataFilePaths(contexts []*FileProcessingContext, forbiddenByOwner map[string]map[string]struct{}, excludedPaths map[string]struct{}) {
+	if len(contexts) == 0 || len(forbiddenByOwner) == 0 || excludedPaths == nil {
+		return
+	}
+
+	for _, ctx := range contexts {
+		if ctx == nil || !ctx.Metadata || !isTopLevelMetadataFile(ctx) {
+			continue
+		}
+
+		forbidden := forbiddenByOwner[ctx.OwnerKey]
+		if len(forbidden) == 0 {
+			continue
+		}
+
+		objectDir := strings.TrimSuffix(ctx.Path, filepath.Ext(ctx.Path))
+		if objectDir == "" {
+			continue
+		}
+
+		for path := range forbidden {
+			parts := strings.Split(strings.TrimSpace(path), ".")
+			if len(parts) < 4 {
+				continue
+			}
+			switch parts[2] {
+			case "Form":
+				formName := strings.TrimSpace(parts[3])
+				if formName == "" {
+					continue
+				}
+				excludedPaths[filepath.Join(objectDir, "Forms", formName+".xml")] = struct{}{}
+				excludedPaths[filepath.Join(objectDir, "Forms", formName, "Ext", "Form.xml")] = struct{}{}
+				excludedPaths[filepath.Join(objectDir, "Forms", formName, "Ext", "Form", "Module.bsl")] = struct{}{}
+			case "Command":
+				commandName := strings.TrimSpace(parts[3])
+				if commandName == "" {
+					continue
+				}
+				excludedPaths[filepath.Join(objectDir, "Commands", commandName, "Ext", "CommandModule.bsl")] = struct{}{}
+			case "ManagerModule":
+				excludedPaths[filepath.Join(objectDir, "Ext", "ManagerModule.bsl")] = struct{}{}
+			case "ObjectModule":
+				excludedPaths[filepath.Join(objectDir, "Ext", "ObjectModule.bsl")] = struct{}{}
+			case "ValueManagerModule":
+				excludedPaths[filepath.Join(objectDir, "Ext", "ValueManagerModule.bsl")] = struct{}{}
+			}
+		}
+	}
+}
+
+func collectRootConfigurationModulePaths(root string, excludedPaths map[string]struct{}) {
+	if strings.TrimSpace(root) == "" || excludedPaths == nil {
+		return
+	}
+	for _, name := range []string{"ManagedApplicationModule.bsl", "SessionModule.bsl", "ExternalConnectionModule.bsl", "OrdinaryApplicationModule.bsl"} {
+		excludedPaths[filepath.Join(root, "Ext", name)] = struct{}{}
 	}
 }
 
@@ -7030,6 +7417,59 @@ func normalizeSearchResultChildObjects(childObjects *etree.Element, overlay sear
 		changed = true
 	}
 	return changed
+}
+
+func cleanupForbiddenChildMetadataPaths(doc *etree.Document, ownerKey string, forbiddenByOwner map[string]map[string]struct{}) bool {
+	if doc == nil || ownerKey == "" || len(forbiddenByOwner) == 0 {
+		return false
+	}
+
+	forbidden := forbiddenByOwner[ownerKey]
+	if len(forbidden) == 0 {
+		return false
+	}
+
+	target := metadataTargetElement(doc)
+	if target == nil {
+		return false
+	}
+
+	var walk func(*etree.Element, string) bool
+	walk = func(parent *etree.Element, currentPath string) bool {
+		childObjects := parent.FindElement("./ChildObjects")
+		if childObjects == nil {
+			return false
+		}
+
+		changed := false
+		for _, token := range append([]etree.Token(nil), childObjects.Child...) {
+			child, ok := token.(*etree.Element)
+			if !ok {
+				continue
+			}
+
+			kind := strings.TrimSpace(localName(child.Tag))
+			name := strings.TrimSpace(metadataChildName(child))
+			if kind == "" || name == "" {
+				continue
+			}
+
+			childPath := currentPath + "." + kind + "." + name
+			if isForbiddenMetadataPath(forbidden, childPath) {
+				childObjects.RemoveChild(child)
+				changed = true
+				continue
+			}
+
+			if walk(child, childPath) {
+				changed = true
+			}
+		}
+
+		return changed
+	}
+
+	return walk(target, ownerKey)
 }
 
 func normalizeTruncatedMetadataStub(doc *etree.Document, properties *etree.Element) bool {
@@ -7620,7 +8060,11 @@ func metadataChildName(el *etree.Element) string {
 		return name
 	}
 
-	return strings.TrimSpace(textOfFirst(el, "./Properties/Name"))
+	if name := strings.TrimSpace(textOfFirst(el, "./Properties/Name")); name != "" {
+		return name
+	}
+
+	return strings.TrimSpace(el.Text())
 }
 
 func normalizeSubsystemChildObjects(doc *etree.Document, parentChain []string, contexts []*FileProcessingContext, decisions map[string]objectDecision) bool {
@@ -8062,8 +8506,10 @@ func finalizeRetainedOwnerCommands(
 	retainedOwnerCommands map[string]map[string]struct{},
 	liveCommandRefs *liveCommandReferenceIndex,
 	searchResultState *searchResultState,
+	forbiddenObjectKeys map[string]struct{},
 ) (*retainedOwnerCommandFinalizationStats, error) {
 	stats := &retainedOwnerCommandFinalizationStats{}
+	forbiddenChildMetadataPaths := collectForbiddenChildMetadataPaths(forbiddenObjectKeys)
 	removedPaths, dirtyOwners := diffRetainedOwnerCommands(retainedOwnerCommandCandidates, retainedOwnerCommands)
 	if len(removedPaths) == 0 {
 		for ownerKey := range adoptedStubMetaDataRules {
@@ -8122,6 +8568,7 @@ func finalizeRetainedOwnerCommands(
 		} else {
 			changed = normalizeAdoptedObjectComposition(ctx.Doc, ctx.OwnerKind, overlay) || changed
 		}
+		changed = cleanupForbiddenChildMetadataPaths(ctx.Doc, ownerKey, forbiddenChildMetadataPaths) || changed
 		changed = stripPreserveNativeObjectBelongingMarkers(ctx.Doc) || changed
 		stats.FinalizedOwnerDocs++
 		if !changed {
@@ -8135,7 +8582,8 @@ func finalizeRetainedOwnerCommands(
 	}
 
 	if configDumpCtx := findContextByRelPath(indexes, contexts, configDumpInfo); configDumpCtx != nil && configDumpCtx.Doc != nil {
-		changed := cleanupConfigDumpInfoNonNativeChildrenWithResolver(configDumpCtx.Doc, decisions, finalExists, preservedConfigDumpInfo)
+		changed := cleanupConfigDumpInfoForbiddenMetadata(configDumpCtx.Doc, forbiddenObjectKeys)
+		changed = cleanupConfigDumpInfoNonNativeChildrenWithResolver(configDumpCtx.Doc, decisions, finalExists, preservedConfigDumpInfo) || changed
 		if changed {
 			stats.ChangedFiles++
 			if err := configDumpCtx.Doc.WriteToFile(configDumpCtx.Path); err != nil {

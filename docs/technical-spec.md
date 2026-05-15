@@ -50,6 +50,8 @@ go build ./...
 - поддерживать обратную совместимость по устаревшим алиасам полей конфига
 - нормализовать пути до абсолютных
 - использовать `./configs/config.json`, если `--config` не передан
+- использовать `extension_properties.name` / `extension_properties.prefix` / `extension_properties.identifier` как основной блок свойств корня расширения; старые `extension` / `prefix` остаются backward-compatible alias
+- поддерживать `target.xml_dump` как optional XML-выгрузку конфигурации-приемника для cleanup `DefinedType` и `EventSubscription`
 
 Ключевой рабочий конфиг:
 - [`../configs/config.json`](../configs/config.json)
@@ -94,7 +96,8 @@ XML-конвейер должен классифицировать top-level о�
 Этап `ChangeFiles` должен:
 
 - нормализовать `Configuration.xml`, `ConfigDumpInfo.xml`, `Ext/*`
-- согласованно выставлять имя расширения и префикс из `extension` / `prefix`
+- согласованно выставлять имя расширения и префикс из `extension_properties`
+- сохранять стабильный `uuid` корня расширения из `extension_properties.identifier`
 - перестраивать `Configuration.xml/ChildObjects` по итоговым `decisions`
 - чистить служебные XML от ссылок на отсутствующие metadata-path
 - сохранять обязательный структурный каркас XML, даже если состав объекта минимизирован
@@ -177,6 +180,7 @@ XML-конвейер должен классифицировать top-level о�
 - снимает `Truncated` у уже выбранного `AdoptedStub`
 - сохраняет нужные child `Form` / `Command`, связанные файлы и whitelisted записи `ConfigDumpInfo.xml`
 - в конце rewrite накладывает текст модулей только для non-`Native` владельцев, используя `&После(...)` для `Процедура` и `&ИзменениеИКонтроль(...)` для `Функция`
+- если переносимый метод уже называется с префиксом `упо_` или `Подключаемый_упо`, такой метод переносится как есть, без добавления `&После`
 
 Этот слой работает cache-first: `searchingTemplateText.json`, `упо_SearchResult` и тексты модулей читаются один раз до основного XML-прохода, после чего используются только кеши `searchResultState`.
 
@@ -266,6 +270,7 @@ configs/base-bindings.json
 
 - `base_object_id` — идентификатор объекта конфигурации-приемника;
 - binding применяется только к Adopted-объектам.
+- binding не меняет `extension_id` самого объекта расширения; он задает `ExtendedConfigurationObject` и должен переписывать ссылки на связанный объект во всех итоговых XML-документах расширения.
 
 ### Источник binding identifiers
 
@@ -288,6 +293,13 @@ Binding identifiers не извлекаются автоматически.
 - `base_object_id` — привязку к объекту конфигурации-приемника.
 
 Эти идентификаторы нельзя смешивать.
+
+Если для metadata-path задан `base_object_id`, система должна:
+
+- применить его к самому Adopted metadata-объекту через `ExtendedConfigurationObject`;
+- отдельно переписать ссылки на этот объект в остальных XML-слоях итогового расширения;
+- не подменять собственный `uuid` metadata-объекта внутри расширения;
+- не менять `ClassId`.
 
 ### Обязательные ограничения
 

@@ -105,6 +105,69 @@ func TestLoadConfigESetsDerivedIdentityPaths(t *testing.T) {
 	}
 }
 
+func TestLoadConfigEBackfillsExtensionPropertiesFromLegacyFields(t *testing.T) {
+	tempDir := t.TempDir()
+	configDir := filepath.Join(tempDir, "configs")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir configs: %v", err)
+	}
+
+	configPath := filepath.Join(configDir, "config.json")
+	configJSON := `{
+		"extension": "ТестовоеРасширение",
+		"prefix": "тст_",
+		"input_path": "/input",
+		"output_path": "/output/demo.cfe",
+		"conversion_type": "srcConvert"
+	}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadConfigE(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfigE: %v", err)
+	}
+
+	if cfg.ExtensionProperties.Name != "ТестовоеРасширение" {
+		t.Fatalf("unexpected extension_properties.name: got %q", cfg.ExtensionProperties.Name)
+	}
+	if cfg.ExtensionProperties.Prefix != "тст_" {
+		t.Fatalf("unexpected extension_properties.prefix: got %q", cfg.ExtensionProperties.Prefix)
+	}
+}
+
+func TestLoadConfigEResolvesTargetXMLDumpPath(t *testing.T) {
+	tempDir := t.TempDir()
+	configDir := filepath.Join(tempDir, "configs")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir configs: %v", err)
+	}
+
+	configPath := filepath.Join(configDir, "config.json")
+	configJSON := `{
+		"input_path": "/input",
+		"output_path": "/output/demo.cfe",
+		"target": {
+			"xml_dump": "/receiver"
+		},
+		"conversion_type": "srcConvert"
+	}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadConfigE(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfigE: %v", err)
+	}
+
+	expected := filepath.Join(tempDir, "receiver")
+	if cfg.Target.XMLDump != expected {
+		t.Fatalf("unexpected target xml_dump path: got %q want %q", cfg.Target.XMLDump, expected)
+	}
+}
+
 func TestLoadConfigEPreservesNormalizedConfigPath(t *testing.T) {
 	tempDir := t.TempDir()
 	configDir := filepath.Join(tempDir, "configs")
@@ -142,5 +205,16 @@ func TestConfigurationDefaultsToExactSearchResultTemplates(t *testing.T) {
 	cfg.AdditionalProcessing.UseExactTemplates = &disabled
 	if cfg.IsExactSearchResultTemplatesEnabled() {
 		t.Fatalf("expected explicit soft SearchResult matching to disable exact mode")
+	}
+}
+
+func TestConfigurationDefaultsExtensionIdentifier(t *testing.T) {
+	cfg, err := LoadDefaultConfigE()
+	if err != nil {
+		t.Fatalf("LoadDefaultConfigE: %v", err)
+	}
+
+	if got := cfg.ExtensionIdentifier(); got != "83b63dda-4eec-11f1-b61f-e0d55ee14481" {
+		t.Fatalf("unexpected default extension identifier: got %q", got)
 	}
 }

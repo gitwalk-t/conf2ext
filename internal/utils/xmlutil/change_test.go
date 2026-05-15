@@ -163,6 +163,12 @@ func TestCollectMetadataBindingTargetsAppliesOverridesOnlyToTrackedAdoptedPaths(
 	if got := targets[target].BaseObjectID; got != "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" {
 		t.Fatalf("unexpected top-level binding: got %q", got)
 	}
+	if got := targets[target].CurrentID; got != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("unexpected top-level current id: got %q", got)
+	}
+	if !targets[target].HasBinding {
+		t.Fatalf("expected top-level binding to be marked as explicit")
+	}
 
 	command := target.FindElement("./ChildObjects/*[local-name()='Command']")
 	if command == nil {
@@ -178,6 +184,171 @@ func TestCollectMetadataBindingTargetsAppliesOverridesOnlyToTrackedAdoptedPaths(
 	}
 	if got := targets[attribute].BaseObjectID; got != "33333333-3333-3333-3333-333333333333" {
 		t.Fatalf("retained native attribute must keep original base object id, got %q", got)
+	}
+	if targets[attribute].HasBinding {
+		t.Fatalf("retained native attribute must not be marked as explicit binding")
+	}
+}
+
+func TestEnsureAdoptedExtendedConfigurationObjectsAppliesBaseBindingToObjectItself(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog uuid="11111111-1111-1111-1111-111111111111">
+    <Properties>
+      <Name>Организации</Name>
+    </Properties>
+  </Catalog>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read metadata xml: %v", err)
+	}
+
+	targets := collectMetadataBindingTargets(
+		doc,
+		"Catalog.Организации",
+		map[string]string{
+			"Catalog.Организации": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		},
+		map[string]objectDecision{
+			"Catalog.Организации": {Belonging: "AdoptedStub"},
+		},
+		nil,
+	)
+
+	if !ensureAdoptedExtendedConfigurationObjects(doc, targets) {
+		t.Fatalf("expected binding to be written to adopted object")
+	}
+
+	properties := doc.FindElement("//*[local-name()='Catalog']/*[local-name()='Properties']")
+	if properties == nil {
+		t.Fatalf("expected catalog properties")
+	}
+	if got := textOf(properties, "ExtendedConfigurationObject"); got != "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" {
+		t.Fatalf("expected base binding on object itself, got %q", got)
+	}
+}
+
+func TestBaseBindingReferenceReplacementPropagatesToOtherObjectReferences(t *testing.T) {
+	t.Parallel()
+
+	boundDoc := etree.NewDocument()
+	if err := boundDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog uuid="11111111-1111-1111-1111-111111111111">
+    <Properties>
+      <Name>Организации</Name>
+    </Properties>
+  </Catalog>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read bound metadata xml: %v", err)
+	}
+
+	refDoc := etree.NewDocument()
+	if err := refDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog>
+    <Properties>
+      <Name>ПодразделенияОрганизаций</Name>
+      <Owners>
+        <xr:Item xmlns:xr="http://v8.1c.ru/8.3/xcf/readable">11111111-1111-1111-1111-111111111111</xr:Item>
+      </Owners>
+    </Properties>
+  </Catalog>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read referencing metadata xml: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{
+		{
+			Doc:      boundDoc,
+			OwnerKey: "Catalog.Организации",
+		},
+	}
+	targetsByDoc := collectMetadataBindingTargetsByDoc(
+		contexts,
+		map[string]string{
+			"Catalog.Организации": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		},
+		map[string]objectDecision{
+			"Catalog.Организации": {Belonging: "AdoptedStub"},
+		},
+		nil,
+	)
+
+	replacements := collectBaseBindingReferenceReplacements(targetsByDoc, map[string]string{
+		"11111111-1111-1111-1111-111111111111": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+	})
+
+	if !replaceBaseBindingGUIDsInDoc(refDoc, replacements) {
+		t.Fatalf("expected other object references to be updated from base binding")
+	}
+
+	if got := textOfFirst(refDoc.Root(), ".//*[local-name()='Owners']/*[1]"); got != "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" {
+		t.Fatalf("expected owner reference to be rebound to base object id, got %q", got)
+	}
+}
+
+func TestReplaceBaseBindingGUIDsInDocDoesNotReplaceClassID(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog>
+    <ClassId>11111111-1111-1111-1111-111111111111</ClassId>
+    <ExtendedConfigurationObject>11111111-1111-1111-1111-111111111111</ExtendedConfigurationObject>
+  </Catalog>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read xml: %v", err)
+	}
+
+	if !replaceBaseBindingGUIDsInDoc(doc, map[string]string{
+		"11111111-1111-1111-1111-111111111111": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+	}) {
+		t.Fatalf("expected base binding replacement")
+	}
+
+	if got := textOfFirst(doc.Root(), ".//*[local-name()='ClassId']"); got != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("expected ClassId to stay unchanged, got %q", got)
+	}
+	if got := textOfFirst(doc.Root(), ".//*[local-name()='ExtendedConfigurationObject']"); got != "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" {
+		t.Fatalf("expected non-ClassId GUID to be replaced, got %q", got)
+	}
+}
+
+func TestReplaceBaseBindingGUIDsInDocDoesNotReplaceNativeObjectOwnUUID(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog uuid="11111111-1111-1111-1111-111111111111">
+    <Properties>
+      <Name>Организации</Name>
+    </Properties>
+    <Owner>11111111-1111-1111-1111-111111111111</Owner>
+  </Catalog>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read xml: %v", err)
+	}
+
+	if !replaceBaseBindingGUIDsInDoc(doc, map[string]string{
+		"11111111-1111-1111-1111-111111111111": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+	}) {
+		t.Fatalf("expected replacement in reference fields")
+	}
+
+	target := metadataTargetElement(doc)
+	if target == nil {
+		t.Fatalf("expected metadata target")
+	}
+	if got := target.SelectAttrValue("uuid", ""); got != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("expected native object own uuid to stay unchanged, got %q", got)
+	}
+	if got := textOfFirst(doc.Root(), ".//*[local-name()='Owner']"); got != "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" {
+		t.Fatalf("expected reference field to be rebound, got %q", got)
 	}
 }
 
@@ -1153,6 +1324,143 @@ func TestExcludedPrimaryNativeObjectReferencedBySubsystemStaysExcluded(t *testin
 	}
 }
 
+func TestNonNativeVersioningSubsystemDoesNotRestoreEventSubscriptionsOrHandlerModule(t *testing.T) {
+	t.Parallel()
+
+	configurationDoc := etree.NewDocument()
+	if err := configurationDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Configuration>
+    <ChildObjects>
+      <EventSubscription>ЗаписатьВерсиюОбъекта</EventSubscription>
+      <EventSubscription>ОчиститьИнформациюОбАвтореВерсии</EventSubscription>
+    </ChildObjects>
+  </Configuration>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read configuration xml: %v", err)
+	}
+
+	subsystemDoc := etree.NewDocument()
+	if err := subsystemDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <Subsystem>
+    <Properties>
+      <Name>ВерсионированиеОбъектов</Name>
+      <Content>
+        <xr:Item xsi:type="xr:MDObjectRef">EventSubscription.ЗаписатьВерсиюОбъекта</xr:Item>
+        <xr:Item xsi:type="xr:MDObjectRef">EventSubscription.ОчиститьИнформациюОбАвтореВерсии</xr:Item>
+        <xr:Item xsi:type="xr:MDObjectRef">CommonModule.ВерсионированиеОбъектовСобытия</xr:Item>
+      </Content>
+    </Properties>
+  </Subsystem>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read subsystem xml: %v", err)
+	}
+
+	eventSubscriptionDoc := etree.NewDocument()
+	if err := eventSubscriptionDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <EventSubscription>
+    <Properties>
+      <Name>ЗаписатьВерсиюОбъекта</Name>
+      <Handler>CommonModule.ВерсионированиеОбъектовСобытия.ЗаписатьВерсиюОбъекта</Handler>
+    </Properties>
+  </EventSubscription>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read event subscription xml: %v", err)
+	}
+
+	eventSubscriptionCleanupDoc := etree.NewDocument()
+	if err := eventSubscriptionCleanupDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <EventSubscription>
+    <Properties>
+      <Name>ОчиститьИнформациюОбАвтореВерсии</Name>
+      <Handler>CommonModule.ВерсионированиеОбъектовСобытия.УдалитьИнформациюОбАвтореВерсии</Handler>
+    </Properties>
+  </EventSubscription>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read cleanup event subscription xml: %v", err)
+	}
+
+	commonModuleDoc := etree.NewDocument()
+	if err := commonModuleDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <CommonModule>
+    <Properties>
+      <Name>ВерсионированиеОбъектовСобытия</Name>
+    </Properties>
+  </CommonModule>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read common module xml: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{
+		{
+			OwnerKey:  "Configuration",
+			OwnerKind: "Configuration",
+			Doc:       configurationDoc,
+		},
+		{
+			OwnerKey:  "Subsystem.ВерсионированиеОбъектов",
+			OwnerKind: "Subsystem",
+			OwnerName: "ВерсионированиеОбъектов",
+			Doc:       subsystemDoc,
+		},
+		{
+			OwnerKey:  "EventSubscription.ЗаписатьВерсиюОбъекта",
+			OwnerKind: "EventSubscription",
+			OwnerName: "ЗаписатьВерсиюОбъекта",
+			Doc:       eventSubscriptionDoc,
+		},
+		{
+			OwnerKey:  "EventSubscription.ОчиститьИнформациюОбАвтореВерсии",
+			OwnerKind: "EventSubscription",
+			OwnerName: "ОчиститьИнформациюОбАвтореВерсии",
+			Doc:       eventSubscriptionCleanupDoc,
+		},
+		{
+			OwnerKey:  "CommonModule.ВерсионированиеОбъектовСобытия",
+			OwnerKind: "CommonModule",
+			OwnerName: "ВерсионированиеОбъектовСобытия",
+			Doc:       commonModuleDoc,
+		},
+	}
+
+	decisions := map[string]objectDecision{
+		"Configuration":                                {Belonging: "AdoptedStub"},
+		"Subsystem.ВерсионированиеОбъектов":            {Belonging: "AdoptedStub"},
+		"EventSubscription.ЗаписатьВерсиюОбъекта":      {Excluded: true},
+		"EventSubscription.ОчиститьИнформациюОбАвтореВерсии": {Excluded: true},
+		"CommonModule.ВерсионированиеОбъектовСобытия": {Excluded: true},
+	}
+
+	referenceGraph := collectReferenceGraph(contexts, &config.Configuration{}, nil, decisions, nil)
+	incomingReferenceGraph := collectIncomingReferenceGraph(referenceGraph)
+
+	promoteReferencedObjectsToAdoptedStub(
+		contexts,
+		decisions,
+		&config.Configuration{},
+		referenceGraph,
+		incomingReferenceGraph,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	if decision := decisions["EventSubscription.ЗаписатьВерсиюОбъекта"]; !decision.Excluded || decision.Belonging != "" {
+		t.Fatalf("expected non-native subsystem and configuration to keep event subscription excluded, got %#v", decision)
+	}
+	if decision := decisions["EventSubscription.ОчиститьИнформациюОбАвтореВерсии"]; !decision.Excluded || decision.Belonging != "" {
+		t.Fatalf("expected cleanup event subscription to stay excluded, got %#v", decision)
+	}
+	if decision := decisions["CommonModule.ВерсионированиеОбъектовСобытия"]; !decision.Excluded || decision.Belonging != "" {
+		t.Fatalf("expected handler module to stay excluded when only non-native sources reference it, got %#v", decision)
+	}
+}
+
 func TestNormalizeSubsystemContentRemovesMissingMetadataRefs(t *testing.T) {
 	t.Parallel()
 
@@ -2102,11 +2410,13 @@ func TestNormalizeRootConfigurationKeepsAdoptedBelonging(t *testing.T) {
 	doc := etree.NewDocument()
 	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
 <MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
-  <Configuration>
+  <Configuration uuid="11111111-1111-1111-1111-111111111111">
     <Properties>
       <ObjectBelonging>Adopted</ObjectBelonging>
       <Name>СтароеИмя</Name>
       <NamePrefix>old_</NamePrefix>
+      <Vendor>ООО Ромашка</Vendor>
+      <Version>1.2.3</Version>
     </Properties>
   </Configuration>
 </MetaDataObject>`); err != nil {
@@ -2119,8 +2429,11 @@ func TestNormalizeRootConfigurationKeepsAdoptedBelonging(t *testing.T) {
 	}
 
 	cfg := &config.Configuration{
-		Extension:       "УправлениеПроектами",
-		Prefix:          "упо_",
+		ExtensionProperties: config.ExtensionProperties{
+			Name:       "УправлениеПроектами",
+			Prefix:     "упо_",
+			Identifier: "83b63dda-4eec-11f1-b61f-e0d55ee14481",
+		},
 		PlatformVersion: "8.3.27.1540",
 	}
 
@@ -2130,6 +2443,229 @@ func TestNormalizeRootConfigurationKeepsAdoptedBelonging(t *testing.T) {
 
 	if got := textOf(properties, "ObjectBelonging"); got != "Adopted" {
 		t.Fatalf("expected root configuration belonging to stay Adopted, got %q", got)
+	}
+	if got := textOf(properties, "Vendor"); got != `ООО Ромашка` {
+		t.Fatalf("expected root configuration vendor to be preserved, got %q", got)
+	}
+	if got := textOf(properties, "Version"); got != "1.2.3" {
+		t.Fatalf("expected root configuration version to be preserved, got %q", got)
+	}
+	configuration := doc.FindElement("//*[local-name()='Configuration']")
+	if configuration == nil {
+		t.Fatalf("expected root configuration element")
+	}
+	if got := configuration.SelectAttrValue("uuid", ""); got != "83b63dda-4eec-11f1-b61f-e0d55ee14481" {
+		t.Fatalf("expected root configuration identifier to be preserved from config, got %q", got)
+	}
+}
+
+func TestApplyTargetMetadataIntersectionExcludesMissingDefinedTypeAndEventSubscription(t *testing.T) {
+	t.Parallel()
+
+	decisions := map[string]objectDecision{
+		"DefinedType.Тест":         {Belonging: "AdoptedStub"},
+		"EventSubscription.Тест":   {Belonging: "AdoptedStub"},
+		"Catalog.Тест":             {Belonging: "AdoptedStub"},
+		"DefinedType.Существующий": {Belonging: "AdoptedStub"},
+	}
+
+	applyTargetMetadataIntersection(decisions, map[string]struct{}{
+		"DefinedType.Существующий": {},
+	})
+
+	if !decisions["DefinedType.Тест"].Excluded {
+		t.Fatalf("expected missing defined type to be excluded by target intersection")
+	}
+	if !decisions["EventSubscription.Тест"].Excluded {
+		t.Fatalf("expected missing event subscription to be excluded by target intersection")
+	}
+	if decisions["Catalog.Тест"].Excluded {
+		t.Fatalf("expected non-target metadata kind to stay unchanged")
+	}
+	if decisions["DefinedType.Существующий"].Excluded {
+		t.Fatalf("expected existing defined type to stay included")
+	}
+}
+
+func TestBuildChangeFilesStateAppliesTargetDefinedTypeIntersectionBeforeRefDrivenPromotion(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	targetRoot := t.TempDir()
+
+	definedTypePath := filepath.Join(root, "DefinedTypes", "Тест.xml")
+	if err := os.MkdirAll(filepath.Dir(definedTypePath), 0o755); err != nil {
+		t.Fatalf("mkdir defined type dir: %v", err)
+	}
+	if err := os.WriteFile(definedTypePath, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <DefinedType>
+    <Properties>
+      <Name>Тест</Name>
+      <Type>
+        <Type>cfg:CatalogRef.Лишний</Type>
+      </Type>
+    </Properties>
+  </DefinedType>
+</MetaDataObject>`), 0o644); err != nil {
+		t.Fatalf("write defined type xml: %v", err)
+	}
+
+	catalogPath := filepath.Join(root, "Catalogs", "Лишний.xml")
+	if err := os.MkdirAll(filepath.Dir(catalogPath), 0o755); err != nil {
+		t.Fatalf("mkdir catalog dir: %v", err)
+	}
+	if err := os.WriteFile(catalogPath, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog>
+    <Properties>
+      <Name>Лишний</Name>
+    </Properties>
+  </Catalog>
+</MetaDataObject>`), 0o644); err != nil {
+		t.Fatalf("write catalog xml: %v", err)
+	}
+
+	targetCatalogPath := filepath.Join(targetRoot, "Catalogs", "Существующий.xml")
+	if err := os.MkdirAll(filepath.Dir(targetCatalogPath), 0o755); err != nil {
+		t.Fatalf("mkdir target catalog dir: %v", err)
+	}
+	if err := os.WriteFile(targetCatalogPath, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog>
+    <Properties>
+      <Name>Существующий</Name>
+    </Properties>
+  </Catalog>
+</MetaDataObject>`), 0o644); err != nil {
+		t.Fatalf("write target catalog xml: %v", err)
+	}
+
+	state, err := buildChangeFilesState(&config.Configuration{
+		IncludedNativeObjects: []string{"DefinedType.Тест"},
+		Target: config.Target{
+			XMLDump: targetRoot,
+		},
+	}, root)
+	if err != nil {
+		t.Fatalf("build change files state: %v", err)
+	}
+
+	if decision := state.decisions["DefinedType.Тест"]; !decision.Excluded {
+		t.Fatalf("expected missing defined type to be excluded by target intersection before promotion")
+	}
+	if decision := state.decisions["Catalog.Лишний"]; !decision.Excluded {
+		t.Fatalf("expected catalog reference from excluded defined type not to be promoted")
+	}
+}
+
+func TestCleanupForbiddenChildMetadataPathsRemovesForbiddenChildren(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog>
+    <Properties>
+      <Name>Пользователи</Name>
+    </Properties>
+    <ChildObjects>
+      <Form>ФормаВыбора</Form>
+      <Command>
+        <Properties>
+          <Name>ПользователиИнформационнойБазы</Name>
+        </Properties>
+      </Command>
+    </ChildObjects>
+  </Catalog>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read xml: %v", err)
+	}
+
+	changed := cleanupForbiddenChildMetadataPaths(doc, "Catalog.Пользователи", map[string]map[string]struct{}{
+		"Catalog.Пользователи": {
+			"Catalog.Пользователи.Form.ФормаВыбора":                    {},
+			"Catalog.Пользователи.Command.ПользователиИнформационнойБазы": {},
+		},
+	})
+	if !changed {
+		t.Fatalf("expected forbidden child cleanup to report change")
+	}
+
+	childObjects := doc.FindElement("//*[local-name()='ChildObjects']")
+	if childObjects == nil {
+		t.Fatalf("expected ChildObjects")
+	}
+	if len(childObjects.ChildElements()) != 0 {
+		t.Fatalf("expected forbidden children to be removed, got %d", len(childObjects.ChildElements()))
+	}
+}
+
+func TestCleanupConfigDumpInfoForbiddenMetadataRemovesExactAndNestedEntries(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataInfo xmlns="http://v8.1c.ru/8.3/xcf/readable">
+  <Metadata name="Catalog.Пользователи">
+    <Metadata name="Catalog.Пользователи.Command.ПользователиИнформационнойБазы"/>
+    <Metadata name="Catalog.Пользователи.Command.ПользователиИнформационнойБазы.CommandModule"/>
+  </Metadata>
+  <Metadata name="Catalog.Пользователи.Form.ФормаСписка"/>
+</MetaDataInfo>`); err != nil {
+		t.Fatalf("read xml: %v", err)
+	}
+
+	if !cleanupConfigDumpInfoForbiddenMetadata(doc, map[string]struct{}{
+		"Catalog.Пользователи.Command.ПользователиИнформационнойБазы": {},
+	}) {
+		t.Fatalf("expected forbidden ConfigDumpInfo cleanup to change document")
+	}
+
+	if hasMetadataName(doc, "Catalog.Пользователи.Command.ПользователиИнформационнойБазы") {
+		t.Fatalf("expected forbidden command metadata to be removed")
+	}
+	if hasMetadataName(doc, "Catalog.Пользователи.Command.ПользователиИнформационнойБазы.CommandModule") {
+		t.Fatalf("expected nested forbidden command module metadata to be removed")
+	}
+	if !hasMetadataName(doc, "Catalog.Пользователи.Form.ФормаСписка") {
+		t.Fatalf("expected unrelated metadata to remain")
+	}
+}
+
+func TestCollectAdoptedCodeModulePathsMarksNonNativeModules(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	objectPath := filepath.Join(root, "Catalogs", "Тест.xml")
+	objectDir := filepath.Join(root, "Catalogs", "Тест", "Ext")
+	if err := os.MkdirAll(objectDir, 0o755); err != nil {
+		t.Fatalf("mkdir object dir: %v", err)
+	}
+	for _, name := range []string{"ManagerModule.bsl", "ObjectModule.bsl", "ValueManagerModule.bsl"} {
+		if err := os.WriteFile(filepath.Join(objectDir, name), []byte("// module"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	contexts := []*FileProcessingContext{{
+		Path:             objectPath,
+		Metadata:         true,
+		TopLevelMetadata: true,
+		OwnerKey:         "Catalog.Тест",
+	}}
+	decisions := map[string]objectDecision{
+		"Catalog.Тест": {Belonging: "AdoptedStub"},
+	}
+	excluded := map[string]struct{}{}
+
+	collectAdoptedCodeModulePaths(contexts, decisions, excluded)
+
+	for _, name := range []string{"ManagerModule.bsl", "ObjectModule.bsl", "ValueManagerModule.bsl"} {
+		path := filepath.Join(objectDir, name)
+		if _, ok := excluded[path]; !ok {
+			t.Fatalf("expected %s to be marked for exclusion", path)
+		}
 	}
 }
 
@@ -2509,7 +3045,7 @@ func TestFilterRetainedOwnerCommandsDropsCleanedFunctionalOptionReference(t *tes
 		t.Fatalf("expected no live retained commands after cleanup, got %d", len(retained["Catalog.Тест"]))
 	}
 
-	stats, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, nil, nil, candidates, retained, liveRefs, nil)
+	stats, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, nil, nil, candidates, retained, liveRefs, nil, nil)
 	if err != nil {
 		t.Fatalf("finalize retained commands: %v", err)
 	}
@@ -2622,7 +3158,7 @@ func TestFilterRetainedOwnerCommandsKeepsLiveNativeFormReference(t *testing.T) {
 		t.Fatalf("expected live native form reference to retain adopted owner command")
 	}
 
-	if _, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, nil, nil, candidates, retained, liveRefs, nil); err != nil {
+	if _, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, nil, nil, candidates, retained, liveRefs, nil, nil); err != nil {
 		t.Fatalf("finalize retained commands: %v", err)
 	}
 
@@ -2734,7 +3270,7 @@ func TestFilterRetainedOwnerCommandsKeepsLiveCommandInterfaceAttributeReference(
 		t.Fatalf("expected live command interface attribute reference to retain adopted owner command")
 	}
 
-	if _, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, nil, nil, candidates, retained, liveRefs, nil); err != nil {
+	if _, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, nil, nil, candidates, retained, liveRefs, nil, nil); err != nil {
 		t.Fatalf("finalize retained commands: %v", err)
 	}
 
@@ -2897,7 +3433,7 @@ func TestFilterRetainedOwnerCommandsIgnoresRightsReference(t *testing.T) {
 		t.Fatalf("expected rights xml not to retain adopted owner command")
 	}
 
-	if _, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, nil, nil, candidates, retained, liveRefs, nil); err != nil {
+	if _, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, nil, nil, candidates, retained, liveRefs, nil, nil); err != nil {
 		t.Fatalf("finalize retained commands: %v", err)
 	}
 
@@ -2980,7 +3516,7 @@ func TestFinalizeRetainedOwnerCommandsStripsNativePreserveMarker(t *testing.T) {
 		},
 	}
 
-	if _, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, rules, nil, candidates, nil, buildLiveCommandReferenceIndex(contexts, decisions, map[string]struct{}{}), nil); err != nil {
+	if _, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, rules, nil, candidates, nil, buildLiveCommandReferenceIndex(contexts, decisions, map[string]struct{}{}), nil, nil); err != nil {
 		t.Fatalf("finalize retained commands: %v", err)
 	}
 
@@ -3053,7 +3589,7 @@ func TestFinalizeRetainedOwnerCommandsStripsNativePreserveMarkerWithoutRetainedD
 		"Catalog.НаправленияДеятельности": {},
 	}
 
-	stats, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, rules, nil, retained, retained, buildLiveCommandReferenceIndex(contexts, decisions, map[string]struct{}{}), nil)
+	stats, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, rules, nil, retained, retained, buildLiveCommandReferenceIndex(contexts, decisions, map[string]struct{}{}), nil, nil)
 	if err != nil {
 		t.Fatalf("finalize retained commands: %v", err)
 	}
@@ -3330,6 +3866,43 @@ func TestBuildSearchResultModuleContentStrictMismatchLogsAndFallsBackToSoftTrans
 	}
 	if !strings.Contains(string(data), "найдены только группы [НеМодуль]") {
 		t.Fatalf("expected diagnostics file to contain exact mismatch, got: %s", string(data))
+	}
+}
+
+func TestBuildSearchResultModuleContentTransfersPrefixedMethodsWithoutAfterDirective(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	modulePath := filepath.Join(dir, "Module.bsl")
+	source := strings.Join([]string{
+		"Процедура упо_ПослеЗаписи()",
+		"\t//{EPM}",
+		"КонецПроцедуры",
+		"",
+		"Процедура Подключаемый_упо_ПослеЗаписи()",
+		"\t//{EPM}",
+		"КонецПроцедуры",
+		"",
+	}, "\n")
+	if err := os.WriteFile(modulePath, []byte(source), 0o644); err != nil {
+		t.Fatalf("write module: %v", err)
+	}
+
+	content, err := buildSearchResultModuleContent(modulePath, []string{"EPM"}, map[string][]string{
+		"EPM": {"//{EPM}"},
+	}, "упо_", true, "")
+	if err != nil {
+		t.Fatalf("build search result module content: %v", err)
+	}
+
+	if strings.Contains(content, `&После("упо_ПослеЗаписи")`) {
+		t.Fatalf("expected direct transfer for prefixed method without &После, got:\n%s", content)
+	}
+	if strings.Contains(content, `&После("Подключаемый_упо_ПослеЗаписи")`) {
+		t.Fatalf("expected direct transfer for prefixed plugin method without &После, got:\n%s", content)
+	}
+	if !strings.Contains(content, "Процедура упо_ПослеЗаписи()") || !strings.Contains(content, "Процедура Подключаемый_упо_ПослеЗаписи()") {
+		t.Fatalf("expected original prefixed method headers to be preserved, got:\n%s", content)
 	}
 }
 
