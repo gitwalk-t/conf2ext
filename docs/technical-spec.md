@@ -51,8 +51,8 @@ go build ./...
 - нормализовать пути до абсолютных
 - использовать `./configs/config.json`, если `--config` не передан
 - использовать `extension_properties.name` / `extension_properties.prefix` / `extension_properties.identifier` как основной блок свойств корня расширения; старые `extension` / `prefix` остаются backward-compatible alias
-- поддерживать `target.xml_dump` как optional XML-выгрузку конфигурации-приемника для `targetCompatibilitySet`: `Native`-объекты расширения допустимы всегда, а adopted `DefinedType` / `EventSubscription` допустимы только если существуют в XML-выгрузке приемника
-- для построения `targetCompatibilitySet` достаточно читать из `target.xml_dump` только top-level XML из `DefinedTypes/` и `EventSubscriptions/`; остальной состав target dump в этой операции не используется
+- поддерживать `target.xml_dump` как optional XML-выгрузку конфигурации-приемника для post-promotion merge объектов из `CommonTemplate.упо_MetaDataFile`
+- merge применять только к `DefinedType`, `ExchangePlan` и `EventSubscription`, перечисленным в `упо_MetaDataFile`; `target.xml_dump` не является глобальным source graph
 
 Ключевой рабочий конфиг:
 - [`../configs/config.json`](../configs/config.json)
@@ -154,7 +154,8 @@ XML-конвейер должен классифицировать top-level о�
 - cleanup metadata-ссылок должен работать независимо от namespace alias
 - current-config alias вроде `d4p1:` нельзя агрессивно переписывать в `cfg:`
 - qualifier-блоки (`StringQualifiers`, `NumberQualifiers`, `DateQualifiers`, `BinaryDataQualifiers`) должны быть согласованы между owner type-set и predefined item
-- если задан `target.xml_dump`, итоговый состав `DefinedType` и `EventSubscription` дополнительно ограничивается `targetCompatibilitySet`: `Native`-объекты допустимы всегда, а adopted-объекты этих kind не должны переживать `RefDrivenInclusion`, если их нет в XML-выгрузке конфигурации-приемника
+- если задан `target.xml_dump`, для объектов из `CommonTemplate.упо_MetaDataFile` после обычного `RefDrivenInclusion` выполняется merge: `DefinedType` объединяется по `Properties/Type`, `ExchangePlan` — по `Ext/Content.xml`, `EventSubscription` — по `Properties/Source`
+- target-ссылки, появившиеся на этом merge-этапе, могут дотянуть отсутствующий top-level metadata-объект из `target.xml_dump` как `AdoptedStub`, но не возвращают soft-excluded и не переигрывают `forbidden_*`
 
 ### 8. Специальная обработка через макеты
 

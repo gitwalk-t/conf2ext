@@ -35,6 +35,7 @@
 - [x] Вести расследовательские логи только через `output/_log`
 
 ## Done
+- [x] Переведен `target.xml_dump` с pre-promotion compatibility filter на post-promotion merge для `DefinedType` / `ExchangePlan` / `EventSubscription` из `CommonTemplate.упо_MetaDataFile`
 - [x] Добавлена публичная обертка `pkg/config.Load`
 - [x] Добавлена публичная обертка `pkg/converter.RunConversion`
 - [x] Добавлен пример запуска `cmd/app/main.go`

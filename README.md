@@ -78,7 +78,7 @@ go test ./...
 - при `AdditionalProcessing.Use_упо_SearchResult=true` конвертер дополнительно проверяет, что объекты, реально выбранные из `упо_SearchResult`, дошли до итогового XML-дампа как top-level adopted-объекты
 - `AdditionalProcessing.UseExactTemplates`: управляет строгостью сопоставления шаблонов для `Use_упо_SearchResult`; по умолчанию `true`, а mismatch в strict-режиме пишется в `output/_log/searchresult-template-errors.log` и переводит перенос кода на общий fallback без падения прогона
 - `extension_properties.identifier`: стабильный `uuid` корня расширения; он не генерируется заново и записывается в `Configuration.xml`
-- `target.xml_dump`: optional XML-выгрузка конфигурации-приемника; сейчас используется для cleanup `DefinedType` и `EventSubscription` по реальному составу приемника
+- `target.xml_dump`: optional XML-выгрузка конфигурации-приемника; после обычной classification/promotion-логики используется только для post-promotion merge объектов из `CommonTemplate.упо_MetaDataFile` (`DefinedType`, `ExchangePlan`, `EventSubscription`), а target-ссылки из этого merge могут дотягивать отсутствующий top-level metadata-объект из target как `AdoptedStub`
 
 ## Identity mapping
 

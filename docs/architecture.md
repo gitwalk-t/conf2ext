@@ -35,7 +35,8 @@
 - возврат мягко исключенных объектов в `Native`, если на них есть ссылка из допустимого `Native`
 - первичный `Native` не демотируется в `Excluded` из-за мягких списков; для него действует только `forbidden_*`
 - добавление новых зависимостей как `AdoptedStub` или `AdoptedStubExt`
-- ограничение `DefinedType` и `EventSubscription` через `targetCompatibilitySet`: `Native`-объекты допустимы всегда, а adopted-объекты этих kind могут пережить `RefDrivenInclusion` только если существуют в `target.xml_dump`
+- post-promotion merge `target.xml_dump` только для объектов из `CommonTemplate.упо_MetaDataFile`: `DefinedType` объединяется по `Properties/Type`, `ExchangePlan` — по `Ext/Content.xml`, `EventSubscription` — по `Properties/Source`
+- target-ссылки из этого merge могут физически подтягивать отсутствующий top-level metadata-объект из `target.xml_dump` как `AdoptedStub`, но не превращают `target.xml_dump` в глобальный source graph
 - очистку ссылок на жестко исключенные объекты из `forbidden_*`
 - нормализацию adopted stub
 - замену GUID
@@ -97,7 +98,7 @@
 - для `AdoptedStubExt(Form)` источником решения служит не только `MainTable`, но и field contract dynamic list: `DataPath`, `Field`, `RowPictureDataPath` и родственные поля. Этот контракт должен проверяться конвертером до загрузки в 1С.
 - `extension_properties.name` / `extension_properties.prefix` — основной источник имени и префикса корня; старые `extension` / `prefix` поддерживаются как алиасы совместимости и тоже должны сходиться с `Configuration.xml` и `ConfigDumpInfo.xml`
 - `extension_properties.identifier` — стабильный `uuid` корня `Configuration.xml`; он не должен генерироваться заново между прогонами
-- если задан `target.xml_dump`, для `DefinedType` и `EventSubscription` применяется `targetCompatibilitySet`: `Native`-объекты расширения допустимы всегда, а adopted-объекты этих kind допускаются только если существуют в top-level наборе XML-выгрузки конфигурации-приемника
+- если задан `target.xml_dump`, после обычного `RefDrivenInclusion` для merge-объектов из `CommonTemplate.упо_MetaDataFile` выполняется target-merge; target-ссылки из этого шага могут дотягивать отсутствующий top-level metadata-объект как `AdoptedStub`
 - у корня `Configuration.xml` обязаны быть `InternalInfo/xr:PropertyState`, `Caption`, `ShortCaption`, `Language.Русский`
 - `ChildObjects` корня должны совпадать с итоговым top-level составом: top-level `Native` и `AdoptedStub`, не помеченные как excluded/forbidden
 - при `normalizeAdoptedObjectComposition` сохраняем каркас формата: если у исходного top-level metadata был `ChildObjects`, после очистки он должен остаться хотя бы пустым

@@ -1262,7 +1262,7 @@ func TestCollectExcludedPathsMatchesChangeFilesCleanupInputs(t *testing.T) {
 			"Catalog.Пользователи.Form.ФормаВыбора":                       {},
 			"Catalog.Пользователи.Command.ПользователиИнформационнойБазы": {},
 		},
-	})
+	}, nil)
 
 	for _, path := range []string{
 		filepath.Join(root, "Catalogs", "ТестКаталог", "Ext", "ManagerModule.bsl"),
@@ -1284,7 +1284,7 @@ func TestCollectExcludedPathsMatchesChangeFilesCleanupInputs(t *testing.T) {
 	}
 }
 
-func TestDecideObjectExcludedOverridesPrimaryNative(t *testing.T) {
+func TestDecideObjectPrimaryNativeOverridesSoftExclude(t *testing.T) {
 	t.Parallel()
 
 	ctx := &FileProcessingContext{
@@ -1302,8 +1302,66 @@ func TestDecideObjectExcludedOverridesPrimaryNative(t *testing.T) {
 		nil,
 	)
 
-	if !decision.Excluded || decision.Belonging != "" {
-		t.Fatalf("expected excluded decision to override primary native, got %#v", decision)
+	if decision.Excluded || decision.Belonging != "Native" {
+		t.Fatalf("expected primary native decision to survive soft exclude, got %#v", decision)
+	}
+}
+
+func TestCleanupMissingFormConstantsSetReferencesKeepsPrimaryNativeConstantFromSoftExcludedSubsystem(t *testing.T) {
+	t.Parallel()
+
+	formDoc := etree.NewDocument()
+	if err := formDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform">
+  <ChildItems>
+    <CheckBoxField name="РаспределениеЗП" id="1">
+      <DataPath>НаборКонстант.упо_ИспользоватьРаспределениеЗаработнойПлаты</DataPath>
+    </CheckBoxField>
+  </ChildItems>
+</Form>`); err != nil {
+		t.Fatalf("read form xml: %v", err)
+	}
+
+	constantDoc := etree.NewDocument()
+	if err := constantDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Constant><Properties><Name>упо_ИспользоватьРаспределениеЗаработнойПлаты</Name></Properties></Constant>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read constant xml: %v", err)
+	}
+
+	constantCtx := &FileProcessingContext{
+		Doc:        constantDoc,
+		Metadata:   true,
+		OwnerKey:   "Constant.упо_ИспользоватьРаспределениеЗаработнойПлаты",
+		OwnerKind:  "Constant",
+		OwnerName:  "упо_ИспользоватьРаспределениеЗаработнойПлаты",
+		RelPath:    "Constants/упо_ИспользоватьРаспределениеЗаработнойПлаты.xml",
+		FileName:   "упо_ИспользоватьРаспределениеЗаработнойПлаты.xml",
+		Properties: constantDoc.FindElement("//Properties"),
+	}
+
+	decision := decideObject(
+		constantCtx,
+		&config.Configuration{},
+		map[string]struct{}{constantCtx.OwnerKey: {}},
+		map[string]struct{}{constantCtx.OwnerKey: {}},
+		nil,
+		nil,
+	)
+
+	if decision.Excluded || decision.Belonging != "Native" {
+		t.Fatalf("expected constant to stay native, got %#v", decision)
+	}
+
+	if cleanupMissingFormConstantsSetReferences(formDoc, []*FileProcessingContext{constantCtx}, map[string]objectDecision{
+		constantCtx.OwnerKey: decision,
+	}) {
+		t.Fatalf("expected constants-set binding to remain for primary native constant")
+	}
+
+	if len(formDoc.FindElements("//CheckBoxField")) != 1 {
+		t.Fatalf("expected constants-set control to remain in form")
 	}
 }
 
@@ -1366,7 +1424,7 @@ func TestExcludedObjectReferencedOnlyBySubsystemStaysExcluded(t *testing.T) {
 	decision := decideObject(
 		target,
 		&config.Configuration{},
-		map[string]struct{}{target.OwnerKey: {}},
+		nil,
 		map[string]struct{}{target.OwnerKey: {}},
 		nil,
 		nil,
@@ -2661,99 +2719,47 @@ func TestNormalizeRootConfigurationKeepsAdoptedBelonging(t *testing.T) {
 	}
 }
 
-func TestCollectTargetCompatibilitySetKeepsNativeAndCompatibleAdoptedObjects(t *testing.T) {
+func TestCollectTargetMergeRulesRecognizesDefinedTypeAlias(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	targetRoot := t.TempDir()
 
-	for _, relPath := range []string{
-		filepath.Join("DefinedTypes", "Существующий.xml"),
-		filepath.Join("EventSubscriptions", "СуществующаяПодписка.xml"),
-		filepath.Join("EventSubscriptions", "ЗапрещеннаяПодписка.xml"),
-	} {
-		path := filepath.Join(targetRoot, relPath)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatalf("mkdir target dir: %v", err)
-		}
-		name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-		tag := "DefinedType"
-		if strings.Contains(relPath, "EventSubscriptions") {
-			tag = "EventSubscription"
-		}
-		if err := os.WriteFile(path, []byte(`<?xml version="1.0" encoding="UTF-8"?>
-<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><`+tag+`><Properties><Name>`+name+`</Name></Properties></`+tag+`></MetaDataObject>`), 0o644); err != nil {
-			t.Fatalf("write target xml: %v", err)
-		}
+	templatePath := filepath.Join(root, "CommonTemplates", "упо_MetaDataFile", "Ext", "Template.txt")
+	if err := os.MkdirAll(filepath.Dir(templatePath), 0o755); err != nil {
+		t.Fatalf("mkdir template dir: %v", err)
+	}
+	if err := os.WriteFile(templatePath, []byte(`{
+  "ОпределяемыйТип": {
+    "ТипИзШаблона": {
+      "Тип": []
+    }
+  },
+  "ПланОбмена": {
+    "ПланИзШаблона": {
+      "Состав": []
+    }
+  },
+  "ПодпискаНаСобытие": {
+    "ПодпискаИзШаблона": {
+      "Источник": []
+    }
+  }
+}`), 0o644); err != nil {
+		t.Fatalf("write template: %v", err)
 	}
 
-	contexts := []*FileProcessingContext{
-		{Path: filepath.Join(root, "DefinedTypes", "Нативный.xml"), RelPath: "DefinedTypes/Нативный.xml", FileName: "Нативный.xml", Metadata: true, OwnerKey: "DefinedType.Нативный", OwnerKind: "DefinedType", OwnerName: "Нативный"},
-		{Path: filepath.Join(root, "DefinedTypes", "Отсутствующий.xml"), RelPath: "DefinedTypes/Отсутствующий.xml", FileName: "Отсутствующий.xml", Metadata: true, OwnerKey: "DefinedType.Отсутствующий", OwnerKind: "DefinedType", OwnerName: "Отсутствующий"},
-		{Path: filepath.Join(root, "DefinedTypes", "Существующий.xml"), RelPath: "DefinedTypes/Существующий.xml", FileName: "Существующий.xml", Metadata: true, OwnerKey: "DefinedType.Существующий", OwnerKind: "DefinedType", OwnerName: "Существующий"},
-		{Path: filepath.Join(root, "EventSubscriptions", "ОтсутствующаяПодписка.xml"), RelPath: "EventSubscriptions/ОтсутствующаяПодписка.xml", FileName: "ОтсутствующаяПодписка.xml", Metadata: true, OwnerKey: "EventSubscription.ОтсутствующаяПодписка", OwnerKind: "EventSubscription", OwnerName: "ОтсутствующаяПодписка"},
-		{Path: filepath.Join(root, "EventSubscriptions", "СуществующаяПодписка.xml"), RelPath: "EventSubscriptions/СуществующаяПодписка.xml", FileName: "СуществующаяПодписка.xml", Metadata: true, OwnerKey: "EventSubscription.СуществующаяПодписка", OwnerKind: "EventSubscription", OwnerName: "СуществующаяПодписка"},
-		{Path: filepath.Join(root, "EventSubscriptions", "ЗапрещеннаяПодписка.xml"), RelPath: "EventSubscriptions/ЗапрещеннаяПодписка.xml", FileName: "ЗапрещеннаяПодписка.xml", Metadata: true, OwnerKey: "EventSubscription.ЗапрещеннаяПодписка", OwnerKind: "EventSubscription", OwnerName: "ЗапрещеннаяПодписка"},
-	}
-
-	targetCompatibilitySet, err := collectTargetCompatibilitySet(&config.Configuration{
-		Target: config.Target{XMLDump: targetRoot},
-	}, contexts, map[string]struct{}{
-		"DefinedType.Нативный":       {},
-		"EventSubscription.Нативная": {},
-	}, map[string]struct{}{
-		"EventSubscription.ЗапрещеннаяПодписка": {},
-	})
-	if err != nil {
-		t.Fatalf("collect target compatibility set: %v", err)
-	}
+	rules := collectTargetMergeRules(&config.Configuration{
+		Target: config.Target{XMLDump: t.TempDir()},
+	}, root)
 
 	for _, key := range []string{
-		"DefinedType.Нативный",
-		"DefinedType.Существующий",
-		"EventSubscription.СуществующаяПодписка",
+		"DefinedType.ТипИзШаблона",
+		"ExchangePlan.ПланИзШаблона",
+		"EventSubscription.ПодпискаИзШаблона",
 	} {
-		if !isTargetCompatibleObject(key, targetCompatibilitySet) {
-			t.Fatalf("expected %s to be target-compatible", key)
+		if _, ok := rules.ObjectKeys[key]; !ok {
+			t.Fatalf("expected %s in target merge rules, got %#v", key, rules.ObjectKeys)
 		}
-	}
-	for _, key := range []string{
-		"DefinedType.Отсутствующий",
-		"EventSubscription.ОтсутствующаяПодписка",
-		"EventSubscription.ЗапрещеннаяПодписка",
-	} {
-		if isTargetCompatibleObject(key, targetCompatibilitySet) {
-			t.Fatalf("did not expect %s to be target-compatible", key)
-		}
-	}
-
-	decisions := map[string]objectDecision{
-		"DefinedType.Нативный":                    {Belonging: "Native"},
-		"DefinedType.Отсутствующий":               {Belonging: "AdoptedStub"},
-		"DefinedType.Существующий":                {Belonging: "AdoptedStub"},
-		"EventSubscription.ОтсутствующаяПодписка": {Belonging: "AdoptedStub"},
-		"EventSubscription.СуществующаяПодписка":  {Belonging: "AdoptedStub"},
-		"EventSubscription.ЗапрещеннаяПодписка":   {Belonging: "AdoptedStub"},
-	}
-	applyTargetCompatibilitySet(decisions, targetCompatibilitySet)
-
-	if decisions["DefinedType.Нативный"].Excluded {
-		t.Fatalf("expected native defined type to stay allowed by targetCompatibilitySet")
-	}
-	if !decisions["DefinedType.Отсутствующий"].Excluded {
-		t.Fatalf("expected missing adopted defined type to be excluded by targetCompatibilitySet")
-	}
-	if decisions["DefinedType.Существующий"].Excluded {
-		t.Fatalf("expected existing adopted defined type to stay allowed by targetCompatibilitySet")
-	}
-	if !decisions["EventSubscription.ОтсутствующаяПодписка"].Excluded {
-		t.Fatalf("expected missing adopted event subscription to be excluded by targetCompatibilitySet")
-	}
-	if decisions["EventSubscription.СуществующаяПодписка"].Excluded {
-		t.Fatalf("expected existing adopted event subscription to stay allowed by targetCompatibilitySet")
-	}
-	if !decisions["EventSubscription.ЗапрещеннаяПодписка"].Excluded {
-		t.Fatalf("expected forbidden event subscription to stay excluded")
 	}
 }
 
@@ -2807,193 +2813,99 @@ func TestLoadXMLContextsScopesRelativeDirs(t *testing.T) {
 	}
 }
 
-func TestCollectTargetCompatibilityKeysReadsOnlyRelevantTopLevelXML(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-
-	files := map[string]string{
-		filepath.Join("DefinedTypes", "НужныйТип.xml"): `<?xml version="1.0" encoding="UTF-8"?>
-<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><DefinedType><Properties><Name>НужныйТип</Name></Properties></DefinedType></MetaDataObject>`,
-		filepath.Join("DefinedTypes", "Nested", "Игнор.xml"): `<?xml version="1.0" encoding="UTF-8"?>
-<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><DefinedType><Properties><Name>Игнор</Name></Properties></DefinedType></MetaDataObject>`,
-		filepath.Join("EventSubscriptions", "НужнаяПодписка.xml"): `<?xml version="1.0" encoding="UTF-8"?>
-<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><EventSubscription><Properties><Name>НужнаяПодписка</Name></Properties></EventSubscription></MetaDataObject>`,
-		filepath.Join("Catalogs", "Лишний.xml"): `<?xml version="1.0" encoding="UTF-8"?>
-<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><Catalog><Properties><Name>Лишний</Name></Properties></Catalog></MetaDataObject>`,
-	}
-
-	for relPath, content := range files {
-		path := filepath.Join(root, relPath)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatalf("mkdir test dir: %v", err)
-		}
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-			t.Fatalf("write test xml: %v", err)
-		}
-	}
-
-	keys, err := collectTargetCompatibilityKeys(root)
-	if err != nil {
-		t.Fatalf("collect target compatibility keys: %v", err)
-	}
-
-	for _, key := range []string{
-		"DefinedType.НужныйТип",
-		"EventSubscription.НужнаяПодписка",
-	} {
-		if _, ok := keys[key]; !ok {
-			t.Fatalf("expected %s in target compatibility keys, got %#v", key, keys)
-		}
-	}
-	for _, key := range []string{
-		"DefinedType.Игнор",
-		"Catalog.Лишний",
-	} {
-		if _, ok := keys[key]; ok {
-			t.Fatalf("did not expect %s in target compatibility keys, got %#v", key, keys)
-		}
-	}
-}
-
-func TestBuildChangeFilesStateAppliesTargetCompatibilitySetBeforeAndAfterRefDrivenPromotion(t *testing.T) {
+func TestBuildChangeFilesStateMergesTargetMetadataOnlyForMetaDataFileObjects(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
 	targetRoot := t.TempDir()
+	writeFile := func(base, relPath, content string) {
+		t.Helper()
+		path := filepath.Join(base, relPath)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
 
-	configurationPath := filepath.Join(root, "Configuration.xml")
-	if err := os.WriteFile(configurationPath, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+	writeFile(root, "Configuration.xml", `<?xml version="1.0" encoding="UTF-8"?>
 <MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
   <Configuration>
     <ChildObjects>
-      <DefinedType>Нативный</DefinedType>
-      <DefinedType>Отсутствующий</DefinedType>
-      <DefinedType>Существующий</DefinedType>
-      <EventSubscription>НативнаяПодписка</EventSubscription>
-      <EventSubscription>ОтсутствующаяПодписка</EventSubscription>
-      <EventSubscription>СуществующаяПодписка</EventSubscription>
-      <EventSubscription>ЗапрещеннаяПодписка</EventSubscription>
+      <DefinedType>ЦелевойТип</DefinedType>
+      <DefinedType>ОбычныйТип</DefinedType>
     </ChildObjects>
   </Configuration>
-</MetaDataObject>`), 0o644); err != nil {
-		t.Fatalf("write configuration xml: %v", err)
-	}
+ </MetaDataObject>`)
 
-	definedTypeMissingPath := filepath.Join(root, "DefinedTypes", "Отсутствующий.xml")
-	if err := os.MkdirAll(filepath.Dir(definedTypeMissingPath), 0o755); err != nil {
-		t.Fatalf("mkdir defined type dir: %v", err)
-	}
-	if err := os.WriteFile(definedTypeMissingPath, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+	writeFile(root, "ConfigDumpInfo.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo">
+  <ConfigVersions>
+    <Metadata name="DefinedType.ЦелевойТип" id="11111111-1111-1111-1111-111111111111"/>
+    <Metadata name="DefinedType.ОбычныйТип" id="22222222-2222-2222-2222-222222222222"/>
+  </ConfigVersions>
+</ConfigDumpInfo>`)
+
+	writeFile(root, filepath.Join("DefinedTypes", "ЦелевойТип.xml"), `<?xml version="1.0" encoding="UTF-8"?>
 <MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
   <DefinedType>
     <Properties>
-      <Name>Отсутствующий</Name>
+      <Name>ЦелевойТип</Name>
       <Type>
-        <Type>cfg:CatalogRef.Лишний</Type>
+        <Type>cfg:CatalogRef.ИзSource</Type>
       </Type>
     </Properties>
   </DefinedType>
-</MetaDataObject>`), 0o644); err != nil {
-		t.Fatalf("write defined type xml: %v", err)
-	}
-
-	definedTypeNativePath := filepath.Join(root, "DefinedTypes", "Нативный.xml")
-	if err := os.WriteFile(definedTypeNativePath, []byte(`<?xml version="1.0" encoding="UTF-8"?>
-<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><DefinedType><Properties><Name>Нативный</Name></Properties></DefinedType></MetaDataObject>`), 0o644); err != nil {
-		t.Fatalf("write native defined type xml: %v", err)
-	}
-
-	definedTypeExistingPath := filepath.Join(root, "DefinedTypes", "Существующий.xml")
-	if err := os.WriteFile(definedTypeExistingPath, []byte(`<?xml version="1.0" encoding="UTF-8"?>
-<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><DefinedType><Properties><Name>Существующий</Name></Properties></DefinedType></MetaDataObject>`), 0o644); err != nil {
-		t.Fatalf("write existing defined type xml: %v", err)
-	}
-
-	catalogPath := filepath.Join(root, "Catalogs", "Лишний.xml")
-	if err := os.MkdirAll(filepath.Dir(catalogPath), 0o755); err != nil {
-		t.Fatalf("mkdir catalog dir: %v", err)
-	}
-	if err := os.WriteFile(catalogPath, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+ </MetaDataObject>`)
+	writeFile(root, filepath.Join("DefinedTypes", "ОбычныйТип.xml"), `<?xml version="1.0" encoding="UTF-8"?>
 <MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
-  <Catalog>
+  <DefinedType>
     <Properties>
-      <Name>Лишний</Name>
+      <Name>ОбычныйТип</Name>
+      <Type>
+        <Type>cfg:CatalogRef.ИзOrdinary</Type>
+      </Type>
     </Properties>
-  </Catalog>
-</MetaDataObject>`), 0o644); err != nil {
-		t.Fatalf("write catalog xml: %v", err)
-	}
+  </DefinedType>
+</MetaDataObject>`)
+	writeFile(root, filepath.Join("Catalogs", "ИзSource.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><Catalog><Properties><Name>ИзSource</Name></Properties></Catalog></MetaDataObject>`)
+	writeFile(root, filepath.Join("Catalogs", "ИзOrdinary.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><Catalog><Properties><Name>ИзOrdinary</Name></Properties></Catalog></MetaDataObject>`)
 
-	eventSubscriptionMissingPath := filepath.Join(root, "EventSubscriptions", "ОтсутствующаяПодписка.xml")
-	if err := os.MkdirAll(filepath.Dir(eventSubscriptionMissingPath), 0o755); err != nil {
-		t.Fatalf("mkdir event subscription dir: %v", err)
-	}
-	if err := os.WriteFile(eventSubscriptionMissingPath, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+	writeFile(root, filepath.Join("CommonTemplates", "упо_MetaDataFile", "Ext", "Template.txt"), `{
+  "ОпределяемыйТип": {
+    "ЦелевойТип": {
+      "Тип": []
+    }
+  }
+}`)
+
+	writeFile(targetRoot, filepath.Join("DefinedTypes", "ЦелевойТип.xml"), `<?xml version="1.0" encoding="UTF-8"?>
 <MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
-  <EventSubscription>
+  <DefinedType>
     <Properties>
-      <Name>ОтсутствующаяПодписка</Name>
-      <Handler>CommonModule.ЛишнийМодуль.Выполнить</Handler>
+      <Name>ЦелевойТип</Name>
+      <Type>
+        <Type>cfg:CatalogRef.ИзTarget</Type>
+      </Type>
     </Properties>
-  </EventSubscription>
-</MetaDataObject>`), 0o644); err != nil {
-		t.Fatalf("write missing event subscription xml: %v", err)
-	}
-
-	for _, relPath := range []string{
-		filepath.Join("EventSubscriptions", "НативнаяПодписка.xml"),
-		filepath.Join("EventSubscriptions", "СуществующаяПодписка.xml"),
-		filepath.Join("EventSubscriptions", "ЗапрещеннаяПодписка.xml"),
-	} {
-		path := filepath.Join(root, relPath)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatalf("mkdir event subscription file dir: %v", err)
-		}
-		name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-		if err := os.WriteFile(path, []byte(`<?xml version="1.0" encoding="UTF-8"?>
-<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><EventSubscription><Properties><Name>`+name+`</Name></Properties></EventSubscription></MetaDataObject>`), 0o644); err != nil {
-			t.Fatalf("write event subscription xml: %v", err)
-		}
-	}
-
-	commonModulePath := filepath.Join(root, "CommonModules", "ЛишнийМодуль.xml")
-	if err := os.MkdirAll(filepath.Dir(commonModulePath), 0o755); err != nil {
-		t.Fatalf("mkdir common module dir: %v", err)
-	}
-	if err := os.WriteFile(commonModulePath, []byte(`<?xml version="1.0" encoding="UTF-8"?>
-<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><CommonModule><Properties><Name>ЛишнийМодуль</Name></Properties></CommonModule></MetaDataObject>`), 0o644); err != nil {
-		t.Fatalf("write common module xml: %v", err)
-	}
-
-	for _, relPath := range []string{
-		filepath.Join("DefinedTypes", "Существующий.xml"),
-		filepath.Join("EventSubscriptions", "СуществующаяПодписка.xml"),
-		filepath.Join("EventSubscriptions", "ЗапрещеннаяПодписка.xml"),
-	} {
-		path := filepath.Join(targetRoot, relPath)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatalf("mkdir target xml dir: %v", err)
-		}
-		name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-		kindDir := filepath.Base(filepath.Dir(path))
-		tag := "DefinedType"
-		if kindDir == "EventSubscriptions" {
-			tag = "EventSubscription"
-		}
-		if err := os.WriteFile(path, []byte(`<?xml version="1.0" encoding="UTF-8"?>
-<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><`+tag+`><Properties><Name>`+name+`</Name></Properties></`+tag+`></MetaDataObject>`), 0o644); err != nil {
-			t.Fatalf("write target xml: %v", err)
-		}
-	}
+  </DefinedType>
+</MetaDataObject>`)
+	writeFile(targetRoot, filepath.Join("Catalogs", "ИзTarget.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><Catalog uuid="33333333-3333-3333-3333-333333333333"><Properties><Name>ИзTarget</Name></Properties></Catalog></MetaDataObject>`)
+	writeFile(targetRoot, "ConfigDumpInfo.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo">
+  <ConfigVersions>
+    <Metadata name="Catalog.ИзTarget" id="33333333-3333-3333-3333-333333333333"/>
+  </ConfigVersions>
+</ConfigDumpInfo>`)
 
 	state, err := buildChangeFilesState(&config.Configuration{
-		IncludedNativeObjects: []string{
-			"DefinedType.Нативный",
-			"EventSubscription.НативнаяПодписка",
-		},
-		ForbiddenAdoptedStubObjects: []string{
-			"EventSubscription.ЗапрещеннаяПодписка",
+		IncludedAdoptedStubObjects: []string{
+			"DefinedType.ЦелевойТип",
+			"DefinedType.ОбычныйТип",
 		},
 		Target: config.Target{
 			XMLDump: targetRoot,
@@ -3003,26 +2915,92 @@ func TestBuildChangeFilesStateAppliesTargetCompatibilitySetBeforeAndAfterRefDriv
 		t.Fatalf("build change files state: %v", err)
 	}
 
-	if decision := state.decisions["DefinedType.Нативный"]; decision.Excluded || decision.Belonging != "Native" {
-		t.Fatalf("expected native defined type to stay included, got %#v", decision)
+	if decision := state.decisions["Catalog.ИзSource"]; !decision.Excluded {
+		t.Fatalf("expected source ref from target-merge defined type not to be promoted before merge")
 	}
-	if decision := state.decisions["DefinedType.Отсутствующий"]; !decision.Excluded {
-		t.Fatalf("expected adopted defined type missing in target to stay excluded")
+	if decision := state.decisions["Catalog.ИзOrdinary"]; decision.Excluded || decision.Belonging != "AdoptedStub" {
+		t.Fatalf("expected ordinary defined type source ref to promote catalog, got %#v", decision)
 	}
-	if decision := state.decisions["EventSubscription.НативнаяПодписка"]; decision.Excluded || decision.Belonging != "Native" {
-		t.Fatalf("expected native event subscription to stay included, got %#v", decision)
+	if decision := state.decisions["Catalog.ИзTarget"]; decision.Excluded || decision.Belonging != "AdoptedStub" {
+		t.Fatalf("expected target-ref-driven catalog to be imported as AdoptedStub, got %#v", decision)
 	}
-	if decision := state.decisions["EventSubscription.ОтсутствующаяПодписка"]; !decision.Excluded {
-		t.Fatalf("expected adopted event subscription missing in target to stay excluded")
+
+	if _, err := os.Stat(filepath.Join(root, "Catalogs", "ИзTarget.xml")); err != nil {
+		t.Fatalf("expected target-ref-driven catalog file to be created: %v", err)
 	}
-	if decision := state.decisions["EventSubscription.ЗапрещеннаяПодписка"]; !decision.Excluded {
-		t.Fatalf("expected forbidden event subscription to stay excluded even when present in target")
+
+	configurationDoc := etree.NewDocument()
+	if err := configurationDoc.ReadFromFile(filepath.Join(root, "Configuration.xml")); err != nil {
+		t.Fatalf("read configuration xml: %v", err)
 	}
-	if decision := state.decisions["Catalog.Лишний"]; !decision.Excluded {
-		t.Fatalf("expected catalog reference from incompatible defined type not to be promoted")
+	if !hasConfigurationChildObject(configurationDoc, "Catalog", "ИзTarget") {
+		t.Fatalf("expected target-ref-driven catalog in Configuration.xml ChildObjects")
 	}
-	if decision := state.decisions["CommonModule.ЛишнийМодуль"]; !decision.Excluded {
-		t.Fatalf("expected handler module from incompatible event subscription not to be promoted")
+
+	configDumpDoc := etree.NewDocument()
+	if err := configDumpDoc.ReadFromFile(filepath.Join(root, "ConfigDumpInfo.xml")); err != nil {
+		t.Fatalf("read config dump info: %v", err)
+	}
+	if !hasMetadataName(configDumpDoc, "Catalog.ИзTarget") {
+		t.Fatalf("expected target-ref-driven catalog entry in ConfigDumpInfo.xml")
+	}
+}
+
+func TestBuildChangeFilesStateDoesNotImportForbiddenTargetRef(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	targetRoot := t.TempDir()
+	writeFile := func(base, relPath, content string) {
+		t.Helper()
+		path := filepath.Join(base, relPath)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	writeFile(root, "Configuration.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><Configuration><ChildObjects><DefinedType>ЦелевойТип</DefinedType></ChildObjects></Configuration></MetaDataObject>`)
+	writeFile(root, "ConfigDumpInfo.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo"><ConfigVersions><Metadata name="DefinedType.ЦелевойТип" id="11111111-1111-1111-1111-111111111111"/></ConfigVersions></ConfigDumpInfo>`)
+	writeFile(root, filepath.Join("DefinedTypes", "ЦелевойТип.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><DefinedType><Properties><Name>ЦелевойТип</Name><Type/></Properties></DefinedType></MetaDataObject>`)
+	writeFile(root, filepath.Join("CommonTemplates", "упо_MetaDataFile", "Ext", "Template.txt"), `{
+  "ОпределяемыйТип": {
+    "ЦелевойТип": {
+      "Тип": []
+    }
+  }
+}`)
+
+	writeFile(targetRoot, filepath.Join("DefinedTypes", "ЦелевойТип.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><DefinedType><Properties><Name>ЦелевойТип</Name><Type><Type>cfg:CatalogRef.Запрещенный</Type></Type></Properties></DefinedType></MetaDataObject>`)
+	writeFile(targetRoot, filepath.Join("Catalogs", "Запрещенный.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><Catalog><Properties><Name>Запрещенный</Name></Properties></Catalog></MetaDataObject>`)
+	writeFile(targetRoot, "ConfigDumpInfo.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo"><ConfigVersions><Metadata name="Catalog.Запрещенный" id="44444444-4444-4444-4444-444444444444"/></ConfigVersions></ConfigDumpInfo>`)
+
+	state, err := buildChangeFilesState(&config.Configuration{
+		IncludedAdoptedStubObjects: []string{
+			"DefinedType.ЦелевойТип",
+		},
+		ForbiddenAdoptedStubObjects: []string{
+			"Catalog.Запрещенный",
+		},
+		Target: config.Target{XMLDump: targetRoot},
+	}, root)
+	if err != nil {
+		t.Fatalf("build change files state: %v", err)
+	}
+
+	if decision, exists := state.decisions["Catalog.Запрещенный"]; exists && !decision.Excluded {
+		t.Fatalf("expected forbidden target-ref-driven object to stay excluded")
+	}
+	if _, err := os.Stat(filepath.Join(root, "Catalogs", "Запрещенный.xml")); !os.IsNotExist(err) {
+		t.Fatalf("did not expect forbidden target-ref-driven file to be created")
 	}
 }
 
@@ -4715,6 +4693,22 @@ func hasMetadataName(doc *etree.Document, name string) bool {
 	}
 	for _, metadata := range doc.FindElements("//*[local-name()='Metadata']") {
 		if strings.TrimSpace(metadata.SelectAttrValue("name", "")) == name {
+			return true
+		}
+	}
+	return false
+}
+
+func hasConfigurationChildObject(doc *etree.Document, kind, name string) bool {
+	if doc == nil || doc.Root() == nil {
+		return false
+	}
+	childObjects := doc.Root().FindElement(".//ChildObjects")
+	if childObjects == nil {
+		return false
+	}
+	for _, child := range childObjects.ChildElements() {
+		if strings.EqualFold(localName(child.Tag), kind) && strings.TrimSpace(child.Text()) == name {
 			return true
 		}
 	}
