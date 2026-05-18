@@ -35,7 +35,7 @@
 - Если в правилах появляется `AdoptedStubExt`, его нужно трактовать как частный случай `AdoptedStub`, а не как возвращение полноценного режима `Adopted`; обязательно различать форменный, типовой и событийный случаи
 - `RefDrivenInclusion` должно учитывать только XML-ссылки из допустимых `Native`-объектов, а для ненативных `DefinedType` и `EventSubscription` в статусе `AdoptedStubExt` еще и сохранять их состав как источник ссылок; BSL тут не участвует; формы не режем частично, это всегда целый объект или полный отказ от формы
 - для `AdoptedStubExt(Form)` нельзя ограничиваться одним `MainTable`: dynamic list требует полного field contract (`DataPath`, `Field`, `RowPictureDataPath` и родственные поля). Если контракт не выполнен, ошибка должна проявляться в конвертере
-- `extension` / `prefix` — единственный источник имени и префикса корня; они должны совпадать одновременно в `Configuration.xml` и `ConfigDumpInfo.xml`
+- `extension_properties` — основной источник имени, префикса и стабильного `identifier` корня; старые `extension` / `prefix` остаются только backward-compatible alias и тоже должны сходиться с `Configuration.xml` и `ConfigDumpInfo.xml`
 - у корня `Configuration.xml` обязаны быть `InternalInfo/xr:PropertyState`, `Caption`, `ShortCaption`, `Language.Русский`
 - `Configuration.xml/ChildObjects` должен перечислять весь итоговый top-level состав расширения, включая `AdoptedStub`; нельзя чистить его только по `native_prefixes`
 - при очистке top-level adopted metadata нужно сохранять обязательный контейнер `ChildObjects`, если он был в исходном XML; иначе Конфигуратор падает на ошибке структуры документа

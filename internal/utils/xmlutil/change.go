@@ -1429,17 +1429,9 @@ func collectTargetCompatibilitySet(
 		return nil, fmt.Errorf("путь xml_dump должен указывать на каталог XML-выгрузки конфигурации-приемника: %s", cfg.Target.XMLDump)
 	}
 
-	targetContexts, err := loadXMLContexts(cfg.Target.XMLDump, "DefinedTypes", "EventSubscriptions")
+	targetMetadataKeys, err := collectTargetCompatibilityKeys(cfg.Target.XMLDump)
 	if err != nil {
 		return nil, fmt.Errorf("не удалось загрузить XML-дамп конфигурации-приемника %s: %w", cfg.Target.XMLDump, err)
-	}
-
-	targetMetadataKeys := make(map[string]struct{}, len(targetContexts))
-	for _, ctx := range targetContexts {
-		if ctx == nil || !ctx.Metadata || !isTopLevelMetadataFile(ctx) || strings.TrimSpace(ctx.OwnerKey) == "" {
-			continue
-		}
-		targetMetadataKeys[ctx.OwnerKey] = struct{}{}
 	}
 
 	targetCompatibilitySet := make(map[string]struct{})
@@ -1464,6 +1456,42 @@ func collectTargetCompatibilitySet(
 	}
 
 	return targetCompatibilitySet, nil
+}
+
+func collectTargetCompatibilityKeys(root string) (map[string]struct{}, error) {
+	result := make(map[string]struct{})
+
+	targetDirs := []struct {
+		relativeDir string
+		kind        string
+	}{
+		{relativeDir: "DefinedTypes", kind: "DefinedType"},
+		{relativeDir: "EventSubscriptions", kind: "EventSubscription"},
+	}
+
+	for _, targetDir := range targetDirs {
+		dirPath := filepath.Join(root, targetDir.relativeDir)
+		entries, err := os.ReadDir(dirPath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, fmt.Errorf("ошибка при чтении каталога %s: %w", dirPath, err)
+		}
+
+		for _, entry := range entries {
+			if entry.IsDir() || !isXMLFile(entry.Name()) {
+				continue
+			}
+			name := strings.TrimSpace(strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name())))
+			if name == "" {
+				continue
+			}
+			result[targetDir.kind+"."+name] = struct{}{}
+		}
+	}
+
+	return result, nil
 }
 
 func isTargetCompatibleObject(key string, targetCompatibilitySet map[string]struct{}) bool {

@@ -47,6 +47,12 @@ func TestLoadConfigEPreservesAbsolutePaths(t *testing.T) {
 
 	absoluteInput := filepath.Join(tempDir, "external", "input")
 	absoluteOutput := filepath.Join(tempDir, "external", "output", "demo.cfe")
+	if err := os.MkdirAll(absoluteInput, 0o755); err != nil {
+		t.Fatalf("mkdir absolute input: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(absoluteOutput), 0o755); err != nil {
+		t.Fatalf("mkdir absolute output dir: %v", err)
+	}
 	configPath := filepath.Join(configDir, "config.json")
 	configJSON := `{
 		"input_path": "` + filepath.ToSlash(absoluteInput) + `",
@@ -67,6 +73,38 @@ func TestLoadConfigEPreservesAbsolutePaths(t *testing.T) {
 	}
 	if cfg.OutputPath != filepath.Clean(absoluteOutput) {
 		t.Fatalf("unexpected absolute output path: got %q want %q", cfg.OutputPath, filepath.Clean(absoluteOutput))
+	}
+}
+
+func TestLoadConfigEResolvesBackslashConfigRootRelativePaths(t *testing.T) {
+	tempDir := t.TempDir()
+	configDir := filepath.Join(tempDir, "configs")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir configs: %v", err)
+	}
+
+	configPath := filepath.Join(configDir, "config.json")
+	configJSON := `{
+		"input_path": "\\input",
+		"output_path": "\\output\\demo.cfe",
+		"conversion_type": "srcConvert"
+	}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadConfigE(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfigE: %v", err)
+	}
+
+	expectedInput := filepath.Join(tempDir, "input")
+	expectedOutput := filepath.Join(tempDir, "output", "demo.cfe")
+	if cfg.InputPath != expectedInput {
+		t.Fatalf("unexpected input path: got %q want %q", cfg.InputPath, expectedInput)
+	}
+	if cfg.OutputPath != expectedOutput {
+		t.Fatalf("unexpected output path: got %q want %q", cfg.OutputPath, expectedOutput)
 	}
 }
 

@@ -319,16 +319,21 @@ func NormalizeProjectPath(input, baseDir string) (string, error) {
 		return "", nil
 	}
 
-	if filepath.IsAbs(expandedPath) && !isConfigRootRelativePath(expandedPath) {
-		return filepath.Clean(expandedPath), nil
-	}
-
 	if isConfigRootRelativePath(expandedPath) {
+		if filepath.IsAbs(expandedPath) {
+			if _, err := os.Stat(expandedPath); err == nil {
+				return filepath.Clean(expandedPath), nil
+			}
+		}
 		if baseDir == "" {
 			return NormalizePath(expandedPath)
 		}
 		trimmed := strings.TrimLeft(expandedPath, `/\`)
 		return filepath.Clean(filepath.Join(baseDir, trimmed)), nil
+	}
+
+	if filepath.IsAbs(expandedPath) {
+		return filepath.Clean(expandedPath), nil
 	}
 
 	if baseDir == "" {
@@ -353,10 +358,6 @@ func configBaseDir(configPath string) string {
 
 func isConfigRootRelativePath(path string) bool {
 	if path == "" {
-		return false
-	}
-
-	if filepath.Separator != '\\' {
 		return false
 	}
 
