@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -392,11 +393,11 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 		return err
 	}
 
-	targetMetadataKeys, err := collectTargetXMLDumpMetadataKeys(cfg)
+	targetCompatibilitySet, err := collectTargetCompatibilitySet(cfg, contexts, primaryNativeObjects, forbiddenAdoptedStubObjects)
 	if err != nil {
 		return err
 	}
-	applyTargetMetadataIntersection(decisions, targetMetadataKeys)
+	applyTargetCompatibilitySet(decisions, targetCompatibilitySet)
 
 	log.Printf("xml step: promote referenced objects")
 	promoteReferencedObjectsStartedAt := time.Now()
@@ -404,10 +405,11 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 	incomingReferenceGraph := collectIncomingReferenceGraph(referenceGraph)
 	adoptedStubExtReferenceGraph := collectAdoptedStubExtReferenceGraph(contexts, decisions, searchResultState)
 	formDynamicListContracts := collectFormDynamicListContracts(contexts, decisions, searchResultState)
-	promoteReferencedObjectsToAdoptedStubIndexed(contexts, indexes, decisions, cfg, referenceGraph, incomingReferenceGraph, adoptedStubExtReferenceGraph, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects)
+	promoteReferencedObjectsToAdoptedStubIndexed(contexts, indexes, decisions, cfg, referenceGraph, incomingReferenceGraph, adoptedStubExtReferenceGraph, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects, targetCompatibilitySet)
 	promoteRegisterDocumentOwnersToNativeIndexed(contexts, indexes, decisions, cfg, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects, collectRegisterDocumentReferences(contexts))
 	applyFormDynamicListContracts(decisions, formDynamicListContracts, forbiddenAdoptedStubObjects)
 	applyAdoptedStubMetaDataRules(decisions, adoptedStubMetaDataRules, excludedObjects, forbiddenAdoptedStubObjects)
+	applyTargetCompatibilitySet(decisions, targetCompatibilitySet)
 	retainedOwnerCommandCandidates := collectOwnerCommandCandidates(contexts, decisions)
 	logXMLStepCompleted("promote referenced objects", promoteReferencedObjectsStartedAt, fmt.Sprintf("decisions=%d", len(decisions)))
 
@@ -438,7 +440,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 	// Для DefinedType режем только hard forbidden: мягко исключенные типы
 	// должны сохраняться в составе и дотягиваться по RefDrivenInclusion.
 	blockedDefinedTypeObjects := blockedForbiddenObjectKeys
-	excludedPaths := make(map[string]struct{})
+	excludedPaths := collectExcludedPaths(contexts, decisions, dir, searchResultState, forbiddenChildMetadataPaths)
 	logXMLStepCompleted("collect cleanup sets", collectCleanupSetsStartedAt)
 
 	log.Printf("xml step: apply object changes")
@@ -737,47 +739,91 @@ func GetFormatVersion(path string) (string, error) {
 	return metaDataObject.SelectAttrValue("version", ""), nil
 }
 
-func loadXMLContexts(root string) ([]*FileProcessingContext, error) {
+func loadXMLContexts(root string, relativeDirs ...string) ([]*FileProcessingContext, error) {
 	contexts := make([]*FileProcessingContext, 0, 128)
+	seenPaths := make(map[string]struct{})
 
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return fmt.Errorf("ошибка при обработке файла %s: %w", path, walkErr)
+	walkRoots := []string{root}
+	if len(relativeDirs) > 0 {
+		walkRoots = walkRoots[:0]
+		for _, relativeDir := range relativeDirs {
+			relativeDir = strings.TrimSpace(relativeDir)
+			if relativeDir == "" {
+				continue
+			}
+			relativeDir = strings.TrimLeft(relativeDir, `\/`)
+			cleanRelativeDir := filepath.Clean(relativeDir)
+			if cleanRelativeDir == "." {
+				walkRoots = append(walkRoots, root)
+				continue
+			}
+			if filepath.IsAbs(cleanRelativeDir) || strings.HasPrefix(cleanRelativeDir, "..") {
+				return nil, fmt.Errorf("путь загрузки XML должен быть относительным к корню выгрузки: %s", relativeDir)
+			}
+			walkRoots = append(walkRoots, filepath.Join(root, cleanRelativeDir))
+		}
+	}
+
+	walkRoot := func(walkRoot string) error {
+		info, err := os.Stat(walkRoot)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return fmt.Errorf("ошибка при доступе к каталогу %s: %w", walkRoot, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("путь загрузки XML должен указывать на каталог: %s", walkRoot)
 		}
 
-		if d.IsDir() || !isXMLFile(d.Name()) {
+		return filepath.WalkDir(walkRoot, func(path string, d os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return fmt.Errorf("ошибка при обработке файла %s: %w", path, walkErr)
+			}
+
+			if d.IsDir() || !isXMLFile(d.Name()) {
+				return nil
+			}
+
+			path = filepath.Clean(path)
+			if _, exists := seenPaths[path]; exists {
+				return nil
+			}
+
+			doc, err := readXMLFile(path)
+			if err != nil {
+				return err
+			}
+
+			relPath, err := filepath.Rel(root, path)
+			if err != nil {
+				return fmt.Errorf("ошибка при получении относительного пути %s: %w", path, err)
+			}
+			relPathSlash := filepath.ToSlash(relPath)
+
+			kind, name, key := detectOwner(relPath, doc)
+			contexts = append(contexts, &FileProcessingContext{
+				Doc:              doc,
+				Path:             path,
+				RelPath:          relPathSlash,
+				FileName:         d.Name(),
+				Metadata:         isMetadataObjectDoc(doc),
+				TopLevelMetadata: isTopLevelMetadataRelPath(relPathSlash),
+				Properties:       findProperties(doc),
+				OwnerKind:        kind,
+				OwnerName:        name,
+				OwnerKey:         key,
+			})
+			seenPaths[path] = struct{}{}
+
 			return nil
-		}
-
-		doc, err := readXMLFile(path)
-		if err != nil {
-			return err
-		}
-
-		relPath, err := filepath.Rel(root, path)
-		if err != nil {
-			return fmt.Errorf("ошибка при получении относительного пути %s: %w", path, err)
-		}
-		relPathSlash := filepath.ToSlash(relPath)
-
-		kind, name, key := detectOwner(relPath, doc)
-		contexts = append(contexts, &FileProcessingContext{
-			Doc:              doc,
-			Path:             path,
-			RelPath:          relPathSlash,
-			FileName:         d.Name(),
-			Metadata:         isMetadataObjectDoc(doc),
-			TopLevelMetadata: isTopLevelMetadataRelPath(relPathSlash),
-			Properties:       findProperties(doc),
-			OwnerKind:        kind,
-			OwnerName:        name,
-			OwnerKey:         key,
 		})
+	}
 
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("ошибка при обходе директорий: %w", err)
+	for _, currentRoot := range walkRoots {
+		if err := walkRoot(currentRoot); err != nil {
+			return nil, fmt.Errorf("ошибка при обходе директорий: %w", err)
+		}
 	}
 
 	return contexts, nil
@@ -837,11 +883,11 @@ func buildChangeFilesState(cfg *config.Configuration, dir string) (*changeFilesS
 		return nil, err
 	}
 
-	targetMetadataKeys, err := collectTargetXMLDumpMetadataKeys(cfg)
+	targetCompatibilitySet, err := collectTargetCompatibilitySet(cfg, contexts, primaryNativeObjects, forbiddenAdoptedStubObjects)
 	if err != nil {
 		return nil, err
 	}
-	applyTargetMetadataIntersection(decisions, targetMetadataKeys)
+	applyTargetCompatibilitySet(decisions, targetCompatibilitySet)
 
 	log.Printf("xml step: promote referenced objects")
 	promoteReferencedObjectsStartedAt := time.Now()
@@ -849,16 +895,46 @@ func buildChangeFilesState(cfg *config.Configuration, dir string) (*changeFilesS
 	incomingReferenceGraph := collectIncomingReferenceGraph(referenceGraph)
 	adoptedStubExtReferenceGraph := collectAdoptedStubExtReferenceGraph(contexts, decisions, searchResultState)
 	formDynamicListContracts := collectFormDynamicListContracts(contexts, decisions, searchResultState)
-	promoteReferencedObjectsToAdoptedStubIndexed(contexts, indexes, decisions, cfg, referenceGraph, incomingReferenceGraph, adoptedStubExtReferenceGraph, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects)
+	promoteReferencedObjectsToAdoptedStubIndexed(contexts, indexes, decisions, cfg, referenceGraph, incomingReferenceGraph, adoptedStubExtReferenceGraph, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects, targetCompatibilitySet)
 	promoteRegisterDocumentOwnersToNativeIndexed(contexts, indexes, decisions, cfg, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects, collectRegisterDocumentReferences(contexts))
 	applyFormDynamicListContracts(decisions, formDynamicListContracts, forbiddenAdoptedStubObjects)
 	applyAdoptedStubMetaDataRules(decisions, adoptedStubMetaDataRules, excludedObjects, forbiddenAdoptedStubObjects)
+	applyTargetCompatibilitySet(decisions, targetCompatibilitySet)
 	logXMLStepCompleted("promote referenced objects", promoteReferencedObjectsStartedAt, fmt.Sprintf("decisions=%d", len(decisions)))
 
 	collectCleanupSetsStartedAt := time.Now()
 	forbiddenChildMetadataPaths := collectForbiddenChildMetadataPaths(collectBlockedForbiddenObjectKeys(decisions, forbiddenAdoptedStubObjects))
+	excludedPaths := collectExcludedPaths(contexts, decisions, dir, searchResultState, forbiddenChildMetadataPaths)
+	logXMLStepCompleted("collect cleanup sets", collectCleanupSetsStartedAt, fmt.Sprintf("excluded_paths=%d", len(excludedPaths)))
+
+	return &changeFilesState{
+		contexts:                 contexts,
+		indexes:                  indexes,
+		decisions:                decisions,
+		formDynamicListContracts: formDynamicListContracts,
+		adoptedStubMetaDataRules: adoptedStubMetaDataRules,
+		searchResultState:        searchResultState,
+		excludedPaths:            excludedPaths,
+	}, nil
+}
+
+func collectExcludedPaths(
+	contexts []*FileProcessingContext,
+	decisions map[string]objectDecision,
+	root string,
+	searchResultState *searchResultState,
+	forbiddenChildMetadataPaths map[string]map[string]struct{},
+) map[string]struct{} {
 	excludedPaths := make(map[string]struct{})
+	if len(contexts) == 0 || len(decisions) == 0 {
+		return excludedPaths
+	}
+
 	for _, ctx := range contexts {
+		if ctx == nil {
+			continue
+		}
+
 		decision := decisions[ctx.OwnerKey]
 		if decision.Excluded {
 			excludedPaths[ctx.Path] = struct{}{}
@@ -873,23 +949,15 @@ func buildChangeFilesState(cfg *config.Configuration, dir string) (*changeFilesS
 			excludedPaths[ctx.Path] = struct{}{}
 		}
 	}
+
 	collectAdoptedCodeModulePaths(contexts, decisions, excludedPaths)
-	collectAdoptedCommonModuleModulePaths(dir, decisions, excludedPaths)
+	collectAdoptedCommonModuleModulePaths(root, decisions, excludedPaths)
 	collectAdoptedCommandModulePaths(contexts, decisions, excludedPaths)
 	collectForbiddenMetadataFilePaths(contexts, forbiddenChildMetadataPaths, excludedPaths)
-	collectRootConfigurationModulePaths(dir, excludedPaths)
+	collectRootConfigurationModulePaths(root, excludedPaths)
 	applySearchResultStateToExcludedPaths(searchResultState, excludedPaths)
-	logXMLStepCompleted("collect cleanup sets", collectCleanupSetsStartedAt, fmt.Sprintf("excluded_paths=%d", len(excludedPaths)))
 
-	return &changeFilesState{
-		contexts:                 contexts,
-		indexes:                  indexes,
-		decisions:                decisions,
-		formDynamicListContracts: formDynamicListContracts,
-		adoptedStubMetaDataRules: adoptedStubMetaDataRules,
-		searchResultState:        searchResultState,
-		excludedPaths:            excludedPaths,
-	}, nil
+	return excludedPaths
 }
 
 func buildContextIndexes(contexts []*FileProcessingContext) *contextIndexes {
@@ -1339,12 +1407,17 @@ func loadBaseBindings(cfg *config.Configuration) (map[string]string, error) {
 	return result, nil
 }
 
-func collectTargetXMLDumpMetadataKeys(cfg *config.Configuration) (map[string]struct{}, error) {
+func collectTargetCompatibilitySet(
+	cfg *config.Configuration,
+	contexts []*FileProcessingContext,
+	primaryNativeObjects map[string]struct{},
+	forbiddenAdoptedStubObjects map[string]struct{},
+) (map[string]struct{}, error) {
 	if cfg == nil {
 		return nil, nil
 	}
 	if strings.TrimSpace(cfg.Target.XMLDump) == "" {
-		log.Printf("xml step: skip target metadata intersection xml_dump is empty")
+		log.Printf("xml step: skip target compatibility set xml_dump is empty")
 		return nil, nil
 	}
 
@@ -1356,24 +1429,53 @@ func collectTargetXMLDumpMetadataKeys(cfg *config.Configuration) (map[string]str
 		return nil, fmt.Errorf("путь xml_dump должен указывать на каталог XML-выгрузки конфигурации-приемника: %s", cfg.Target.XMLDump)
 	}
 
-	contexts, err := loadXMLContexts(cfg.Target.XMLDump)
+	targetContexts, err := loadXMLContexts(cfg.Target.XMLDump, "DefinedTypes", "EventSubscriptions")
 	if err != nil {
 		return nil, fmt.Errorf("не удалось загрузить XML-дамп конфигурации-приемника %s: %w", cfg.Target.XMLDump, err)
 	}
 
-	result := make(map[string]struct{}, len(contexts))
-	for _, ctx := range contexts {
+	targetMetadataKeys := make(map[string]struct{}, len(targetContexts))
+	for _, ctx := range targetContexts {
 		if ctx == nil || !ctx.Metadata || !isTopLevelMetadataFile(ctx) || strings.TrimSpace(ctx.OwnerKey) == "" {
 			continue
 		}
-		result[ctx.OwnerKey] = struct{}{}
+		targetMetadataKeys[ctx.OwnerKey] = struct{}{}
 	}
 
-	return result, nil
+	targetCompatibilitySet := make(map[string]struct{})
+	for _, ctx := range contexts {
+		if ctx == nil || strings.TrimSpace(ctx.OwnerKey) == "" {
+			continue
+		}
+		kind, _ := splitObjectKey(ctx.OwnerKey)
+		if kind != "DefinedType" && kind != "EventSubscription" {
+			continue
+		}
+		if _, forbidden := forbiddenAdoptedStubObjects[ctx.OwnerKey]; forbidden {
+			continue
+		}
+		if _, native := primaryNativeObjects[ctx.OwnerKey]; native {
+			targetCompatibilitySet[ctx.OwnerKey] = struct{}{}
+			continue
+		}
+		if _, exists := targetMetadataKeys[ctx.OwnerKey]; exists {
+			targetCompatibilitySet[ctx.OwnerKey] = struct{}{}
+		}
+	}
+
+	return targetCompatibilitySet, nil
 }
 
-func applyTargetMetadataIntersection(decisions map[string]objectDecision, targetMetadataKeys map[string]struct{}) {
-	if len(decisions) == 0 || len(targetMetadataKeys) == 0 {
+func isTargetCompatibleObject(key string, targetCompatibilitySet map[string]struct{}) bool {
+	if targetCompatibilitySet == nil {
+		return true
+	}
+	_, ok := targetCompatibilitySet[key]
+	return ok
+}
+
+func applyTargetCompatibilitySet(decisions map[string]objectDecision, targetCompatibilitySet map[string]struct{}) {
+	if len(decisions) == 0 || targetCompatibilitySet == nil {
 		return
 	}
 
@@ -1385,7 +1487,7 @@ func applyTargetMetadataIntersection(decisions map[string]objectDecision, target
 		if kind != "DefinedType" && kind != "EventSubscription" {
 			continue
 		}
-		if _, exists := targetMetadataKeys[key]; exists {
+		if isTargetCompatibleObject(key, targetCompatibilitySet) {
 			continue
 		}
 		decision.Excluded = true
@@ -1944,7 +2046,7 @@ func promoteReferencedObjectsToAdoptedStub(
 	excludedObjects map[string]struct{},
 	forbiddenAdoptedStubObjects map[string]struct{},
 ) {
-	promoteReferencedObjectsToAdoptedStubIndexed(contexts, nil, decisions, cfg, referenceGraph, incomingReferenceGraph, adoptedStubExtReferenceGraph, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects)
+	promoteReferencedObjectsToAdoptedStubIndexed(contexts, nil, decisions, cfg, referenceGraph, incomingReferenceGraph, adoptedStubExtReferenceGraph, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects, nil)
 }
 
 func promoteReferencedObjectsToAdoptedStubIndexed(
@@ -1958,6 +2060,7 @@ func promoteReferencedObjectsToAdoptedStubIndexed(
 	primaryNativeObjects map[string]struct{},
 	excludedObjects map[string]struct{},
 	forbiddenAdoptedStubObjects map[string]struct{},
+	targetCompatibilitySet map[string]struct{},
 ) {
 	for {
 		changed := false
@@ -1988,6 +2091,10 @@ func promoteReferencedObjectsToAdoptedStubIndexed(
 
 			for ref := range refs {
 				if ref == "" || ref == ctx.OwnerKey {
+					continue
+				}
+				refKind, _ := splitObjectKey(ref)
+				if (refKind == "DefinedType" || refKind == "EventSubscription") && !isTargetCompatibleObject(ref, targetCompatibilitySet) {
 					continue
 				}
 
@@ -4734,9 +4841,6 @@ func cleanupMissingFormOwnerObjectReferences(doc *etree.Document, ownerCtx *File
 	}
 
 	available := collectAvailableDynamicListFields(ownerCtx)
-	if len(available) == 0 {
-		return false
-	}
 
 	root := doc.Root()
 	if root == nil {
@@ -4763,6 +4867,19 @@ func cleanupMissingFormOwnerObjectReferences(doc *etree.Document, ownerCtx *File
 	}
 
 	walk(root, nil)
+
+	for _, columns := range append([]*etree.Element(nil), root.FindElements(".//*[local-name()='AdditionalColumns']")...) {
+		if !shouldRemoveMissingFormOwnerObjectAdditionalColumns(columns, ownerCtx, available) {
+			continue
+		}
+		parent := columns.Parent()
+		if parent == nil {
+			continue
+		}
+		parent.RemoveChild(columns)
+		changed = true
+	}
+
 	return changed
 }
 
@@ -4780,10 +4897,32 @@ func shouldRemoveMissingFormOwnerObjectReference(el *etree.Element, ownerCtx *Fi
 	if field == "" {
 		return false
 	}
+	return isMissingFormOwnerObjectField(field, ownerCtx.OwnerKind, available)
+}
+
+func shouldRemoveMissingFormOwnerObjectAdditionalColumns(el *etree.Element, ownerCtx *FileProcessingContext, available map[string]struct{}) bool {
+	if el == nil || !strings.EqualFold(localName(el.Tag), "AdditionalColumns") {
+		return false
+	}
+
+	table := strings.TrimSpace(el.SelectAttrValue("table", ""))
+	if !strings.HasPrefix(table, "Объект.") {
+		return false
+	}
+
+	field := strings.TrimPrefix(table, "Объект.")
+	if field == "" {
+		return false
+	}
+
+	return isMissingFormOwnerObjectField(field, ownerCtx.OwnerKind, available)
+}
+
+func isMissingFormOwnerObjectField(field, ownerKind string, available map[string]struct{}) bool {
 	if _, ok := available[field]; ok {
 		return false
 	}
-	return !isKnownDynamicListVirtualField(ownerCtx.OwnerKind, field)
+	return !isKnownDynamicListVirtualField(ownerKind, field)
 }
 
 func collectMissingFormCommonAttributeDynamicListFields(root *etree.Element, contexts []*FileProcessingContext, indexes *contextIndexes, decisions map[string]objectDecision) map[string]map[string]struct{} {
@@ -5602,12 +5741,12 @@ func cleanupNonNativeFormLifecycleEvents(doc *etree.Document) bool {
 	}
 
 	blocked := map[string]struct{}{
-		"AfterWrite":         {},
-		"AfterWriteAtServer": {},
-		"BeforeWrite":        {},
+		"AfterWrite":          {},
+		"AfterWriteAtServer":  {},
+		"BeforeWrite":         {},
 		"BeforeWriteAtServer": {},
-		"OnReadAtServer":     {},
-		"OnWriteAtServer":    {},
+		"OnReadAtServer":      {},
+		"OnWriteAtServer":     {},
 	}
 
 	changed := false
