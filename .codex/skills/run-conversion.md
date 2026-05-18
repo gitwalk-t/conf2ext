@@ -29,10 +29,13 @@
    - старые `go`
    - связанные с ними `1cv8.exe`
 3. Не трогай чужие фоновые `1cv8.exe`.
-4. Текущий прогон отличай по:
-   - более позднему `StartTime`
+4. Текущий прогон отличай по совокупности признаков:
+   - timestamp запуска
+   - PID wrapper-процесса
+   - пути stdout/stderr логов
+   - более поздний `StartTime`
    - `CommandLine` с текущим `--config`
-   - связи с новым `go run`
+   - связь с новым `go run`
 
 ## Базовый цикл
 
@@ -42,16 +45,34 @@
 go build ./...
 go test ./...
 
-Start-Process powershell `
+$runTimestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$logDir = Join-Path (Get-Location) 'output\_log'
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+
+$stdoutLog = Join-Path $logDir "run-$runTimestamp.stdout.log"
+$stderrLog = Join-Path $logDir "run-$runTimestamp.stderr.log"
+$pidFile = Join-Path $logDir "run-$runTimestamp.pid"
+
+$process = Start-Process powershell `
     -WindowStyle Hidden `
-    -ArgumentList `
-    '-NoProfile',
-    '-ExecutionPolicy', 'Bypass',
-    '-Command',
-    'go run . --config .\configs\config.json'
+    -PassThru `
+    -RedirectStandardOutput $stdoutLog `
+    -RedirectStandardError $stderrLog `
+    -ArgumentList @(
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-Command',
+        'go run . --config .\configs\config.json'
+    )
+
+$process.Id | Set-Content -Encoding UTF8 $pidFile
+"run timestamp: $runTimestamp"
+"wrapper pid: $($process.Id)"
+"stdout: $stdoutLog"
+"stderr: $stderrLog"
 ```
 
-Не запускать `go run` напрямую в активной консоли.
+Не запускать `go run` напрямую в активной консоли. В ответе пользователю укажи `runTimestamp`, PID wrapper-процесса и пути stdout/stderr логов.
 
 ## Мониторинг долгого прогона
 
@@ -59,10 +80,18 @@ Start-Process powershell `
 
 Проверять:
 - `output/_log/last_run.txt`
-- stdout/stderr текущего запуска
+- stdout/stderr текущего запуска по путям `run-<timestamp>.stdout.log` и `run-<timestamp>.stderr.log`
+- PID wrapper-процесса из `run-<timestamp>.pid`
 - свежие каталоги `output/_tmp/v8_src*`
 - свежие дампы `output/_log/xml_dumps/v8_src*`
 - наличие текущих `go` / `1cv8.exe`
+
+Текущий запуск определяется только по совокупности:
+- timestamp запуска
+- PID wrapper-процесса
+- stdout/stderr log path
+- `CommandLine` с текущим `--config`
+- свежие `output/_tmp/v8_src*` и `output/_log/xml_dumps/v8_src*`
 
 Запрещено:
 - автоматически перезапускать прогон
@@ -71,7 +100,7 @@ Start-Process powershell `
 
 ## Автозавершение зависшего процесса после успешного ChangeFiles
 
-Во время мониторинга, если процесс `powershell` / `go run` ещё жив, но фактически висит только на паузе `Press any key to exit...`, его нужно завершить без отдельного подтверждения пользователя.
+Во время мониторинга, если wrapper `powershell` / дочерний `go run` ещё жив, но фактически висит только на паузе `Press any key to exit...`, его нужно завершить без отдельного подтверждения пользователя.
 
 Завершать можно только если одновременно выполнены все условия:
 
@@ -82,7 +111,7 @@ Start-Process powershell `
 - свежий XML dump snapshot уже скопирован в:
   `output/_log/xml_dumps/v8_src*`
 - процесс относится именно к текущему запуску:
-  совпадают timestamp, log path и `CommandLine`
+  совпадают timestamp, PID wrapper-процесса, log path и `CommandLine`
 
 После завершения:
 - снять heartbeat/monitoring automation для этого прогона
@@ -141,7 +170,15 @@ Start-Process powershell `
 xml step: validate dynamic list contracts
 ```
 
-и упал там, можно продолжить на текущем temp-дампе:
+и упал там, можно продолжить на текущем temp-дампе.
+
+Перед resume обязательно проверь, что temp-дамп относится к тому же прогону:
+
+- путь свежий относительно timestamp текущего запуска
+- `Configuration.xml` подтверждает, что это дамп расширения:
+  - `ObjectBelonging=Adopted`
+  - имя/префикс соответствуют `extension_properties` / активному конфигу
+- это не старый `v8_src*`, выбранный только потому, что он существует
 
 ```powershell
 go run .\cmd\changefiles\main.go .\configs\config.json <path-to-output\_tmp\v8_src*> --resume-from-validation
@@ -155,13 +192,13 @@ Resume-режим:
 
 ## После успешного завершения
 
-Если `go` завершился, свежий дамп есть, а процесс висит на:
+Если wrapper `powershell` / дочерний `go run` ещё жив, stdout текущего запуска содержит:
 
 ```text
 Press any key to exit...
 ```
 
-заверши этот процесс автоматически.
+и одновременно подтверждено, что `ChangeFiles` завершился успешно, свежий dump snapshot уже сохранён, а процесс однозначно относится к текущему запуску, заверши именно этот wrapper/дочерний процесс автоматически.
 
 В финальном ответе укажи:
 - результат `go build ./...`
