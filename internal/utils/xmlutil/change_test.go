@@ -2807,6 +2807,55 @@ func TestLoadXMLContextsScopesRelativeDirs(t *testing.T) {
 	}
 }
 
+func TestCollectTargetCompatibilityKeysReadsOnlyRelevantTopLevelXML(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	files := map[string]string{
+		filepath.Join("DefinedTypes", "НужныйТип.xml"): `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><DefinedType><Properties><Name>НужныйТип</Name></Properties></DefinedType></MetaDataObject>`,
+		filepath.Join("DefinedTypes", "Nested", "Игнор.xml"): `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><DefinedType><Properties><Name>Игнор</Name></Properties></DefinedType></MetaDataObject>`,
+		filepath.Join("EventSubscriptions", "НужнаяПодписка.xml"): `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><EventSubscription><Properties><Name>НужнаяПодписка</Name></Properties></EventSubscription></MetaDataObject>`,
+		filepath.Join("Catalogs", "Лишний.xml"): `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><Catalog><Properties><Name>Лишний</Name></Properties></Catalog></MetaDataObject>`,
+	}
+
+	for relPath, content := range files {
+		path := filepath.Join(root, relPath)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir test dir: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write test xml: %v", err)
+		}
+	}
+
+	keys, err := collectTargetCompatibilityKeys(root)
+	if err != nil {
+		t.Fatalf("collect target compatibility keys: %v", err)
+	}
+
+	for _, key := range []string{
+		"DefinedType.НужныйТип",
+		"EventSubscription.НужнаяПодписка",
+	} {
+		if _, ok := keys[key]; !ok {
+			t.Fatalf("expected %s in target compatibility keys, got %#v", key, keys)
+		}
+	}
+	for _, key := range []string{
+		"DefinedType.Игнор",
+		"Catalog.Лишний",
+	} {
+		if _, ok := keys[key]; ok {
+			t.Fatalf("did not expect %s in target compatibility keys, got %#v", key, keys)
+		}
+	}
+}
+
 func TestBuildChangeFilesStateAppliesTargetCompatibilitySetBeforeAndAfterRefDrivenPromotion(t *testing.T) {
 	t.Parallel()
 
