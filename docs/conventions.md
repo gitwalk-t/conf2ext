@@ -51,8 +51,8 @@
     предпочтительная формулировка для XML rewrite.
 - `extension_properties`:
   основной JSON-блок для имени, префикса и стабильного `identifier` корня расширения. Старые `extension` и `prefix` остаются backward-compatible alias. Имя и префикс нужно синхронно отражать в `Configuration.xml` и `ConfigDumpInfo.xml`, а `identifier` — в `Configuration/@uuid`.
-- `targetCompatibilitySet`:
-  отдельное ограничение для `DefinedType` и `EventSubscription`, если задан `target.xml_dump`. `Native`-объекты расширения допустимы всегда, а adopted-объекты этих kind допускаются только если существуют в XML-выгрузке конфигурации-приемника. `forbidden_*` сильнее `targetCompatibilitySet`.
+- `target.xml_dump`:
+  post-promotion источник только для merge-объектов из `CommonTemplate.упо_MetaDataFile`: `DefinedType`, `ExchangePlan`, `EventSubscription`. Source-ссылки этих объектов до merge не становятся обычным `RefDrivenInclusion`, а target-ссылки из merge могут дотянуть отсутствующий top-level metadata-объект как `AdoptedStub`. `forbidden_*` сильнее такого target-ref-driven merge.
 - У корня `Configuration.xml` обязаны быть `InternalInfo/xr:PropertyState`, `Caption`, `ShortCaption`, `Language.Русский`.
 - `ChildObjects` корня должны отражать весь фактический top-level состав расширения:
   все top-level `Native` и `AdoptedStub`-объекты, которые не исключены итоговым решением. Нельзя чистить корень по правилу "оставить только native-prefix".
