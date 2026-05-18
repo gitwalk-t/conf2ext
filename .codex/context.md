@@ -90,7 +90,8 @@
 - если регистр остается `Native`, его документы-registrators тоже дотягиваются в `Native`, иначе у документа исчезает `RegisterRecords` и конфигуратор теряет регистрацию
 - у `AdoptedStubExt(Form)` есть отдельный инвариант: если `Native`-форма использует dynamic list по ненативному объекту, этот объект обязан пройти валидацию field contract внутри конвертера; не допускаем ситуацию, когда ошибка впервые проявляется уже в Конфигураторе
 - `extension_properties` — основной источник имени, префикса и стабильного `identifier` корня; старые `extension` / `prefix` остаются alias совместимости. Имя и префикс должны совпадать одновременно в `Configuration.xml` и `ConfigDumpInfo.xml`, а `identifier` — в `Configuration/@uuid`
-- если задан `target.xml_dump`, `DefinedType` и `EventSubscription` в итоговом составе нужно ограничивать реальным top-level набором конфигурации-приемника
+- если задан `target.xml_dump`, для `DefinedType` и `EventSubscription` нужно строить `targetCompatibilitySet`: `Native`-объекты расширения допустимы всегда, а adopted-объекты этих kind не должны переживать `RefDrivenInclusion`, если их нет в top-level наборе конфигурации-приемника
+- для этой проверки `target.xml_dump` читается не целиком: достаточно каталогов `DefinedTypes/` и `EventSubscriptions/` с их top-level `*.xml`
 - у корня `Configuration.xml` обязаны быть `InternalInfo/xr:PropertyState`, `Caption`, `ShortCaption`, `Language.Русский`
 - `ChildObjects` корня должны перечислять весь фактический top-level состав расширения, а не только объекты с native-prefix; иначе объект может остаться файлом и записью в `ConfigDumpInfo.xml`, но исчезнуть из состава расширения
 - отдельные стандартные объекты тоже могут быть обязательны для загрузки, даже без `native_prefix`; текущий пример — `CommandGroup.Информация`, который нужно удерживать как `AdoptedStub`, если он используется командами

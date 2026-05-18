@@ -51,7 +51,8 @@ go build ./...
 - нормализовать пути до абсолютных
 - использовать `./configs/config.json`, если `--config` не передан
 - использовать `extension_properties.name` / `extension_properties.prefix` / `extension_properties.identifier` как основной блок свойств корня расширения; старые `extension` / `prefix` остаются backward-compatible alias
-- поддерживать `target.xml_dump` как optional XML-выгрузку конфигурации-приемника для cleanup `DefinedType` и `EventSubscription`
+- поддерживать `target.xml_dump` как optional XML-выгрузку конфигурации-приемника для `targetCompatibilitySet`: `Native`-объекты расширения допустимы всегда, а adopted `DefinedType` / `EventSubscription` допустимы только если существуют в XML-выгрузке приемника
+- для построения `targetCompatibilitySet` достаточно читать из `target.xml_dump` только top-level XML из `DefinedTypes/` и `EventSubscriptions/`; остальной состав target dump в этой операции не используется
 
 Ключевой рабочий конфиг:
 - [`../configs/config.json`](../configs/config.json)
@@ -153,6 +154,7 @@ XML-конвейер должен классифицировать top-level о�
 - cleanup metadata-ссылок должен работать независимо от namespace alias
 - current-config alias вроде `d4p1:` нельзя агрессивно переписывать в `cfg:`
 - qualifier-блоки (`StringQualifiers`, `NumberQualifiers`, `DateQualifiers`, `BinaryDataQualifiers`) должны быть согласованы между owner type-set и predefined item
+- если задан `target.xml_dump`, итоговый состав `DefinedType` и `EventSubscription` дополнительно ограничивается `targetCompatibilitySet`: `Native`-объекты допустимы всегда, а adopted-объекты этих kind не должны переживать `RefDrivenInclusion`, если их нет в XML-выгрузке конфигурации-приемника
 
 ### 8. Специальная обработка через макеты
 
