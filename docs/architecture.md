@@ -35,7 +35,7 @@
 - возврат мягко исключенных объектов в `Native`, если на них есть ссылка из допустимого `Native`
 - первичный `Native` не демотируется в `Excluded` из-за мягких списков; для него действует только `forbidden_*`
 - добавление новых зависимостей как `AdoptedStub` или `AdoptedStubExt`
-- post-promotion merge `target.xml_dump` только для объектов из `CommonTemplate.упо_MetaDataFile`: `DefinedType` объединяется по `Properties/Type`, `ExchangePlan` — по `Ext/Content.xml`, `EventSubscription` — по `Properties/Source`
+- post-promotion merge `target.xml_dump` только для объектов из `CommonTemplate.упо_MetaDataFile`: `DefinedType` объединяется по `Properties/Type`, `ExchangePlan` — по `Ext/Content.xml`, `EventSubscription` — по `Properties/Source`; такие объекты идут как `AdoptedStubExtMetaData`, а не как обычный минимальный `AdoptedStub`
 - target-ссылки из этого merge могут физически подтягивать отсутствующий top-level metadata-объект из `target.xml_dump` как `AdoptedStub`, но не превращают `target.xml_dump` в глобальный source graph
 - очистку ссылок на жестко исключенные объекты из `forbidden_*`
 - нормализацию adopted stub
@@ -81,6 +81,7 @@
 - У `AdoptedStubMetaData` retained child metadata остается в режиме `Native`: top-level объект остается `Adopted`, но сохраненные по макету `Attribute` / `TabularSection` и их child metadata не должны сохранять ни `ObjectBelonging=Adopted`, ни `ExtendedConfigurationObject`
 - `AdoptedStubMetaData` не должен переигрывать явный soft-exclude: если top-level объект попал в единый `excluded`-набор из `excluded_subsystems` / `excluded_objects`, правило `упо_MetaDataFile` не возвращает его обратно в состав
 - `AdoptedStubExt` — заимствованный объект без форм и кода, но с сохраненным реквизитным составом; бывает как `AdoptedStubExt(Form)` и как `AdoptedStubExt(DefinedType)`
+- `AdoptedStubExtMetaData` — отдельный частный режим adopted-объекта для merge-объектов из `CommonTemplate.упо_MetaDataFile`: только `DefinedType`, `ExchangePlan`, `EventSubscription`; top-level объект остается `Adopted`, не минимизируется до пустого stub и сохраняет metadata composition/source, нужный для target-merge и target-ref-driven ссылок (`Properties/Type`, `Ext/Content.xml`, `Properties/Source`), но без форм и BSL
 - Для `AdoptedStub` не переносим тексты `ManagerModule` и `ObjectModule`; для adopted-констант по тому же правилу не переносим `ValueManagerModule`; для adopted общих модулей не переносим `Module`; для adopted команд не переносим `CommandModule`. Если top-level объект остается adopted, child-записи этих модулей нужно убирать и из `ConfigDumpInfo.xml`, а у `CommonModule` и команд еще и удалять соответствующие `Ext/*.bsl`
 - у `AdoptedStubExt` не сериализуем `Properties/StandardAttributes`; стандартные поля остаются доступными платформенно и не должны считаться заимствованным составом
 - `AdoptedStubExt(EventSubscription)` — ненативная подписка на событие в полном составе; она тоже остается источником `RefDrivenInclusion`
@@ -98,7 +99,7 @@
 - для `AdoptedStubExt(Form)` источником решения служит не только `MainTable`, но и field contract dynamic list: `DataPath`, `Field`, `RowPictureDataPath` и родственные поля. Этот контракт должен проверяться конвертером до загрузки в 1С.
 - `extension_properties.name` / `extension_properties.prefix` — основной источник имени и префикса корня; старые `extension` / `prefix` поддерживаются как алиасы совместимости и тоже должны сходиться с `Configuration.xml` и `ConfigDumpInfo.xml`
 - `extension_properties.identifier` — стабильный `uuid` корня `Configuration.xml`; он не должен генерироваться заново между прогонами
-- если задан `target.xml_dump`, после обычного `RefDrivenInclusion` для merge-объектов из `CommonTemplate.упо_MetaDataFile` выполняется target-merge; target-ссылки из этого шага могут дотягивать отсутствующий top-level metadata-объект как `AdoptedStub`
+- если задан `target.xml_dump`, после обычного `RefDrivenInclusion` для merge-объектов из `CommonTemplate.упо_MetaDataFile` выполняется target-merge; сами merge-объекты переходят в режим `AdoptedStubExtMetaData`, а target-ссылки из этого шага могут дотягивать отсутствующий top-level metadata-объект как обычный `AdoptedStub`
 - у корня `Configuration.xml` обязаны быть `InternalInfo/xr:PropertyState`, `Caption`, `ShortCaption`, `Language.Русский`
 - `ChildObjects` корня должны совпадать с итоговым top-level составом: top-level `Native` и `AdoptedStub`, не помеченные как excluded/forbidden
 - при `normalizeAdoptedObjectComposition` сохраняем каркас формата: если у исходного top-level metadata был `ChildObjects`, после очистки он должен остаться хотя бы пустым

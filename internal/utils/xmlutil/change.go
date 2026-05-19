@@ -233,6 +233,7 @@ type objectDecision struct {
 	Excluded         bool
 	Truncated        bool
 	SearchResultCode bool
+	AdoptedStubExtMetaData bool
 }
 
 type subsystemState struct {
@@ -551,14 +552,18 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 		}
 
 		if decision.Belonging != "Native" && ctx.Metadata && isTopLevelMetadataFile(ctx) &&
-			ctx.OwnerKey != "Configuration" && ctx.OwnerKey != "Language.Русский" &&
-			ctx.OwnerKind != "DefinedType" && ctx.OwnerKind != "EventSubscription" {
+			ctx.OwnerKey != "Configuration" && ctx.OwnerKey != "Language.Русский" {
 			changed = cleanupAdoptedObjectFormReferences(ctx.Properties) || changed
 			contract, hasContract := formDynamicListContracts[ctx.OwnerKey]
 			overlay := searchResultObjectOverlayForKey(searchResultState, ctx.OwnerKey)
 			overlay = mergeSearchResultOverlayCommands(overlay, retainedOwnerCommandCandidates[ctx.OwnerKey])
 			rule, hasRule := adoptedStubMetaDataRules[ctx.OwnerKey]
-			if hasContract && hasRule {
+			if isAdoptedStubExtMetaData(ctx, decision) {
+				changed = normalizeAdoptedStubExtMetaData(ctx.Doc, ctx.OwnerKind, overlay) || changed
+			} else if ctx.OwnerKind == "DefinedType" || ctx.OwnerKind == "EventSubscription" {
+				// Для специальных adopted metadata-object сохраняем composition/source
+				// и не минимизируем их до обычного AdoptedStub.
+			} else if hasContract && hasRule {
 				changed = normalizeAdoptedStubExtFormComposition(ctx.Doc, mergeAdoptedStubMetaDataIntoFormContract(contract, rule), overlay) || changed
 			} else if hasRule {
 				changed = normalizeAdoptedStubMetaDataComposition(ctx.Doc, ctx.OwnerKind, rule, overlay) || changed
@@ -578,7 +583,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 			changed = normalizeChartOfCharacteristicTypesPredefined(ctx, contexts) || changed
 		}
 
-		if decision.Truncated && ctx.Metadata && isTopLevelMetadataFile(ctx) {
+		if decision.Truncated && ctx.Metadata && isTopLevelMetadataFile(ctx) && !isAdoptedStubExtMetaData(ctx, decision) {
 			changed = normalizeTruncatedMetadataStub(ctx.Doc, ctx.Properties) || changed
 		}
 
@@ -591,7 +596,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 		}
 
 		changed = cleanupForbiddenRegisterMovements(ctx.Doc, blockedForbiddenObjectKeys) || changed
-		if ctx.OwnerKind != "DefinedType" && ctx.OwnerKind != "EventSubscription" {
+		if ctx.OwnerKind != "DefinedType" && ctx.OwnerKind != "EventSubscription" && !isAdoptedStubExtMetaData(ctx, decision) {
 			changed = cleanupExcludedReferences(ctx.Doc, excludedRefs, excludedMetadataPrefixes, truncatedKeys, truncatedChildPrefixes) || changed
 		}
 		bindingTargets := bindingTargetsByDoc[ctx.Doc]
@@ -1495,15 +1500,71 @@ func mergeTargetMetadataComposition(
 	if !info.IsDir() {
 		return nil, nil, fmt.Errorf("путь xml_dump должен указывать на каталог XML-выгрузки конфигурации-приемника: %s", cfg.Target.XMLDump)
 	}
-
-	targetContexts, err := loadXMLContexts(cfg.Target.XMLDump)
-	if err != nil {
-		return nil, nil, fmt.Errorf("не удалось загрузить XML-дамп конфигурации-приемника %s: %w", cfg.Target.XMLDump, err)
-	}
-	targetIndexes := buildContextIndexes(targetContexts)
 	configurationCtx := findContextByOwnerKeyIndexed(indexes, contexts, "Configuration")
 	configDumpCtx := findContextByRelPath(indexes, contexts, configDumpInfo)
-	targetConfigDumpCtx := findContextByRelPath(targetIndexes, targetContexts, configDumpInfo)
+	targetContexts := make([]*FileProcessingContext, 0, len(targetMergeObjectKeys))
+	targetIndexes := buildContextIndexes(targetContexts)
+
+	loadTargetContextByRelPath := func(relPath string) (*FileProcessingContext, error) {
+		if relPath == "" {
+			return nil, nil
+		}
+		if existing := findContextByRelPath(targetIndexes, targetContexts, relPath); existing != nil {
+			return existing, nil
+		}
+
+		path := filepath.Join(cfg.Target.XMLDump, filepath.FromSlash(relPath))
+		info, err := os.Stat(path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("ошибка при доступе к файлу %s: %w", path, err)
+		}
+		if info.IsDir() {
+			return nil, fmt.Errorf("ожидался XML-файл, а не каталог: %s", path)
+		}
+
+		doc, err := readXMLFile(path)
+		if err != nil {
+			return nil, err
+		}
+
+		kind, name, key := detectOwner(relPath, doc)
+		ctx := &FileProcessingContext{
+			Doc:              doc,
+			Path:             path,
+			RelPath:          filepath.ToSlash(relPath),
+			FileName:         filepath.Base(path),
+			Metadata:         isMetadataObjectDoc(doc),
+			TopLevelMetadata: isTopLevelMetadataRelPath(relPath),
+			Properties:       findProperties(doc),
+			OwnerKind:        kind,
+			OwnerName:        name,
+			OwnerKey:         key,
+		}
+		targetContexts = append(targetContexts, ctx)
+		appendContextToIndexes(targetIndexes, ctx)
+		return ctx, nil
+	}
+
+	loadTargetTopLevelContextByKey := func(key string) (*FileProcessingContext, error) {
+		if existing := findContextByOwnerKeyIndexed(targetIndexes, targetContexts, key); existing != nil {
+			return existing, nil
+		}
+		relPath, ok := topLevelMetadataRelPathForKey(key)
+		if !ok {
+			return nil, nil
+		}
+		ctx, err := loadTargetContextByRelPath(relPath)
+		if err != nil || ctx == nil {
+			return ctx, err
+		}
+		if ctx.OwnerKey != key {
+			return nil, fmt.Errorf("ожидался объект %s в XML-дампе конфигурации-приемника, получен %s", key, ctx.OwnerKey)
+		}
+		return ctx, nil
+	}
 
 	ensureTargetTopLevelObjectImported := func(key string, currentCtx *FileProcessingContext, targetCtx *FileProcessingContext) (*FileProcessingContext, error) {
 		if targetCtx == nil || targetCtx.Doc == nil || !isTopLevelMetadataFile(targetCtx) {
@@ -1535,7 +1596,7 @@ func mergeTargetMetadataComposition(
 		}
 
 		if configDumpCtx != nil && configDumpCtx.Doc != nil {
-			changed, err := ensureConfigDumpInfoMetadataEntry(configDumpCtx.Doc, targetConfigDumpCtx, key)
+			changed, err := ensureConfigDumpInfoMetadataEntry(configDumpCtx.Doc, key, currentCtx, targetCtx)
 			if err != nil {
 				return nil, err
 			}
@@ -1569,9 +1630,12 @@ func mergeTargetMetadataComposition(
 				continue
 			}
 
-			targetCtx := findContextByOwnerKeyIndexed(targetIndexes, targetContexts, ref)
+			targetCtx, err := loadTargetTopLevelContextByKey(ref)
+			if err != nil {
+				return false, err
+			}
 			currentCtx := findContextByOwnerKeyIndexed(indexes, contexts, ref)
-			_, err := ensureTargetTopLevelObjectImported(ref, currentCtx, targetCtx)
+			_, err = ensureTargetTopLevelObjectImported(ref, currentCtx, targetCtx)
 			if err != nil {
 				return false, err
 			}
@@ -1585,7 +1649,10 @@ func mergeTargetMetadataComposition(
 			continue
 		}
 
-		targetCtx := findContextByOwnerKeyIndexed(targetIndexes, targetContexts, key)
+		targetCtx, err := loadTargetTopLevelContextByKey(key)
+		if err != nil {
+			return nil, nil, err
+		}
 		if targetCtx == nil || targetCtx.Doc == nil {
 			continue
 		}
@@ -1596,9 +1663,10 @@ func mergeTargetMetadataComposition(
 			if err != nil {
 				return nil, nil, err
 			}
-			decision = decisions[key]
 			exists = true
 		}
+		decision = preserveAdoptedStubExtMetaData(decisions[key])
+		decisions[key] = decision
 		if !exists || decision.Excluded || currentCtx == nil || currentCtx.Doc == nil {
 			continue
 		}
@@ -1632,7 +1700,10 @@ func mergeTargetMetadataComposition(
 		case "ExchangePlan":
 			contentRelPath := strings.TrimSuffix(currentCtx.RelPath, ".xml") + "/Ext/Content.xml"
 			currentContentCtx := findContextByRelPath(indexes, contexts, contentRelPath)
-			targetContentCtx := findContextByRelPath(targetIndexes, targetContexts, contentRelPath)
+			targetContentCtx, err := loadTargetContextByRelPath(contentRelPath)
+			if err != nil {
+				return nil, nil, err
+			}
 			if targetContentCtx == nil || targetContentCtx.Doc == nil {
 				continue
 			}
@@ -1851,14 +1922,13 @@ func appendContextToIndexes(indexes *contextIndexes, ctx *FileProcessingContext)
 	indexes.byFileName[ctx.FileName] = append(indexes.byFileName[ctx.FileName], ctx)
 }
 
-func ensureConfigDumpInfoMetadataEntry(doc *etree.Document, targetConfigDumpCtx *FileProcessingContext, metadataName string) (bool, error) {
-	if doc == nil || targetConfigDumpCtx == nil || targetConfigDumpCtx.Doc == nil {
+func ensureConfigDumpInfoMetadataEntry(doc *etree.Document, metadataName string, candidateContexts ...*FileProcessingContext) (bool, error) {
+	if doc == nil {
 		return false, nil
 	}
 
 	configVersions := findConfigVersionsElement(doc)
-	targetVersions := findConfigVersionsElement(targetConfigDumpCtx.Doc)
-	if configVersions == nil || targetVersions == nil {
+	if configVersions == nil {
 		return false, fmt.Errorf("не удалось обновить ConfigDumpInfo.xml для %s", metadataName)
 	}
 
@@ -1866,13 +1936,33 @@ func ensureConfigDumpInfoMetadataEntry(doc *etree.Document, targetConfigDumpCtx 
 		return false, nil
 	}
 
-	targetEntry := findConfigDumpMetadataEntry(targetVersions, metadataName)
-	if targetEntry == nil {
-		return false, fmt.Errorf("не удалось найти запись %s в target ConfigDumpInfo.xml", metadataName)
+	metadataID := ""
+	for _, ctx := range candidateContexts {
+		metadataID = metadataUUIDForConfigDumpEntry(ctx)
+		if metadataID != "" {
+			break
+		}
+	}
+	if metadataID == "" {
+		return false, fmt.Errorf("не удалось определить uuid для записи %s в ConfigDumpInfo.xml", metadataName)
 	}
 
-	configVersions.AddChild(targetEntry.Copy())
+	entry := etree.NewElement("Metadata")
+	entry.CreateAttr("name", metadataName)
+	entry.CreateAttr("id", metadataID)
+	configVersions.AddChild(entry)
 	return true, nil
+}
+
+func metadataUUIDForConfigDumpEntry(ctx *FileProcessingContext) string {
+	if ctx == nil || ctx.Doc == nil {
+		return ""
+	}
+	target := metadataTargetElement(ctx.Doc)
+	if target == nil {
+		return ""
+	}
+	return normalizeGUIDValue(target.SelectAttrValue("uuid", ""))
 }
 
 func ensureConfigurationChildObject(doc *etree.Document, metadataName string) bool {
@@ -1926,6 +2016,22 @@ func findConfigDumpMetadataEntry(configVersions *etree.Element, metadataName str
 		}
 	}
 	return nil
+}
+
+func topLevelMetadataRelPathForKey(key string) (string, bool) {
+	kind, name := splitObjectKey(key)
+	if kind == "" || name == "" {
+		return "", false
+	}
+
+	for dir, candidateKind := range metadataKinds {
+		if candidateKind != kind {
+			continue
+		}
+		return filepath.ToSlash(filepath.Join(dir, name+".xml")), true
+	}
+
+	return "", false
 }
 
 func normalizeGUIDValue(value string) string {
@@ -2343,6 +2449,29 @@ func shouldTruncateAdoptedStub(ctx *FileProcessingContext) bool {
 		return false
 	default:
 		return true
+	}
+}
+
+func preserveAdoptedStubExtMetaData(decision objectDecision) objectDecision {
+	decision.Belonging = "AdoptedStub"
+	decision.Excluded = false
+	decision.Truncated = false
+	decision.AdoptedStubExtMetaData = true
+	return decision
+}
+
+func isAdoptedStubExtMetaData(ctx *FileProcessingContext, decision objectDecision) bool {
+	if !decision.AdoptedStubExtMetaData || decision.Belonging != "AdoptedStub" {
+		return false
+	}
+	if ctx == nil {
+		return false
+	}
+	switch ctx.OwnerKind {
+	case "DefinedType", "ExchangePlan", "EventSubscription":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -8436,6 +8565,17 @@ func normalizeAdoptedObjectComposition(doc *etree.Document, ownerKind string, ov
 	return changed
 }
 
+func normalizeAdoptedStubExtMetaData(doc *etree.Document, ownerKind string, overlay searchResultObjectOverlay) bool {
+	switch ownerKind {
+	case "DefinedType", "EventSubscription":
+		return false
+	case "ExchangePlan":
+		return normalizeAdoptedObjectComposition(doc, ownerKind, overlay)
+	default:
+		return false
+	}
+}
+
 func normalizeAdoptedStubMetaDataComposition(doc *etree.Document, ownerKind string, rule adoptedStubMetaDataRule, overlay searchResultObjectOverlay) bool {
 	if doc == nil {
 		return false
@@ -9135,7 +9275,12 @@ func finalizeRetainedOwnerCommands(
 		overlay = mergeSearchResultOverlayCommands(overlay, retainedOwnerCommands[ownerKey])
 		contract, hasContract := formDynamicListContracts[ownerKey]
 		rule, hasRule := adoptedStubMetaDataRules[ownerKey]
-		if hasContract && hasRule {
+		if isAdoptedStubExtMetaData(ctx, decision) {
+			changed = normalizeAdoptedStubExtMetaData(ctx.Doc, ctx.OwnerKind, overlay) || changed
+		} else if ctx.OwnerKind == "DefinedType" || ctx.OwnerKind == "EventSubscription" {
+			// Для специальных adopted metadata-object сохраняем composition/source
+			// и не минимизируем их до обычного AdoptedStub.
+		} else if hasContract && hasRule {
 			changed = normalizeAdoptedStubExtFormComposition(ctx.Doc, mergeAdoptedStubMetaDataIntoFormContract(contract, rule), overlay) || changed
 		} else if hasRule {
 			changed = normalizeAdoptedStubMetaDataComposition(ctx.Doc, ctx.OwnerKind, rule, overlay) || changed

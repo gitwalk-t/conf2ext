@@ -27,6 +27,8 @@
 - `AdoptedStubExt(Form)` — нужен, когда форма `Native`-объекта тянет не-native ссылку через dynamic list. В этом случае сохраняется не просто сам объект по `MainTable`, а полный field contract списка: `MainTable` плюс используемые `DataPath` / `Field` / `RowPictureDataPath` и родственные поля. Если dynamic list требует реквизит, он должен остаться доступным в итоговом XML; если реквизит не поддержан, конвертер должен падать своей ошибкой, а не оставлять проблему Конфигуратору.
 - `AdoptedStubExt(DefinedType)` — нужен, когда ненативный `DefinedType` сам остается источником ссылок и его состав должен дотягиваться по обычному правилу `AdoptedStub`
 - `AdoptedStubExt(EventSubscription)` — нужен, когда ненативная подписка на событие сама остается источником ссылок и переносится с полным составом по `RefDrivenInclusion`
+- `AdoptedStubExtMetaData`:
+  специальный adopted metadata merge object из `CommonTemplate.упо_MetaDataFile`. Используется только для `DefinedType`, `ExchangePlan`, `EventSubscription`, не является alias обычного `AdoptedStub`, сохраняет `Type` / `Content` / `Source` для target-merge и target-ref-driven ссылок, но не должен сохранять формы и BSL.
 - Для `AdoptedStubExt` не заимствуем `Properties/StandardAttributes`. Стандартные поля вроде `Ссылка`, `Наименование`, `Код`, `Родитель` считаем встроенными возможностями платформы, а не частью сериализуемого adopted-состава.
 - Для `AdoptedStubExt(Form)` у `Catalog` недостаточно только сохранить нужные child objects; top-level и child `Properties` тоже нужно приводить к минимальному stub-виду, близкому к выгрузке Конфигуратора. Нельзя оставлять полный исходный набор свойств каталога (`InputByString`, `ChoiceMode`, `DataHistory` и т.п.), если объект уже переведен в retained adopted-stub для формы.
   В обоих случаях формы и код не переносятся; для `DefinedType` и `EventSubscription` состав не режется.
@@ -52,7 +54,7 @@
 - `extension_properties`:
   основной JSON-блок для имени, префикса и стабильного `identifier` корня расширения. Старые `extension` и `prefix` остаются backward-compatible alias. Имя и префикс нужно синхронно отражать в `Configuration.xml` и `ConfigDumpInfo.xml`, а `identifier` — в `Configuration/@uuid`.
 - `target.xml_dump`:
-  post-promotion источник только для merge-объектов из `CommonTemplate.упо_MetaDataFile`: `DefinedType`, `ExchangePlan`, `EventSubscription`. Source-ссылки этих объектов до merge не становятся обычным `RefDrivenInclusion`, а target-ссылки из merge могут дотянуть отсутствующий top-level metadata-объект как `AdoptedStub`. `forbidden_*` сильнее такого target-ref-driven merge.
+  post-promotion источник только для merge-объектов из `CommonTemplate.упо_MetaDataFile`: `DefinedType`, `ExchangePlan`, `EventSubscription`. Эти объекты идут в режиме `AdoptedStubExtMetaData`: source-ссылки до merge не становятся обычным `RefDrivenInclusion`, а target-ссылки из сохраненного `Type` / `Content` / `Source` могут дотянуть отсутствующий top-level metadata-объект как обычный `AdoptedStub`. `forbidden_*` сильнее такого target-ref-driven merge.
 - У корня `Configuration.xml` обязаны быть `InternalInfo/xr:PropertyState`, `Caption`, `ShortCaption`, `Language.Русский`.
 - `ChildObjects` корня должны отражать весь фактический top-level состав расширения:
   все top-level `Native` и `AdoptedStub`-объекты, которые не исключены итоговым решением. Нельзя чистить корень по правилу "оставить только native-prefix".
@@ -96,7 +98,7 @@
 - Сохраняй существующую русскоязычную формулировку логов и ошибок, если нет причины стандартизировать затронутую область
 - Не делай попутную “косметическую” очистку в `change.go`
 - Не переименовывай устоявшиеся технические режимы (`Native`, `AdoptedStub`) в документации и комментариях без явной причины
-- Если нужен `AdoptedStubExt`, называй его именно так; не подменяй формулировками вроде “почти полный adopted” или “stub с полями”
+- Если нужен `AdoptedStubExt` или `AdoptedStubExtMetaData`, называй его именно так; не подменяй формулировками вроде “почти полный adopted” или “stub с полями”
 
 ## Тесты
 

@@ -2884,7 +2884,7 @@ func TestBuildChangeFilesStateMergesTargetMetadataOnlyForMetaDataFileObjects(t *
 
 	writeFile(targetRoot, filepath.Join("DefinedTypes", "ЦелевойТип.xml"), `<?xml version="1.0" encoding="UTF-8"?>
 <MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
-  <DefinedType>
+  <DefinedType uuid="11111111-1111-1111-1111-111111111111">
     <Properties>
       <Name>ЦелевойТип</Name>
       <Type>
@@ -2895,12 +2895,6 @@ func TestBuildChangeFilesStateMergesTargetMetadataOnlyForMetaDataFileObjects(t *
 </MetaDataObject>`)
 	writeFile(targetRoot, filepath.Join("Catalogs", "ИзTarget.xml"), `<?xml version="1.0" encoding="UTF-8"?>
 <MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><Catalog uuid="33333333-3333-3333-3333-333333333333"><Properties><Name>ИзTarget</Name></Properties></Catalog></MetaDataObject>`)
-	writeFile(targetRoot, "ConfigDumpInfo.xml", `<?xml version="1.0" encoding="UTF-8"?>
-<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo">
-  <ConfigVersions>
-    <Metadata name="Catalog.ИзTarget" id="33333333-3333-3333-3333-333333333333"/>
-  </ConfigVersions>
-</ConfigDumpInfo>`)
 
 	state, err := buildChangeFilesState(&config.Configuration{
 		IncludedAdoptedStubObjects: []string{
@@ -2943,6 +2937,9 @@ func TestBuildChangeFilesStateMergesTargetMetadataOnlyForMetaDataFileObjects(t *
 	}
 	if !hasMetadataName(configDumpDoc, "Catalog.ИзTarget") {
 		t.Fatalf("expected target-ref-driven catalog entry in ConfigDumpInfo.xml")
+	}
+	if got := metadataEntryID(configDumpDoc, "Catalog.ИзTarget"); got != "33333333-3333-3333-3333-333333333333" {
+		t.Fatalf("expected minimal target-ref-driven metadata id from target xml, got %q", got)
 	}
 }
 
@@ -3001,7 +2998,7 @@ func TestBuildChangeFilesStateRevivesExcludedTargetMergeObject(t *testing.T) {
 
 	writeFile(targetRoot, filepath.Join("DefinedTypes", "ЦелевойТип.xml"), `<?xml version="1.0" encoding="UTF-8"?>
 <MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
-  <DefinedType>
+  <DefinedType uuid="11111111-1111-1111-1111-111111111111">
     <Properties>
       <Name>ЦелевойТип</Name>
       <Type>
@@ -3012,13 +3009,6 @@ func TestBuildChangeFilesStateRevivesExcludedTargetMergeObject(t *testing.T) {
 </MetaDataObject>`)
 	writeFile(targetRoot, filepath.Join("Catalogs", "ИзTarget.xml"), `<?xml version="1.0" encoding="UTF-8"?>
 <MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><Catalog uuid="33333333-3333-3333-3333-333333333333"><Properties><Name>ИзTarget</Name></Properties></Catalog></MetaDataObject>`)
-	writeFile(targetRoot, "ConfigDumpInfo.xml", `<?xml version="1.0" encoding="UTF-8"?>
-<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo">
-  <ConfigVersions>
-    <Metadata name="DefinedType.ЦелевойТип" id="11111111-1111-1111-1111-111111111111"/>
-    <Metadata name="Catalog.ИзTarget" id="33333333-3333-3333-3333-333333333333"/>
-  </ConfigVersions>
-</ConfigDumpInfo>`)
 
 	state, err := buildChangeFilesState(&config.Configuration{
 		IncludedAdoptedStubObjects: []string{
@@ -3079,6 +3069,133 @@ func TestBuildChangeFilesStateRevivesExcludedTargetMergeObject(t *testing.T) {
 			t.Fatalf("expected %s entry in ConfigDumpInfo.xml", name)
 		}
 	}
+	if got := metadataEntryID(configDumpDoc, "Catalog.ИзTarget"); got != "33333333-3333-3333-3333-333333333333" {
+		t.Fatalf("expected minimal target-ref-driven metadata id from target xml, got %q", got)
+	}
+}
+
+func TestBuildChangeFilesStateMarksExchangePlanAsAdoptedStubExtMetaData(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	targetRoot := t.TempDir()
+	writeFile := func(base, relPath, content string) {
+		t.Helper()
+		path := filepath.Join(base, relPath)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	writeFile(root, "Configuration.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Configuration>
+    <ChildObjects>
+      <ExchangePlan>ЦелевойПлан</ExchangePlan>
+      <Catalog>ИзSource</Catalog>
+    </ChildObjects>
+  </Configuration>
+</MetaDataObject>`)
+	writeFile(root, "ConfigDumpInfo.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo">
+  <ConfigVersions>
+    <Metadata name="ExchangePlan.ЦелевойПлан" id="11111111-1111-1111-1111-111111111111"/>
+    <Metadata name="Catalog.ИзSource" id="22222222-2222-2222-2222-222222222222"/>
+  </ConfigVersions>
+</ConfigDumpInfo>`)
+	writeFile(root, filepath.Join("ExchangePlans", "ЦелевойПлан.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <ExchangePlan uuid="11111111-1111-1111-1111-111111111111">
+    <Properties>
+      <Name>ЦелевойПлан</Name>
+    </Properties>
+    <ChildObjects/>
+  </ExchangePlan>
+</MetaDataObject>`)
+	writeFile(root, filepath.Join("ExchangePlans", "ЦелевойПлан", "Ext", "Content.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<Content xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Item><Metadata>Catalog.ИзSource</Metadata></Item>
+</Content>`)
+	writeFile(root, filepath.Join("Catalogs", "ИзSource.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><Catalog uuid="22222222-2222-2222-2222-222222222222"><Properties><Name>ИзSource</Name></Properties></Catalog></MetaDataObject>`)
+	writeFile(root, filepath.Join("CommonTemplates", "упо_MetaDataFile", "Ext", "Template.txt"), `{
+  "ПланОбмена": {
+    "ЦелевойПлан": {
+      "Состав": []
+    }
+  }
+}`)
+
+	writeFile(targetRoot, filepath.Join("ExchangePlans", "ЦелевойПлан.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <ExchangePlan uuid="11111111-1111-1111-1111-111111111111">
+    <Properties>
+      <Name>ЦелевойПлан</Name>
+    </Properties>
+    <ChildObjects/>
+  </ExchangePlan>
+</MetaDataObject>`)
+	writeFile(targetRoot, filepath.Join("ExchangePlans", "ЦелевойПлан", "Ext", "Content.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<Content xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Item><Metadata>Catalog.ИзTarget</Metadata></Item>
+</Content>`)
+	writeFile(targetRoot, filepath.Join("Catalogs", "ИзTarget.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><Catalog uuid="33333333-3333-3333-3333-333333333333"><Properties><Name>ИзTarget</Name></Properties></Catalog></MetaDataObject>`)
+
+	state, err := buildChangeFilesState(&config.Configuration{
+		IncludedAdoptedStubObjects: []string{
+			"Catalog.ИзSource",
+		},
+		Target: config.Target{
+			XMLDump: targetRoot,
+		},
+	}, root)
+	if err != nil {
+		t.Fatalf("build change files state: %v", err)
+	}
+
+	decision := state.decisions["ExchangePlan.ЦелевойПлан"]
+	if decision.Excluded || decision.Belonging != "AdoptedStub" {
+		t.Fatalf("expected ExchangePlan target merge object to stay adopted, got %#v", decision)
+	}
+	if decision.Truncated {
+		t.Fatalf("expected ExchangePlan target merge object not to be truncated")
+	}
+	if !decision.AdoptedStubExtMetaData {
+		t.Fatalf("expected ExchangePlan target merge object to be marked as AdoptedStubExtMetaData")
+	}
+
+	contentCtx := findContextByRelPath(state.indexes, state.contexts, "ExchangePlans/ЦелевойПлан/Ext/Content.xml")
+	if contentCtx == nil || contentCtx.Doc == nil {
+		t.Fatalf("expected merged ExchangePlan content xml")
+	}
+	metadataValues := make(map[string]struct{})
+	for _, el := range contentCtx.Doc.FindElements("//*[local-name()='Item']/*[local-name()='Metadata']") {
+		metadataValues[strings.TrimSpace(el.Text())] = struct{}{}
+	}
+	for _, expected := range []string{
+		"Catalog.ИзSource",
+		"Catalog.ИзTarget",
+	} {
+		if _, ok := metadataValues[expected]; !ok {
+			t.Fatalf("expected merged ExchangePlan content to contain %s, got %#v", expected, metadataValues)
+		}
+	}
+
+	if decision := state.decisions["Catalog.ИзTarget"]; decision.Excluded || decision.Belonging != "AdoptedStub" {
+		t.Fatalf("expected target-ref-driven catalog from ExchangePlan content, got %#v", decision)
+	}
+
+	configDumpDoc := etree.NewDocument()
+	if err := configDumpDoc.ReadFromFile(filepath.Join(root, "ConfigDumpInfo.xml")); err != nil {
+		t.Fatalf("read config dump info: %v", err)
+	}
+	if got := metadataEntryID(configDumpDoc, "Catalog.ИзTarget"); got != "33333333-3333-3333-3333-333333333333" {
+		t.Fatalf("expected ExchangePlan target-ref-driven metadata id from target xml, got %q", got)
+	}
 }
 
 func TestBuildChangeFilesStateDoesNotImportForbiddenTargetRef(t *testing.T) {
@@ -3112,11 +3229,9 @@ func TestBuildChangeFilesStateDoesNotImportForbiddenTargetRef(t *testing.T) {
 }`)
 
 	writeFile(targetRoot, filepath.Join("DefinedTypes", "ЦелевойТип.xml"), `<?xml version="1.0" encoding="UTF-8"?>
-<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><DefinedType><Properties><Name>ЦелевойТип</Name><Type><Type>cfg:CatalogRef.Запрещенный</Type></Type></Properties></DefinedType></MetaDataObject>`)
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><DefinedType uuid="11111111-1111-1111-1111-111111111111"><Properties><Name>ЦелевойТип</Name><Type><Type>cfg:CatalogRef.Запрещенный</Type></Type></Properties></DefinedType></MetaDataObject>`)
 	writeFile(targetRoot, filepath.Join("Catalogs", "Запрещенный.xml"), `<?xml version="1.0" encoding="UTF-8"?>
 <MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><Catalog><Properties><Name>Запрещенный</Name></Properties></Catalog></MetaDataObject>`)
-	writeFile(targetRoot, "ConfigDumpInfo.xml", `<?xml version="1.0" encoding="UTF-8"?>
-<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo"><ConfigVersions><Metadata name="Catalog.Запрещенный" id="44444444-4444-4444-4444-444444444444"/></ConfigVersions></ConfigDumpInfo>`)
 
 	state, err := buildChangeFilesState(&config.Configuration{
 		IncludedAdoptedStubObjects: []string{
@@ -4832,6 +4947,19 @@ func hasMetadataName(doc *etree.Document, name string) bool {
 		}
 	}
 	return false
+}
+
+func metadataEntryID(doc *etree.Document, name string) string {
+	if doc == nil {
+		return ""
+	}
+	for _, metadata := range doc.FindElements("//*[local-name()='Metadata']") {
+		if strings.TrimSpace(metadata.SelectAttrValue("name", "")) != name {
+			continue
+		}
+		return strings.TrimSpace(metadata.SelectAttrValue("id", ""))
+	}
+	return ""
 }
 
 func hasConfigurationChildObject(doc *etree.Document, kind, name string) bool {

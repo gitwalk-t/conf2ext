@@ -53,6 +53,7 @@ go build ./...
 - использовать `extension_properties.name` / `extension_properties.prefix` / `extension_properties.identifier` как основной блок свойств корня расширения; старые `extension` / `prefix` остаются backward-compatible alias
 - поддерживать `target.xml_dump` как optional XML-выгрузку конфигурации-приемника для post-promotion merge объектов из `CommonTemplate.упо_MetaDataFile`
 - merge применять только к `DefinedType`, `ExchangePlan` и `EventSubscription`, перечисленным в `упо_MetaDataFile`; `target.xml_dump` не является глобальным source graph
+- для этих merge-объектов использовать отдельный adopted-режим `AdoptedStubExtMetaData`: объект не `Native`, не сводится к пустому stub, сохраняет `Properties/Type`, `Ext/Content.xml` или `Properties/Source`, участвует в target-ref-driven ссылках, но не переносит формы и BSL
 
 Ключевой рабочий конфиг:
 - [`../configs/config.json`](../configs/config.json)
@@ -66,6 +67,7 @@ XML-конвейер должен классифицировать top-level о�
 - `AdoptedStubExt(Form)`
 - `AdoptedStubExt(DefinedType)`
 - `AdoptedStubExt(EventSubscription)`
+- `AdoptedStubExtMetaData`
 - `AdoptedStubMetaData`
 - `excluded` как мягкое исключение
 - `forbidden` как жесткое исключение
@@ -84,7 +86,7 @@ XML-конвейер должен классифицировать top-level о�
 
 - строить XML reference graph
 - возвращать допустимые soft-excluded объекты по ссылкам из сохраненного `Native`
-- расширять состав до `AdoptedStub` или `AdoptedStubExt`, если этого требуют формы, типы или служебные XML
+- расширять состав до `AdoptedStub`, `AdoptedStubExt` или `AdoptedStubExtMetaData`, если этого требуют формы, типы, merge-объекты из `упо_MetaDataFile` или служебные XML
 
 При этом:
 
@@ -154,7 +156,7 @@ XML-конвейер должен классифицировать top-level о�
 - cleanup metadata-ссылок должен работать независимо от namespace alias
 - current-config alias вроде `d4p1:` нельзя агрессивно переписывать в `cfg:`
 - qualifier-блоки (`StringQualifiers`, `NumberQualifiers`, `DateQualifiers`, `BinaryDataQualifiers`) должны быть согласованы между owner type-set и predefined item
-- если задан `target.xml_dump`, для объектов из `CommonTemplate.упо_MetaDataFile` после обычного `RefDrivenInclusion` выполняется merge: `DefinedType` объединяется по `Properties/Type`, `ExchangePlan` — по `Ext/Content.xml`, `EventSubscription` — по `Properties/Source`
+- если задан `target.xml_dump`, для объектов из `CommonTemplate.упо_MetaDataFile` после обычного `RefDrivenInclusion` выполняется merge: `DefinedType` объединяется по `Properties/Type`, `ExchangePlan` — по `Ext/Content.xml`, `EventSubscription` — по `Properties/Source`; сами эти объекты должны остаться в режиме `AdoptedStubExtMetaData`
 - target-ссылки, появившиеся на этом merge-этапе, могут дотянуть отсутствующий top-level metadata-объект из `target.xml_dump` как `AdoptedStub`, но не возвращают soft-excluded и не переигрывают `forbidden_*`
 
 ### 8. Специальная обработка через макеты
@@ -166,12 +168,18 @@ XML-конвейер должен классифицировать top-level о�
 Она должна:
 
 - читать общий макет `упо_MetaDataFile`
-- переводить перечисленные объекты в режим `AdoptedStubMetaData`
+- переводить перечисленные объекты либо в режим `AdoptedStubMetaData`, либо в режим `AdoptedStubExtMetaData`
 - сохранять только разрешенный retained child-состав с префиксом `упо_`
 - не возвращать объект в состав, если он уже soft-excluded
 
+Для `DefinedType`, `ExchangePlan`, `EventSubscription`, перечисленных в `упо_MetaDataFile`, действует отдельное правило:
+- top-level объект идет как `AdoptedStubExtMetaData`
+- сохраняет только metadata composition/source, нужный для merge и target-ref-driven ссылок
+- не должен минимизироваться до пустого `AdoptedStub`
+- не должен переносить формы и BSL
+
 `AdditionalProcessing.Use_упо_SearchResult` включает дополнительный overlay `AdoptedStubCode` для adopted-части состава.
-Он не вводит новый `ObjectBelonging` и не меняет базовую классификацию `Native` / `AdoptedStub` / `AdoptedStubExt` / `AdoptedStubMetaData`.
+Он не вводит новый `ObjectBelonging` и не меняет базовую классификацию `Native` / `AdoptedStub` / `AdoptedStubExt` / `AdoptedStubExtMetaData` / `AdoptedStubMetaData`.
 Дополнительный параметр `AdditionalProcessing.UseExactTemplates` управляет строгостью сопоставления шаблонов; по умолчанию используется strict-режим. Если exact-match не сошелся, конвертер пишет запись в `output/_log/searchresult-template-errors.log`, но продолжает перенос по общей fallback-логике без остановки прогона.
 
 При включенном `Use_упо_SearchResult` конвертер:
@@ -201,6 +209,7 @@ Persisted identity mapping применяется только к:
 - `AdoptedStubExt(Form)`
 - `AdoptedStubExt(DefinedType)`
 - `AdoptedStubExt(EventSubscription)`
+- `AdoptedStubExtMetaData`
 - `AdoptedStubMetaData`
 
 `Native`-объекты не участвуют в identity mapping и всегда сохраняют исходные идентификаторы конфигурации.
