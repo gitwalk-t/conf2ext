@@ -1505,6 +1505,50 @@ func mergeTargetMetadataComposition(
 	configDumpCtx := findContextByRelPath(indexes, contexts, configDumpInfo)
 	targetConfigDumpCtx := findContextByRelPath(targetIndexes, targetContexts, configDumpInfo)
 
+	ensureTargetTopLevelObjectImported := func(key string, currentCtx *FileProcessingContext, targetCtx *FileProcessingContext) (*FileProcessingContext, error) {
+		if targetCtx == nil || targetCtx.Doc == nil || !isTopLevelMetadataFile(targetCtx) {
+			return nil, fmt.Errorf("не удалось найти объект %s в XML-дампе конфигурации-приемника", key)
+		}
+
+		if currentCtx == nil || currentCtx.Doc == nil {
+			var err error
+			currentCtx, err = cloneTopLevelContextIntoRoot(root, targetCtx)
+			if err != nil {
+				return nil, err
+			}
+			contexts = append(contexts, currentCtx)
+			appendContextToIndexes(indexes, currentCtx)
+		}
+
+		decisions[key] = objectDecision{
+			Belonging: "AdoptedStub",
+			Truncated: shouldTruncateAdoptedStub(currentCtx),
+		}
+
+		if configurationCtx != nil && configurationCtx.Doc != nil {
+			changed := ensureConfigurationChildObject(configurationCtx.Doc, key)
+			if changed {
+				if err := configurationCtx.Doc.WriteToFile(configurationCtx.Path); err != nil {
+					return nil, fmt.Errorf("ошибка при записи файла %s: %w", configurationCtx.Path, err)
+				}
+			}
+		}
+
+		if configDumpCtx != nil && configDumpCtx.Doc != nil {
+			changed, err := ensureConfigDumpInfoMetadataEntry(configDumpCtx.Doc, targetConfigDumpCtx, key)
+			if err != nil {
+				return nil, err
+			}
+			if changed {
+				if err := configDumpCtx.Doc.WriteToFile(configDumpCtx.Path); err != nil {
+					return nil, fmt.Errorf("ошибка при записи файла %s: %w", configDumpCtx.Path, err)
+				}
+			}
+		}
+
+		return currentCtx, nil
+	}
+
 	ensureTargetValueAvailable := func(value string) (bool, error) {
 		refs := metadataReferencesFromValue(value)
 		if len(refs) == 0 {
@@ -1526,40 +1570,10 @@ func mergeTargetMetadataComposition(
 			}
 
 			targetCtx := findContextByOwnerKeyIndexed(targetIndexes, targetContexts, ref)
-			if targetCtx == nil || targetCtx.Doc == nil || !isTopLevelMetadataFile(targetCtx) {
-				return false, fmt.Errorf("не удалось найти объект %s в XML-дампе конфигурации-приемника", ref)
-			}
-
-			newCtx, err := cloneTopLevelContextIntoRoot(root, targetCtx)
+			currentCtx := findContextByOwnerKeyIndexed(indexes, contexts, ref)
+			_, err := ensureTargetTopLevelObjectImported(ref, currentCtx, targetCtx)
 			if err != nil {
 				return false, err
-			}
-			contexts = append(contexts, newCtx)
-			appendContextToIndexes(indexes, newCtx)
-			decisions[ref] = objectDecision{
-				Belonging: "AdoptedStub",
-				Truncated: shouldTruncateAdoptedStub(newCtx),
-			}
-
-			if configurationCtx != nil && configurationCtx.Doc != nil {
-				changed := ensureConfigurationChildObject(configurationCtx.Doc, ref)
-				if changed {
-					if err := configurationCtx.Doc.WriteToFile(configurationCtx.Path); err != nil {
-						return false, fmt.Errorf("ошибка при записи файла %s: %w", configurationCtx.Path, err)
-					}
-				}
-			}
-
-			if configDumpCtx != nil && configDumpCtx.Doc != nil {
-				changed, err := ensureConfigDumpInfoMetadataEntry(configDumpCtx.Doc, targetConfigDumpCtx, ref)
-				if err != nil {
-					return false, err
-				}
-				if changed {
-					if err := configDumpCtx.Doc.WriteToFile(configDumpCtx.Path); err != nil {
-						return false, fmt.Errorf("ошибка при записи файла %s: %w", configDumpCtx.Path, err)
-					}
-				}
 			}
 		}
 
@@ -1567,14 +1581,25 @@ func mergeTargetMetadataComposition(
 	}
 
 	for key := range targetMergeObjectKeys {
-		decision, exists := decisions[key]
-		if !exists || decision.Excluded {
+		if _, forbidden := forbiddenAdoptedStubObjects[key]; forbidden {
 			continue
 		}
 
-		currentCtx := findContextByOwnerKeyIndexed(indexes, contexts, key)
 		targetCtx := findContextByOwnerKeyIndexed(targetIndexes, targetContexts, key)
-		if currentCtx == nil || targetCtx == nil || currentCtx.Doc == nil || targetCtx.Doc == nil {
+		if targetCtx == nil || targetCtx.Doc == nil {
+			continue
+		}
+		currentCtx := findContextByOwnerKeyIndexed(indexes, contexts, key)
+		decision, exists := decisions[key]
+		if !exists || decision.Excluded || currentCtx == nil || currentCtx.Doc == nil {
+			currentCtx, err = ensureTargetTopLevelObjectImported(key, currentCtx, targetCtx)
+			if err != nil {
+				return nil, nil, err
+			}
+			decision = decisions[key]
+			exists = true
+		}
+		if !exists || decision.Excluded || currentCtx == nil || currentCtx.Doc == nil {
 			continue
 		}
 

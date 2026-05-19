@@ -2946,6 +2946,141 @@ func TestBuildChangeFilesStateMergesTargetMetadataOnlyForMetaDataFileObjects(t *
 	}
 }
 
+func TestBuildChangeFilesStateRevivesExcludedTargetMergeObject(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	targetRoot := t.TempDir()
+	writeFile := func(base, relPath, content string) {
+		t.Helper()
+		path := filepath.Join(base, relPath)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	writeFile(root, "Configuration.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Configuration>
+    <ChildObjects>
+      <DefinedType>ЦелевойТип</DefinedType>
+      <Catalog>ИзSource</Catalog>
+    </ChildObjects>
+  </Configuration>
+</MetaDataObject>`)
+	writeFile(root, "ConfigDumpInfo.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo">
+  <ConfigVersions>
+    <Metadata name="DefinedType.ЦелевойТип" id="11111111-1111-1111-1111-111111111111"/>
+    <Metadata name="Catalog.ИзSource" id="22222222-2222-2222-2222-222222222222"/>
+  </ConfigVersions>
+</ConfigDumpInfo>`)
+	writeFile(root, filepath.Join("DefinedTypes", "ЦелевойТип.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <DefinedType>
+    <Properties>
+      <Name>ЦелевойТип</Name>
+      <Type>
+        <Type>cfg:CatalogRef.ИзSource</Type>
+      </Type>
+    </Properties>
+  </DefinedType>
+</MetaDataObject>`)
+	writeFile(root, filepath.Join("Catalogs", "ИзSource.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><Catalog uuid="22222222-2222-2222-2222-222222222222"><Properties><Name>ИзSource</Name></Properties></Catalog></MetaDataObject>`)
+	writeFile(root, filepath.Join("CommonTemplates", "упо_MetaDataFile", "Ext", "Template.txt"), `{
+  "ОпределяемыйТип": {
+    "ЦелевойТип": {
+      "Тип": []
+    }
+  }
+}`)
+
+	writeFile(targetRoot, filepath.Join("DefinedTypes", "ЦелевойТип.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <DefinedType>
+    <Properties>
+      <Name>ЦелевойТип</Name>
+      <Type>
+        <Type>cfg:CatalogRef.ИзTarget</Type>
+      </Type>
+    </Properties>
+  </DefinedType>
+</MetaDataObject>`)
+	writeFile(targetRoot, filepath.Join("Catalogs", "ИзTarget.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><Catalog uuid="33333333-3333-3333-3333-333333333333"><Properties><Name>ИзTarget</Name></Properties></Catalog></MetaDataObject>`)
+	writeFile(targetRoot, "ConfigDumpInfo.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo">
+  <ConfigVersions>
+    <Metadata name="DefinedType.ЦелевойТип" id="11111111-1111-1111-1111-111111111111"/>
+    <Metadata name="Catalog.ИзTarget" id="33333333-3333-3333-3333-333333333333"/>
+  </ConfigVersions>
+</ConfigDumpInfo>`)
+
+	state, err := buildChangeFilesState(&config.Configuration{
+		IncludedAdoptedStubObjects: []string{
+			"Catalog.ИзSource",
+		},
+		Target: config.Target{
+			XMLDump: targetRoot,
+		},
+	}, root)
+	if err != nil {
+		t.Fatalf("build change files state: %v", err)
+	}
+
+	if decision := state.decisions["DefinedType.ЦелевойТип"]; decision.Excluded || decision.Belonging != "AdoptedStub" {
+		t.Fatalf("expected excluded target merge object to be revived as AdoptedStub, got %#v", decision)
+	}
+	if decision := state.decisions["Catalog.ИзTarget"]; decision.Excluded || decision.Belonging != "AdoptedStub" {
+		t.Fatalf("expected target-ref-driven catalog to be imported as AdoptedStub, got %#v", decision)
+	}
+
+	definedTypeDoc := etree.NewDocument()
+	if err := definedTypeDoc.ReadFromFile(filepath.Join(root, "DefinedTypes", "ЦелевойТип.xml")); err != nil {
+		t.Fatalf("read defined type xml: %v", err)
+	}
+	typeValues := make(map[string]struct{})
+	for _, el := range definedTypeDoc.FindElements("//*[local-name()='DefinedType']/*[local-name()='Properties']/*[local-name()='Type']/*") {
+		typeValues[strings.TrimSpace(el.Text())] = struct{}{}
+	}
+	for _, expected := range []string{
+		"cfg:CatalogRef.ИзSource",
+		"cfg:CatalogRef.ИзTarget",
+	} {
+		if _, ok := typeValues[expected]; !ok {
+			t.Fatalf("expected merged DefinedType composition to contain %s, got %#v", expected, typeValues)
+		}
+	}
+
+	configurationDoc := etree.NewDocument()
+	if err := configurationDoc.ReadFromFile(filepath.Join(root, "Configuration.xml")); err != nil {
+		t.Fatalf("read configuration xml: %v", err)
+	}
+	if !hasConfigurationChildObject(configurationDoc, "DefinedType", "ЦелевойТип") {
+		t.Fatalf("expected revived DefinedType in Configuration.xml ChildObjects")
+	}
+	if !hasConfigurationChildObject(configurationDoc, "Catalog", "ИзTarget") {
+		t.Fatalf("expected target-ref-driven catalog in Configuration.xml ChildObjects")
+	}
+
+	configDumpDoc := etree.NewDocument()
+	if err := configDumpDoc.ReadFromFile(filepath.Join(root, "ConfigDumpInfo.xml")); err != nil {
+		t.Fatalf("read config dump info: %v", err)
+	}
+	for _, name := range []string{
+		"DefinedType.ЦелевойТип",
+		"Catalog.ИзTarget",
+	} {
+		if !hasMetadataName(configDumpDoc, name) {
+			t.Fatalf("expected %s entry in ConfigDumpInfo.xml", name)
+		}
+	}
+}
+
 func TestBuildChangeFilesStateDoesNotImportForbiddenTargetRef(t *testing.T) {
 	t.Parallel()
 
