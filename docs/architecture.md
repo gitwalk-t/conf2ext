@@ -31,12 +31,13 @@
 - приоритетное soft-исключение top-level объектов, связанных с `excluded_subsystems` или явно перечисленных в `excluded_objects`, даже если имя объекта попадает в primary `Native` по native-prefix
 - `RefDrivenInclusion` по XML-ссылкам из оставленных `Native`-объектов
 - для восстановления soft-excluded объектов источниками `RefDrivenInclusion` считаем только `Native`-объекты и их формы; `Native`-подсистемы сами по себе для такого восстановления источником не являются
+- ненативная `Subsystem` переносится только как предок реально вложенной native-подсистемы; отдельного hardcoded special-root правила для `СтандартныеПодсистемы` / `ПодключаемыеОтчетыИОбработки` больше нет
 - особый случай для ненативных `DefinedType`, перенесенных как `AdoptedStubExt`: их состав тоже остается источником `RefDrivenInclusion`
 - возврат мягко исключенных объектов в `Native`, если на них есть ссылка из допустимого `Native`
-- первичный `Native` не демотируется в `Excluded` из-за мягких списков; для него действует только `forbidden_*`
 - добавление новых зависимостей как `AdoptedStub` или `AdoptedStubExt`
 - post-promotion merge `target.xml_dump` только для объектов из `CommonTemplate.упо_MetaDataFile`: `DefinedType` объединяется по `Properties/Type`, `ExchangePlan` — по `Ext/Content.xml`, `EventSubscription` — по `Properties/Source`; такие объекты идут как `AdoptedStubExtMetaData`, а не как обычный минимальный `AdoptedStub`
 - target-ссылки из этого merge могут физически подтягивать отсутствующий top-level metadata-объект из `target.xml_dump` как `AdoptedStub`, но не превращают `target.xml_dump` в глобальный source graph
+- target-merge работает как lazy cached batch: сначала собирает target-ссылки, затем дедуплицированно импортирует недостающие target-объекты и один раз записывает измененные merge XML, `Configuration.xml` и `ConfigDumpInfo.xml`
 - очистку ссылок на жестко исключенные объекты из `forbidden_*`
 - нормализацию adopted stub
 - замену GUID

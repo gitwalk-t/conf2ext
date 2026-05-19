@@ -58,6 +58,7 @@
 - После такого soft-исключения объект не должен возвращаться в состав, если все его допустимые входящие ref-driven ссылки идут только из `Native`-подсистем
 - Если мягко исключенный объект не входит в первичный `Native`, ref-driven возврат в `AdoptedStub` не должен срабатывать от одних только `Native`-подсистем; для такого возврата нужен хотя бы один другой допустимый источник ссылки
 - Для восстановления excluded-объекта `Native`-подсистема сама по себе не считается источником `RefDrivenInclusion`; источниками могут быть только `Native`-объекты и их формы
+- Ненативная top-level `Subsystem` может попасть в extension только как adopted-предок реально вложенной native-подсистемы; отдельного special-root правила для `СтандартныеПодсистемы`, `Администрирование` и `ПодключаемыеОтчетыИОбработки` быть не должно
 - Ссылки на excluded-объекты в `Role/Ext/Rights.xml` тоже не считаются источником `RefDrivenInclusion`; rights-записи на такие metadata-path нужно вычищать из роли
 - BSL-модули нигде не анализируются; работа идет только по XML-метаданным и XML-ссылкам
 - для `DefinedType` и `EventSubscription` мягко исключенные ссылки не режутся общим cleanup; их состав сохраняется целиком и дальше живет через `RefDrivenInclusion`
@@ -94,6 +95,7 @@
 - `extension_properties` — основной источник имени, префикса и стабильного `identifier` корня; старые `extension` / `prefix` остаются alias совместимости. Имя и префикс должны совпадать одновременно в `Configuration.xml` и `ConfigDumpInfo.xml`, а `identifier` — в `Configuration/@uuid`
 - если задан `target.xml_dump`, после обычной classification/promotion-логики выполняется отдельный merge только для объектов из `CommonTemplate.упо_MetaDataFile`: `DefinedType`, `ExchangePlan`, `EventSubscription`
 - source-ссылки таких `DefinedType` / `ExchangePlan` / `EventSubscription` до merge не должны становиться обычным `RefDrivenInclusion`; в самом merge эти объекты идут как `AdoptedStubExtMetaData`, а target-ссылки из их сохраненного `Type` / `Content` / `Source` могут дотянуть отсутствующий top-level metadata-объект из `target.xml_dump` как обычный `AdoptedStub`, но не переигрывают `forbidden_*` и не возвращают soft-excluded автоматически
+- target-merge реализуется как lazy cached batch: target lookup кешируется по key и relPath, target-ref-driven ссылки сначала собираются и дедуплицируются, а `Configuration.xml` и `ConfigDumpInfo.xml` записываются один раз после merge
 - у корня `Configuration.xml` обязаны быть `InternalInfo/xr:PropertyState`, `Caption`, `ShortCaption`, `Language.Русский`
 - `ChildObjects` корня должны перечислять весь фактический top-level состав расширения, а не только объекты с native-prefix; иначе объект может остаться файлом и записью в `ConfigDumpInfo.xml`, но исчезнуть из состава расширения
 - отдельные стандартные объекты тоже могут быть обязательны для загрузки, даже без `native_prefix`; текущий пример — `CommandGroup.Информация`, который нужно удерживать как `AdoptedStub`, если он используется командами

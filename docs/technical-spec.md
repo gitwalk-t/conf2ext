@@ -76,6 +76,7 @@ XML-конвейер должен классифицировать top-level о�
 
 - обычный `Native` не сериализуется как явный `<ObjectBelonging>Native</ObjectBelonging>`
 - `excluded_subsystems` и `excluded_objects` образуют единый soft-excluded набор
+- объект из этого набора исключается раньше primary `Native` по native-prefix
 - `forbidden_*` всегда сильнее soft-include и `RefDrivenInclusion`
 - `Native`-подсистемы и `Role/Ext/Rights.xml` не должны сами по себе восстанавливать excluded-объекты
 - объекты из `included_Native_objects` должны обрабатываться так же, как prefix-native
@@ -158,6 +159,7 @@ XML-конвейер должен классифицировать top-level о�
 - qualifier-блоки (`StringQualifiers`, `NumberQualifiers`, `DateQualifiers`, `BinaryDataQualifiers`) должны быть согласованы между owner type-set и predefined item
 - если задан `target.xml_dump`, для объектов из `CommonTemplate.упо_MetaDataFile` после обычного `RefDrivenInclusion` выполняется merge: `DefinedType` объединяется по `Properties/Type`, `ExchangePlan` — по `Ext/Content.xml`, `EventSubscription` — по `Properties/Source`; сами эти объекты должны остаться в режиме `AdoptedStubExtMetaData`
 - target-ссылки, появившиеся на этом merge-этапе, могут дотянуть отсутствующий top-level metadata-объект из `target.xml_dump` как `AdoptedStub`, но не возвращают soft-excluded и не переигрывают `forbidden_*`
+- производительная реализация target-merge должна оставаться lazy и batched: lookup target-объектов кешируется, target-ref-driven ссылки сначала собираются и дедуплицируются, а `Configuration.xml` и `ConfigDumpInfo.xml` записываются один раз после merge
 
 ### 8. Специальная обработка через макеты
 

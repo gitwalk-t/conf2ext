@@ -1284,7 +1284,7 @@ func TestCollectExcludedPathsMatchesChangeFilesCleanupInputs(t *testing.T) {
 	}
 }
 
-func TestDecideObjectPrimaryNativeOverridesSoftExclude(t *testing.T) {
+func TestDecideObjectSoftExcludeOverridesPrimaryNative(t *testing.T) {
 	t.Parallel()
 
 	ctx := &FileProcessingContext{
@@ -1302,12 +1302,12 @@ func TestDecideObjectPrimaryNativeOverridesSoftExclude(t *testing.T) {
 		nil,
 	)
 
-	if decision.Excluded || decision.Belonging != "Native" {
-		t.Fatalf("expected primary native decision to survive soft exclude, got %#v", decision)
+	if !decision.Excluded || decision.Belonging != "" {
+		t.Fatalf("expected soft exclude to override primary native decision, got %#v", decision)
 	}
 }
 
-func TestCleanupMissingFormConstantsSetReferencesKeepsPrimaryNativeConstantFromSoftExcludedSubsystem(t *testing.T) {
+func TestCleanupMissingFormConstantsSetReferencesRemovesSoftExcludedConstantFromExcludedSubsystem(t *testing.T) {
 	t.Parallel()
 
 	formDoc := etree.NewDocument()
@@ -1350,18 +1350,18 @@ func TestCleanupMissingFormConstantsSetReferencesKeepsPrimaryNativeConstantFromS
 		nil,
 	)
 
-	if decision.Excluded || decision.Belonging != "Native" {
-		t.Fatalf("expected constant to stay native, got %#v", decision)
+	if !decision.Excluded || decision.Belonging != "" {
+		t.Fatalf("expected constant to stay excluded, got %#v", decision)
 	}
 
-	if cleanupMissingFormConstantsSetReferences(formDoc, []*FileProcessingContext{constantCtx}, map[string]objectDecision{
+	if !cleanupMissingFormConstantsSetReferences(formDoc, []*FileProcessingContext{constantCtx}, map[string]objectDecision{
 		constantCtx.OwnerKey: decision,
 	}) {
-		t.Fatalf("expected constants-set binding to remain for primary native constant")
+		t.Fatalf("expected constants-set binding to be removed for excluded constant")
 	}
 
-	if len(formDoc.FindElements("//CheckBoxField")) != 1 {
-		t.Fatalf("expected constants-set control to remain in form")
+	if len(formDoc.FindElements("//CheckBoxField")) != 0 {
+		t.Fatalf("expected constants-set control to be removed from form")
 	}
 }
 
@@ -1500,6 +1500,91 @@ func TestExcludedPrimaryNativeObjectReferencedBySubsystemStaysExcluded(t *testin
 	decision := decisions[target.OwnerKey]
 	if !decision.Excluded || decision.Belonging != "" {
 		t.Fatalf("expected excluded primary native object to stay excluded, got %#v", decision)
+	}
+}
+
+func TestDecideObjectSoftExcludedBeatsPrimaryNative(t *testing.T) {
+	t.Parallel()
+
+	ctx := &FileProcessingContext{
+		OwnerKey:  "DataProcessor.упо_Тест",
+		OwnerKind: "DataProcessor",
+		OwnerName: "упо_Тест",
+	}
+
+	decision := decideObject(
+		ctx,
+		&config.Configuration{},
+		map[string]struct{}{ctx.OwnerKey: {}},
+		map[string]struct{}{ctx.OwnerKey: {}},
+		nil,
+		nil,
+	)
+	if !decision.Excluded || decision.Belonging != "" {
+		t.Fatalf("expected excluded object to win over primary native classification, got %#v", decision)
+	}
+}
+
+func TestCollectSubsystemDecisionsDoesNotAdoptFormerSpecialRootWithoutNativeDescendants(t *testing.T) {
+	t.Parallel()
+
+	ctx := &FileProcessingContext{
+		RelPath:   "Subsystems/СтандартныеПодсистемы.xml",
+		OwnerKey:  "Subsystem.СтандартныеПодсистемы",
+		OwnerKind: "Subsystem",
+		OwnerName: "СтандартныеПодсистемы",
+	}
+
+	decisions := collectSubsystemDecisions([]*FileProcessingContext{ctx}, &config.Configuration{
+		NativePrefixes: []string{"упо_", "слк", "упф", "pm"},
+	})
+	if decision, ok := decisions[ctx.OwnerKey]; ok && !decision.Excluded {
+		t.Fatalf("expected non-native root subsystem without native descendants to stay excluded, got %#v", decision)
+	}
+}
+
+func TestCollectSubsystemDecisionsAdoptsNonNativeRootWithNestedNativeSubsystem(t *testing.T) {
+	t.Parallel()
+
+	contexts := []*FileProcessingContext{
+		{
+			RelPath:   "Subsystems/Корень.xml",
+			OwnerKey:  "Subsystem.Корень",
+			OwnerKind: "Subsystem",
+			OwnerName: "Корень",
+		},
+		{
+			RelPath:   "Subsystems/Корень/Subsystems/упо_Нативная.xml",
+			OwnerKey:  "Subsystem.Корень.Subsystem.упо_Нативная",
+			OwnerKind: "Subsystem",
+			OwnerName: "упо_Нативная",
+		},
+	}
+
+	decisions := collectSubsystemDecisions(contexts, &config.Configuration{
+		NativePrefixes: []string{"упо_"},
+	})
+	if decision := decisions["Subsystem.Корень"]; decision.Excluded || decision.Belonging != "AdoptedStub" {
+		t.Fatalf("expected non-native root with nested native subsystem to become AdoptedStub, got %#v", decision)
+	}
+	if decision := decisions["Subsystem.Корень.Subsystem.упо_Нативная"]; decision.Excluded || decision.Belonging != "Native" {
+		t.Fatalf("expected nested prefixed subsystem to stay Native, got %#v", decision)
+	}
+}
+
+func TestIsRefDrivenInclusionSourceRejectsAdoptedSubsystem(t *testing.T) {
+	t.Parallel()
+
+	ctx := &FileProcessingContext{
+		OwnerKey:  "Subsystem.Тест",
+		OwnerKind: "Subsystem",
+		OwnerName: "Тест",
+	}
+	if isRefDrivenInclusionSource(ctx, objectDecision{Belonging: "AdoptedStub"}) {
+		t.Fatalf("expected adopted subsystem not to be ref-driven source")
+	}
+	if !isRefDrivenInclusionSource(ctx, objectDecision{Belonging: "Native"}) {
+		t.Fatalf("expected native subsystem to remain ref-driven source")
 	}
 }
 

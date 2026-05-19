@@ -79,6 +79,7 @@ go test ./...
 - `AdditionalProcessing.UseExactTemplates`: управляет строгостью сопоставления шаблонов для `Use_упо_SearchResult`; по умолчанию `true`, а mismatch в strict-режиме пишется в `output/_log/searchresult-template-errors.log` и переводит перенос кода на общий fallback без падения прогона
 - `extension_properties.identifier`: стабильный `uuid` корня расширения; он не генерируется заново и записывается в `Configuration.xml`
 - `target.xml_dump`: optional XML-выгрузка конфигурации-приемника; после обычной classification/promotion-логики используется только для post-promotion merge объектов из `CommonTemplate.упо_MetaDataFile` (`DefinedType`, `ExchangePlan`, `EventSubscription`), которые в этом сценарии идут как `AdoptedStubExtMetaData`, а target-ссылки из их сохраненного `Type` / `Content` / `Source` могут дотягивать отсутствующий top-level metadata-объект из target как обычный `AdoptedStub`
+- `excluded_subsystems` и `excluded_objects` сильнее primary `Native` по native-prefix, а ненативная подсистема попадает в состав только если служит предком реально вложенной native-подсистемы
 
 ## Identity mapping
 
