@@ -1822,14 +1822,10 @@ func mergeTargetMetadataComposition(
 			if _, forbidden := forbiddenAdoptedStubObjects[ref]; forbidden {
 				return false, nil
 			}
-			if _, excluded := excludedObjects[ref]; excluded {
-				return false, nil
-			}
 			if decision, exists := decisions[ref]; exists {
-				if decision.Excluded {
-					return false, nil
+				if !decision.Excluded {
+					continue
 				}
-				continue
 			}
 
 			targetCtx, err := loadTargetTopLevelContextByKey(ref)
@@ -1852,9 +1848,6 @@ func mergeTargetMetadataComposition(
 		}
 		for _, ref := range refs {
 			if _, forbidden := forbiddenAdoptedStubObjects[ref]; forbidden {
-				return false, nil
-			}
-			if _, excluded := excludedObjects[ref]; excluded {
 				return false, nil
 			}
 			decision, exists := decisions[ref]
@@ -1963,17 +1956,10 @@ func mergeTargetMetadataComposition(
 			stats.SkippedTargetRefs++
 			continue
 		}
-		if _, excluded := excludedObjects[key]; excluded {
-			stats.SkippedTargetRefs++
-			continue
-		}
 
 		currentCtx := findContextByOwnerKeyIndexed(indexes, contexts, key)
 		decision, exists := decisions[key]
-		if exists && decision.Excluded {
-			stats.SkippedTargetRefs++
-			continue
-		} else if exists && currentCtx != nil && currentCtx.Doc != nil {
+		if exists && !decision.Excluded && currentCtx != nil && currentCtx.Doc != nil {
 			stats.SkippedTargetRefs++
 			continue
 		}
