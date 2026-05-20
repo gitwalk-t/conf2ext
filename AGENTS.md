@@ -1,24 +1,24 @@
 # AGENTS.md
 
-Сначала прочитай: [README.md](D:\Codex\files-converter_ver2\README.md), [.codex/context.md](D:\Codex\files-converter_ver2\.codex\context.md), [.codex/handoff.md](D:\Codex\files-converter_ver2\.codex\handoff.md), [docs/debugging.md](D:\Codex\files-converter_ver2\docs\debugging.md).
+Сначала прочитай: [README.md](D:\Codex\conf2ext_main_merge\README.md), [.codex/context.md](D:\Codex\conf2ext_main_merge\.codex\context.md), [.codex/handoff.md](D:\Codex\conf2ext_main_merge\.codex\handoff.md), [docs/debugging.md](D:\Codex\conf2ext_main_merge\docs\debugging.md).
 
 `docs/technical-spec.md` — дополнительная пользовательская спецификация; читай ее при задачах на архитектуру, требования или синхронизацию документации.
 
 ## Правила работы с кодом и XML
 
 - Предпочитай минимальный дифф. Если поведение неоднозначно, выбирай наименьшее изменение, совместимое с текущим кодом.
-- Не делай широкий рефакторинг при работе с [internal/utils/xmlutil/change.go](D:\Codex\files-converter_ver2\internal\utils\xmlutil\change.go); это главный рискованный участок.
+- Не делай широкий рефакторинг при работе с [internal/utils/xmlutil/change.go](D:\Codex\conf2ext_main_merge\internal\utils\xmlutil\change.go); это главный рискованный участок.
 - Не добавляй зависимости без явной необходимости.
 - Не меняй бизнес-правила в config/XML-логике ради “красоты кода”.
 - Считай `configs/config.json` активной локальной точкой входа, если пользователь не сказал иначе.
 - Считай `excluded_*` мягким исключением, а `forbidden_*` жестким; не смешивай эти семантики в тексте и комментариях.
-- Считай `D:\Codex\files-converter_ver2\Artefacts` папкой примеров для агента; если пользователь пишет "пример в артефактах", сначала ищи файл именно там.
-- Если в `Artefacts/` лежит файл `.cfe`, сначала извлеки из него XML-файлы и только потом сравнивай его с текущим дампом или рабочей выгрузкой.
+- Считай `D:\Codex\conf2ext_main_merge\Artif` папкой примеров для агента; если пользователь пишет "пример в артефактах", сначала ищи файл именно там.
+- Если в `Artif/` лежит файл `.cfe`, сначала извлеки из него XML-файлы и только потом сравнивай его с текущим дампом или рабочей выгрузкой.
 - Если пользователь просит "дамп", по умолчанию это дамп расширения после `ChangeFiles`, а не исходная XML-выгрузка конфигурации. Перед тем как назвать путь, проверь в `Configuration.xml`, что у корня стоят свойства расширения (`ObjectBelonging=Adopted`, имя/префикс из `extension`/`prefix`), а не свойства исходной конфигурации.
 
 ## Правила запуска и контроля прогонов
 
-- Детальный сценарий запуска прогона описан в [.codex/skills/run-conversion.md](D:\Codex\files-converter_ver2\.codex\skills\run-conversion.md); при прямой просьбе запустить прогон используй его как основной чек-лист.
+- Детальный сценарий запуска прогона описан в [.codex/skills/run-conversion.md](D:\Codex\conf2ext_main_merge\.codex\skills\run-conversion.md); при прямой просьбе запустить прогон используй его как основной чек-лист.
 - Считай логи в `output/_log` и временные данные в `output/_tmp` расходными артефактами.
 - Перед новым запуском сборки сначала останови текущие `go` и относящиеся к этому прогону `1cv8.exe`, чтобы не смешивать новый запуск со старым хвостом.
 - При старте нового прогона сразу пиши в чат таймштамп начала запуска.
@@ -32,7 +32,7 @@
 - `go build ./...`
 - `go test ./...`
 - если изменилось поведение, обнови соответствующие документы в `README.md`, `docs/` и `.codex/`
-- если изменилось долгоживущее архитектурное правило, допиши запись в [.codex/decisions.md](D:\Codex\files-converter_ver2\.codex\decisions.md)
+- если изменилось долгоживущее архитектурное правило, допиши запись в [.codex/decisions.md](D:\Codex\conf2ext_main_merge\.codex\decisions.md)
 - если в тексте встречается BSL как анализируемый слой, это ошибка и ее нужно убрать
 
 ## Ограничения
