@@ -2269,7 +2269,7 @@ func mergeTargetMetadataComposition(
 		case "DefinedType":
 			currentType := prepared.CurrentCtx.Properties.FindElement("./Type")
 			targetType := prepared.TargetCtx.Properties.FindElement("./Type")
-			changed, err := mergeMetadataValueContainer(prepared.CurrentCtx.Properties, "Type", currentType, targetType, decisions, allowCollectedTargetValue)
+			changed, err := mergeDefinedTypeTargetComposition(prepared.CurrentCtx.Properties, currentType, targetType, decisions, allowCollectedTargetValue)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -2375,6 +2375,96 @@ func collectExchangePlanContentRefs(
 	return nil
 }
 
+type metadataValueEntry struct {
+	Value   string
+	Element *etree.Element
+}
+
+func mergeDefinedTypeTargetComposition(
+	properties *etree.Element,
+	currentContainer *etree.Element,
+	targetContainer *etree.Element,
+	decisions map[string]objectDecision,
+	allowTargetValue func(string) (bool, error),
+) (bool, error) {
+	if properties == nil || targetContainer == nil {
+		return false, nil
+	}
+	if currentContainer == nil {
+		currentContainer = properties.CreateElement(targetContainer.Tag)
+	}
+
+	targetEntries := collectMetadataValueEntries(targetContainer)
+	checkEntries := make([]metadataValueEntry, 0, len(targetEntries))
+	targetValues := make(map[string]struct{}, len(targetEntries))
+	for _, entry := range targetEntries {
+		allowed, err := allowTargetValue(entry.Value)
+		if err != nil {
+			return false, err
+		}
+		if !allowed {
+			continue
+		}
+		if _, exists := targetValues[entry.Value]; exists {
+			continue
+		}
+		targetValues[entry.Value] = struct{}{}
+		checkEntries = append(checkEntries, entry)
+	}
+
+	extendEntries := make([]metadataValueEntry, 0)
+	seenExtendValues := make(map[string]struct{})
+	for _, entry := range collectMetadataValueEntries(currentContainer) {
+		if !shouldKeepDefinedTypeExtendValue(entry.Value, decisions) {
+			continue
+		}
+		if _, exists := targetValues[entry.Value]; exists {
+			continue
+		}
+		if _, exists := seenExtendValues[entry.Value]; exists {
+			continue
+		}
+		seenExtendValues[entry.Value] = struct{}{}
+		extendEntries = append(extendEntries, entry)
+	}
+
+	rebuildDefinedTypeAsExtendedProperty(currentContainer, checkEntries, extendEntries)
+	return true, nil
+}
+
+func collectMetadataValueEntries(container *etree.Element) []metadataValueEntry {
+	if container == nil {
+		return nil
+	}
+
+	appendEntry := func(result []metadataValueEntry, child *etree.Element) []metadataValueEntry {
+		if child == nil {
+			return result
+		}
+		value := strings.TrimSpace(child.Text())
+		if value == "" {
+			return result
+		}
+		return append(result, metadataValueEntry{
+			Value:   value,
+			Element: child.Copy(),
+		})
+	}
+
+	result := make([]metadataValueEntry, 0)
+	for _, child := range container.ChildElements() {
+		switch localName(child.Tag) {
+		case "CheckValue", "ExtendValue":
+			for _, nested := range child.ChildElements() {
+				result = appendEntry(result, nested)
+			}
+		default:
+			result = appendEntry(result, child)
+		}
+	}
+	return result
+}
+
 func mergeMetadataValueContainer(
 	properties *etree.Element,
 	containerName string,
@@ -2449,6 +2539,56 @@ func shouldKeepCurrentMergedMetadataValue(value string, decisions map[string]obj
 	}
 
 	return true
+}
+
+func shouldKeepDefinedTypeExtendValue(value string, decisions map[string]objectDecision) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+
+	refs := metadataReferencesFromValue(value)
+	if len(refs) == 0 {
+		return true
+	}
+
+	for _, ref := range refs {
+		decision, exists := decisions[ref]
+		if !exists || decision.Excluded || decision.Belonging != "Native" {
+			return false
+		}
+	}
+
+	return true
+}
+
+func rebuildDefinedTypeAsExtendedProperty(container *etree.Element, checkEntries, extendEntries []metadataValueEntry) {
+	if container == nil {
+		return
+	}
+
+	container.Attr = nil
+	container.Child = nil
+	container.CreateAttr("xmlns:xsi", "http://www.w3.org/2001/XMLSchema-instance")
+	container.CreateAttr("xmlns:xr", "http://v8.1c.ru/8.3/xcf/readable")
+	container.CreateAttr("xmlns:v8", "http://v8.1c.ru/8.1/data/core")
+	container.CreateAttr("xsi:type", "xr:ExtendedProperty")
+
+	checkValue := container.CreateElement("xr:CheckValue")
+	checkValue.CreateAttr("xsi:type", "v8:TypeDescription")
+	for _, entry := range checkEntries {
+		if entry.Element != nil {
+			checkValue.AddChild(entry.Element.Copy())
+		}
+	}
+
+	extendValue := container.CreateElement("xr:ExtendValue")
+	extendValue.CreateAttr("xsi:type", "v8:TypeDescription")
+	for _, entry := range extendEntries {
+		if entry.Element != nil {
+			extendValue.AddChild(entry.Element.Copy())
+		}
+	}
 }
 
 func mergeExchangePlanContent(

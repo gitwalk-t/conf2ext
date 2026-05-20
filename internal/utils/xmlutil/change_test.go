@@ -3117,6 +3117,202 @@ func TestCollectTargetTopLevelMetadataKeysByUUIDReadsOnlyTopLevelConfigDumpEntri
 	}
 }
 
+func TestMergeDefinedTypeTargetCompositionUsesExtendedProperty(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <DefinedType>
+    <Properties>
+      <Name>ТестовыйТип</Name>
+      <Type>
+        <v8:Type xmlns:v8="http://v8.1c.ru/8.1/data/core">cfg:CatalogRef.B</v8:Type>
+        <v8:Type xmlns:v8="http://v8.1c.ru/8.1/data/core" xmlns:d4p1="http://v8.1c.ru/8.1/data/enterprise/current-config">d4p1:CatalogRef.C</v8:Type>
+        <v8:Type xmlns:v8="http://v8.1c.ru/8.1/data/core">cfg:CatalogRef.D</v8:Type>
+      </Type>
+    </Properties>
+  </DefinedType>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read current defined type xml: %v", err)
+	}
+	targetDoc := etree.NewDocument()
+	if err := targetDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <DefinedType>
+    <Properties>
+      <Name>ТестовыйТип</Name>
+      <Type>
+        <v8:Type xmlns:v8="http://v8.1c.ru/8.1/data/core">cfg:CatalogRef.A</v8:Type>
+        <v8:Type xmlns:v8="http://v8.1c.ru/8.1/data/core">cfg:CatalogRef.B</v8:Type>
+      </Type>
+    </Properties>
+  </DefinedType>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read target defined type xml: %v", err)
+	}
+
+	properties := doc.FindElement("//*[local-name()='DefinedType']/*[local-name()='Properties']")
+	currentType := properties.FindElement("./Type")
+	targetType := targetDoc.FindElement("//*[local-name()='DefinedType']/*[local-name()='Properties']/*[local-name()='Type']")
+
+	changed, err := mergeDefinedTypeTargetComposition(properties, currentType, targetType, map[string]objectDecision{
+		"Catalog.A": {Belonging: "Native"},
+		"Catalog.B": {Belonging: "Native"},
+		"Catalog.C": {Belonging: "Native"},
+		"Catalog.D": {Belonging: "Native"},
+	}, func(string) (bool, error) {
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("merge defined type target composition: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected defined type merge to rewrite type container")
+	}
+
+	typeEl := doc.FindElement("//*[local-name()='DefinedType']/*[local-name()='Properties']/*[local-name()='Type']")
+	if typeEl == nil {
+		t.Fatalf("expected merged type element")
+	}
+	if got := typeEl.SelectAttrValue("xsi:type", ""); got != "xr:ExtendedProperty" {
+		t.Fatalf("expected xr:ExtendedProperty, got %q", got)
+	}
+	checkValue := typeEl.FindElement("./*[local-name()='CheckValue']")
+	extendValue := typeEl.FindElement("./*[local-name()='ExtendValue']")
+	if checkValue == nil || extendValue == nil {
+		t.Fatalf("expected CheckValue and ExtendValue children")
+	}
+	if got := checkValue.SelectAttrValue("xsi:type", ""); got != "v8:TypeDescription" {
+		t.Fatalf("unexpected CheckValue xsi:type: %q", got)
+	}
+	if got := extendValue.SelectAttrValue("xsi:type", ""); got != "v8:TypeDescription" {
+		t.Fatalf("unexpected ExtendValue xsi:type: %q", got)
+	}
+
+	checkValues := []string{}
+	for _, el := range checkValue.ChildElements() {
+		checkValues = append(checkValues, strings.TrimSpace(el.Text()))
+	}
+	if fmt.Sprint(checkValues) != fmt.Sprint([]string{"cfg:CatalogRef.A", "cfg:CatalogRef.B"}) {
+		t.Fatalf("unexpected CheckValue composition: %#v", checkValues)
+	}
+
+	extendValues := []string{}
+	for _, el := range extendValue.ChildElements() {
+		extendValues = append(extendValues, strings.TrimSpace(el.Text()))
+	}
+	if fmt.Sprint(extendValues) != fmt.Sprint([]string{"d4p1:CatalogRef.C", "cfg:CatalogRef.D"}) {
+		t.Fatalf("unexpected ExtendValue composition: %#v", extendValues)
+	}
+	for _, el := range extendValue.ChildElements() {
+		if strings.TrimSpace(el.Text()) == "d4p1:CatalogRef.C" && el.SelectAttrValue("xmlns:d4p1", "") == "" {
+			t.Fatalf("expected current-config alias namespace to be preserved on source addition")
+		}
+	}
+}
+
+func TestMergeDefinedTypeTargetCompositionLeavesOtherContainersUntouched(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <EventSubscription>
+    <Properties>
+      <Name>Подписка</Name>
+      <Source>
+        <Item>Catalog.A</Item>
+      </Source>
+    </Properties>
+  </EventSubscription>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read event subscription xml: %v", err)
+	}
+	properties := doc.FindElement("//*[local-name()='EventSubscription']/*[local-name()='Properties']")
+	currentSource := properties.FindElement("./Source")
+
+	targetDoc := etree.NewDocument()
+	if err := targetDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <EventSubscription>
+    <Properties>
+      <Name>Подписка</Name>
+      <Source>
+        <Item>Catalog.B</Item>
+      </Source>
+    </Properties>
+  </EventSubscription>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read target event subscription xml: %v", err)
+	}
+	targetSource := targetDoc.FindElement("//*[local-name()='EventSubscription']/*[local-name()='Properties']/*[local-name()='Source']")
+
+	changed, err := mergeMetadataValueContainer(properties, "Source", currentSource, targetSource, map[string]objectDecision{
+		"Catalog.A": {Belonging: "Native"},
+		"Catalog.B": {Belonging: "Native"},
+	}, func(string) (bool, error) {
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("merge metadata value container: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected EventSubscription source merge to change container")
+	}
+	if got := currentSource.SelectAttrValue("xsi:type", ""); got != "" {
+		t.Fatalf("did not expect EventSubscription Source to become ExtendedProperty, got %q", got)
+	}
+}
+
+func TestBuildChangeFilesStateOrdinaryDefinedTypeDoesNotBecomeExtendedProperty(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeFile := func(base, relPath, content string) {
+		t.Helper()
+		path := filepath.Join(base, relPath)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	writeFile(root, "Configuration.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><Configuration><ChildObjects><DefinedType>ОбычныйТип</DefinedType></ChildObjects></Configuration></MetaDataObject>`)
+	writeFile(root, "ConfigDumpInfo.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo"><ConfigVersions><Metadata name="DefinedType.ОбычныйТип" id="11111111-1111-1111-1111-111111111111"/></ConfigVersions></ConfigDumpInfo>`)
+	writeFile(root, filepath.Join("DefinedTypes", "ОбычныйТип.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <DefinedType uuid="11111111-1111-1111-1111-111111111111">
+    <Properties>
+      <Name>ОбычныйТип</Name>
+      <Type><Type>cfg:CatalogRef.Номенклатура</Type></Type>
+    </Properties>
+  </DefinedType>
+</MetaDataObject>`)
+
+	if _, err := buildChangeFilesState(&config.Configuration{
+		IncludedAdoptedStubObjects: []string{"DefinedType.ОбычныйТип"},
+	}, root); err != nil {
+		t.Fatalf("build change files state: %v", err)
+	}
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromFile(filepath.Join(root, "DefinedTypes", "ОбычныйТип.xml")); err != nil {
+		t.Fatalf("read defined type xml: %v", err)
+	}
+	typeEl := doc.FindElement("//*[local-name()='DefinedType']/*[local-name()='Properties']/*[local-name()='Type']")
+	if typeEl == nil {
+		t.Fatalf("expected ordinary defined type Type element")
+	}
+	if got := typeEl.SelectAttrValue("xsi:type", ""); got != "" {
+		t.Fatalf("did not expect ordinary defined type to become xr:ExtendedProperty, got %q", got)
+	}
+}
+
 func TestCanonicalizeTargetRenamedAdoptedObjectsPrefersTargetName(t *testing.T) {
 	t.Parallel()
 
@@ -4012,7 +4208,7 @@ func TestBuildChangeFilesStateRevivesExcludedTargetMergeObject(t *testing.T) {
 <MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><Catalog uuid="33333333-3333-3333-3333-333333333333"><Properties><Name>ИзTarget</Name></Properties></Catalog></MetaDataObject>`)
 
 	state, err := buildChangeFilesState(&config.Configuration{
-		IncludedAdoptedStubObjects: []string{
+		IncludedNativeObjects: []string{
 			"Catalog.ИзSource",
 		},
 		Target: config.Target{
@@ -4034,17 +4230,29 @@ func TestBuildChangeFilesStateRevivesExcludedTargetMergeObject(t *testing.T) {
 	if err := definedTypeDoc.ReadFromFile(filepath.Join(root, "DefinedTypes", "ЦелевойТип.xml")); err != nil {
 		t.Fatalf("read defined type xml: %v", err)
 	}
-	typeValues := make(map[string]struct{})
-	for _, el := range definedTypeDoc.FindElements("//*[local-name()='DefinedType']/*[local-name()='Properties']/*[local-name()='Type']/*") {
-		typeValues[strings.TrimSpace(el.Text())] = struct{}{}
+	typeEl := definedTypeDoc.FindElement("//*[local-name()='DefinedType']/*[local-name()='Properties']/*[local-name()='Type']")
+	if typeEl == nil {
+		t.Fatalf("expected merged DefinedType type element")
 	}
-	for _, expected := range []string{
-		"cfg:CatalogRef.ИзSource",
-		"cfg:CatalogRef.ИзTarget",
-	} {
-		if _, ok := typeValues[expected]; !ok {
-			t.Fatalf("expected merged DefinedType composition to contain %s, got %#v", expected, typeValues)
-		}
+	if got := typeEl.SelectAttrValue("xsi:type", ""); got != "xr:ExtendedProperty" {
+		t.Fatalf("expected merged DefinedType type to be xr:ExtendedProperty, got %q", got)
+	}
+	checkValues := map[string]struct{}{}
+	for _, el := range typeEl.FindElements("./*[local-name()='CheckValue']/*") {
+		checkValues[strings.TrimSpace(el.Text())] = struct{}{}
+	}
+	if _, ok := checkValues["cfg:CatalogRef.ИзTarget"]; !ok {
+		t.Fatalf("expected CheckValue to retain target ref, got %#v", checkValues)
+	}
+	extendValues := map[string]struct{}{}
+	for _, el := range typeEl.FindElements("./*[local-name()='ExtendValue']/*") {
+		extendValues[strings.TrimSpace(el.Text())] = struct{}{}
+	}
+	if _, ok := extendValues["cfg:CatalogRef.ИзSource"]; !ok {
+		t.Fatalf("expected ExtendValue to contain source addition, got %#v", extendValues)
+	}
+	if _, ok := extendValues["cfg:CatalogRef.ИзTarget"]; ok {
+		t.Fatalf("did not expect target ref duplication in ExtendValue, got %#v", extendValues)
 	}
 
 	configurationDoc := etree.NewDocument()
@@ -4160,12 +4368,23 @@ func TestBuildChangeFilesStateRevivesSoftExcludedTargetRefFromDefinedTypeMerge(t
 	if err := definedTypeDoc.ReadFromFile(filepath.Join(root, "DefinedTypes", "ЦелевойТип.xml")); err != nil {
 		t.Fatalf("read defined type xml: %v", err)
 	}
-	typeValues := make(map[string]struct{})
-	for _, el := range definedTypeDoc.FindElements("//*[local-name()='DefinedType']/*[local-name()='Properties']/*[local-name()='Type']/*") {
-		typeValues[strings.TrimSpace(el.Text())] = struct{}{}
+	typeEl := definedTypeDoc.FindElement("//*[local-name()='DefinedType']/*[local-name()='Properties']/*[local-name()='Type']")
+	if typeEl == nil {
+		t.Fatalf("expected merged DefinedType type element")
 	}
-	if _, ok := typeValues["cfg:CatalogRef.ИзTarget"]; !ok {
-		t.Fatalf("expected merged DefinedType composition to retain target ref, got %#v", typeValues)
+	if got := typeEl.SelectAttrValue("xsi:type", ""); got != "xr:ExtendedProperty" {
+		t.Fatalf("expected merged DefinedType type to be xr:ExtendedProperty, got %q", got)
+	}
+	checkValues := map[string]struct{}{}
+	for _, el := range typeEl.FindElements("./*[local-name()='CheckValue']/*") {
+		checkValues[strings.TrimSpace(el.Text())] = struct{}{}
+	}
+	if _, ok := checkValues["cfg:CatalogRef.ИзTarget"]; !ok {
+		t.Fatalf("expected merged DefinedType CheckValue to retain target ref, got %#v", checkValues)
+	}
+	extendValues := typeEl.FindElements("./*[local-name()='ExtendValue']/*")
+	if len(extendValues) != 0 {
+		t.Fatalf("did not expect source additions in ExtendValue, got %d", len(extendValues))
 	}
 
 	configurationDoc := etree.NewDocument()

@@ -59,6 +59,7 @@
   compatibility filter для target-sensitive объектов `DefinedType`, `EventSubscription`, `ExchangePlan`. Он применяется до promotion, в promotion guard и после promotion; не переигрывает `forbidden_*` и не делает `target.xml_dump` самостоятельным механизмом возврата soft-excluded объектов.
 - post-promotion merge `target.xml_dump`:
   отдельный источник только для merge-объектов из `CommonTemplate.упо_MetaDataFile`: `DefinedType`, `ExchangePlan`, `EventSubscription`. Эти объекты идут в режиме `AdoptedStubExtMetaData`: source-ссылки до merge не становятся обычным `RefDrivenInclusion`, а target-ссылки из сохраненного `Type` / `Content` / `Source` могут дотянуть отсутствующий top-level metadata-объект как обычный `AdoptedStub`. `forbidden_*` сильнее такого target-ref-driven merge, а сам merge не должен переигрывать `targetCompatibilitySet`.
+- Для target-merged `DefinedType` не используем формулировку “плоский union TypeDescription”: корректная extension-семантика здесь — `xr:ExtendedProperty`, где `xr:CheckValue` хранит target-состав, а `xr:ExtendValue` — только добавленные `Native`-типы расширения.
 - У корня `Configuration.xml` обязаны быть `InternalInfo/xr:PropertyState`, `Caption`, `ShortCaption`, `Language.Русский`.
 - `ChildObjects` корня должны отражать весь фактический top-level состав расширения:
   все top-level `Native` и `AdoptedStub`-объекты, которые не исключены итоговым решением. Нельзя чистить корень по правилу "оставить только native-prefix".

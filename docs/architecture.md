@@ -37,6 +37,7 @@
 - возврат мягко исключенных объектов в `Native`, если на них есть ссылка из допустимого `Native`
 - добавление новых зависимостей как `AdoptedStub` или `AdoptedStubExt`
 - post-promotion merge `target.xml_dump` только для объектов из `CommonTemplate.упо_MetaDataFile`: `DefinedType` объединяется по `Properties/Type`, `ExchangePlan` — по `Ext/Content.xml`, `EventSubscription` — по `Properties/Source`; такие объекты идут как `AdoptedStubExtMetaData`, а не как обычный минимальный `AdoptedStub`, и сам merge не должен переигрывать `targetCompatibilitySet`
+- для target-merged `DefinedType` merge пишется не как flattened union: `Properties/Type` сериализуется как `xr:ExtendedProperty`, где `xr:CheckValue` хранит полный `TypeDescription` из `target.xml_dump`, а `xr:ExtendValue` — только добавленные `Native`-типы расширения без дублей target-состава
 - target-ссылки из этого merge могут физически подтягивать отсутствующий top-level metadata-объект из `target.xml_dump` как `AdoptedStub`, но не превращают `target.xml_dump` в глобальный source graph
 - target-merge работает как lazy cached batch: сначала собирает target-ссылки, затем дедуплицированно импортирует недостающие target-объекты и один раз записывает измененные merge XML, `Configuration.xml` и `ConfigDumpInfo.xml`
 - очистку ссылок на жестко исключенные объекты из `forbidden_*`
