@@ -31,6 +31,8 @@ Skill не делает cleanup.
 - свежие `output/_log/xml_dumps/v8_src*`
 - `Configuration.xml`
 
+Все эти пути проверяются внутри текущего worktree / текущего `cwd`, для которого был запущен прогон. Если в системе есть несколько worktree репозитория, нельзя смешивать их `output/_log`, `output/_tmp` и `configs`.
+
 ## Как определить текущий запуск
 
 Текущий запуск определяется только по совокупности:
@@ -40,6 +42,11 @@ Skill не делает cleanup.
 - `CommandLine` с текущим `--config`
 - parent-child process chain
 - свежие temp/dump каталоги
+
+Дополнительно:
+- `output/_log/last_run.txt` не является достаточным доказательством текущего запуска
+- `last_run.txt` может остаться от старого wrapper-процесса и отставать от реального нового запуска
+- если `run-<timestamp>.pid`, stdout/stderr и process-chain указывают на новый запуск, а `last_run.txt` еще старый, источником истины считается новый `runTimestamp`, а не stale `last_run.txt`
 
 ## Как определить свежий dump
 
@@ -95,3 +102,9 @@ Press any key to exit...
 - есть ли активный `go`
 - есть ли связанные `1cv8.exe`
 - next action
+
+## Правило остановки heartbeat
+
+Если мониторинг запущен как heartbeat и статус **не** `RUNNING` (например, `SUCCESS`, `FAILED`, `PAUSED_AFTER_SUCCESS`, или прогона нет), heartbeat нужно **остановить**:
+- удалить heartbeat (предпочтительно), либо поставить на `PAUSED`
+- в сообщении пользователю явно указать, что heartbeat остановлен, чтобы не было ощущения “фон продолжает что-то делать”
