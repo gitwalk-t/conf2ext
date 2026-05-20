@@ -12,7 +12,7 @@
 - `Native`:
   технический режим объекта, который переносится как нативный по текущим правилам классификации. Термин не переводим, чтобы не путать его с произвольными формулировками вроде “полный” или “родной”.
   В XML для обычного `Native`-объекта не пишем явный `<ObjectBelonging>Native</ObjectBelonging>`: это дефолтный режим. Явно сериализуются только adopted-режимы.
-- Объекты из `included_Native_objects` должны обрабатываться так же, как `Native` по префиксу: после сборки `primaryNativeObjects` их нельзя отдельно трактовать как “не-префиксные” ни в `Configuration`-ref graph, ни в соседних helper-ветках.
+- Объекты из `included_Native_objects` должны участвовать в helper-ветках так же, как `Native` по префиксу, но в самой классификации это отдельный explicit include: он сильнее soft-exclude, но слабее `forbidden_*`.
 - `AdoptedStub`:
   технический режим урезанного заимствованного объекта. Термин не переводим и не подменяем на просто `Adopted`, потому что в коде и текущей модели это не одно и то же.
 - `Use_упо_SearchResult`:
@@ -27,13 +27,15 @@
 - `AdoptedStubExt(Form)` — нужен, когда форма `Native`-объекта тянет не-native ссылку через dynamic list. В этом случае сохраняется не просто сам объект по `MainTable`, а полный field contract списка: `MainTable` плюс используемые `DataPath` / `Field` / `RowPictureDataPath` и родственные поля. Если dynamic list требует реквизит, он должен остаться доступным в итоговом XML; если реквизит не поддержан, конвертер должен падать своей ошибкой, а не оставлять проблему Конфигуратору.
 - `AdoptedStubExt(DefinedType)` — нужен, когда ненативный `DefinedType` сам остается источником ссылок и его состав должен дотягиваться по обычному правилу `AdoptedStub`
 - `AdoptedStubExt(EventSubscription)` — нужен, когда ненативная подписка на событие сама остается источником ссылок и переносится с полным составом по `RefDrivenInclusion`
+- `AdoptedStubExtMetaData`:
+  специальный adopted metadata merge object из `CommonTemplate.упо_MetaDataFile`. Используется только для `DefinedType`, `ExchangePlan`, `EventSubscription`, не является alias обычного `AdoptedStub`, сохраняет `Type` / `Content` / `Source` для target-merge и target-ref-driven ссылок, но не должен сохранять формы и BSL.
 - Для `AdoptedStubExt` не заимствуем `Properties/StandardAttributes`. Стандартные поля вроде `Ссылка`, `Наименование`, `Код`, `Родитель` считаем встроенными возможностями платформы, а не частью сериализуемого adopted-состава.
 - Для `AdoptedStubExt(Form)` у `Catalog` недостаточно только сохранить нужные child objects; top-level и child `Properties` тоже нужно приводить к минимальному stub-виду, близкому к выгрузке Конфигуратора. Нельзя оставлять полный исходный набор свойств каталога (`InputByString`, `ChoiceMode`, `DataHistory` и т.п.), если объект уже переведен в retained adopted-stub для формы.
   В обоих случаях формы и код не переносятся; для `DefinedType` и `EventSubscription` состав не режется.
 - `excluded` / исключенный объект / мягко исключенный объект:
   объект, снятый с первичного включения. В текущей модели это мягкое исключение: такой объект может вернуться в `Native`, если на него есть ссылка из допустимого `Native`-объекта.
 - Единый набор `excluded` сначала собирается из объектов, найденных по `excluded_subsystems`, а затем дополняется единичными объектами из `excluded_objects`; после этого для всего набора действует одна и та же логика.
-- Top-level объект, который связан с веткой из `excluded_subsystems` или явно перечислен в `excluded_objects`, должен попадать в `Excluded` раньше primary `Native` по native-prefix.
+- Top-level объект, который связан с веткой из `excluded_subsystems` или явно перечислен в `excluded_objects`, должен попадать в `Excluded` раньше обычного `Native` по native-prefix, но не раньше explicit include из `included_Native_objects`.
 - После такого soft-исключения объект не должен возвращаться в состав, если все его допустимые входящие ref-driven ссылки идут только из `Native`-подсистем.
 - Если мягко исключенный объект не входил в первичный `Native`, но на него ссылаются только `Native`-подсистемы, этого недостаточно для возврата в `AdoptedStub`: подсистема в таком случае считается только группировочным владельцем ссылки, а не достаточным источником для восстановления объекта.
 - Для восстановления excluded-объекта по `RefDrivenInclusion` `Native`-подсистема вообще не считается источником. Источником могут быть только `Native`-объекты и их формы.
@@ -52,7 +54,11 @@
 - `extension_properties`:
   основной JSON-блок для имени, префикса и стабильного `identifier` корня расширения. Старые `extension` и `prefix` остаются backward-compatible alias. Имя и префикс нужно синхронно отражать в `Configuration.xml` и `ConfigDumpInfo.xml`, а `identifier` — в `Configuration/@uuid`.
 - `target.xml_dump`:
-  post-promotion источник только для merge-объектов из `CommonTemplate.упо_MetaDataFile`: `DefinedType`, `ExchangePlan`, `EventSubscription`. Source-ссылки этих объектов до merge не становятся обычным `RefDrivenInclusion`, а target-ссылки из merge могут дотянуть отсутствующий top-level metadata-объект как `AdoptedStub`. `forbidden_*` сильнее такого target-ref-driven merge.
+  не глобальный source graph. Для `DefinedType`, `ExchangePlan`, `EventSubscription` сначала формируем `targetCompatibilitySet`: читаем только top-level XML `DefinedTypes/*.xml`, `EventSubscriptions/*.xml`, `ExchangePlans/*.xml`; `Native`-объекты этих типов допустимы всегда, adopted-объекты допустимы только при наличии top-level XML в target.
+- `targetCompatibilitySet`:
+  compatibility filter для target-sensitive объектов `DefinedType`, `EventSubscription`, `ExchangePlan`. Он применяется до promotion, в promotion guard и после promotion; не переигрывает `forbidden_*` и не делает `target.xml_dump` самостоятельным механизмом возврата soft-excluded объектов.
+- post-promotion merge `target.xml_dump`:
+  отдельный источник только для merge-объектов из `CommonTemplate.упо_MetaDataFile`: `DefinedType`, `ExchangePlan`, `EventSubscription`. Эти объекты идут в режиме `AdoptedStubExtMetaData`: source-ссылки до merge не становятся обычным `RefDrivenInclusion`, а target-ссылки из сохраненного `Type` / `Content` / `Source` могут дотянуть отсутствующий top-level metadata-объект как обычный `AdoptedStub`. `forbidden_*` сильнее такого target-ref-driven merge, а сам merge не должен переигрывать `targetCompatibilitySet`.
 - У корня `Configuration.xml` обязаны быть `InternalInfo/xr:PropertyState`, `Caption`, `ShortCaption`, `Language.Русский`.
 - `ChildObjects` корня должны отражать весь фактический top-level состав расширения:
   все top-level `Native` и `AdoptedStub`-объекты, которые не исключены итоговым решением. Нельзя чистить корень по правилу "оставить только native-prefix".
@@ -78,6 +84,7 @@
 - Для `Subsystem` контейнер `Content` должен оставаться, но ссылки `xr:MDObjectRef` внутри него нужно сверять с реально сохраненным top-level metadata-составом; висячие ссылки на отсутствующие объекты удаляются.
 - Для `Subsystem` adopted-нормализация не должна срезать верхний `ChildObjects`; иначе загрузка падает на чтении состава подсистемы.
 - Для `Subsystem` верхний контейнер `ChildObjects` сохраняется, но список вложенных `Subsystem` внутри него должен совпадать с реально оставленными дочерними подсистемами. Нельзя оставлять имена дочерних подсистем, если их XML уже не входит в итоговый состав, в том числе для веток, исключенных через `excluded_subsystems`.
+- Ненативная top-level `Subsystem` не переносится сама по себе: она может остаться только как adopted-предок реально вложенной native-подсистемы. Отдельных hardcoded special adopted-root для `СтандартныеПодсистемы`, `Администрирование` или `ПодключаемыеОтчетыИОбработки` быть не должно.
 - Дочерняя подсистема нативной подсистемы тоже должна оставаться `Native`, если ветка не исключена правилом `excluded_subsystems`. Это правило не зависит от списка special adopted-root: нативная ветка подсистем должна попадать в subsystem-decision целиком.
 - Вложенные `Subsystem` нельзя идентифицировать только по последнему имени. Для owner-level логики, `decision` и cleanup подсистема должна иметь ключ полной цепочки, например `Subsystem.Администрирование.Subsystem.КонтрольРаботыПользователей`; иначе разные ветки с одинаковым хвостовым именем начинают склеиваться.
 - В `Role/Ext/Rights.xml` нельзя оставлять права на `Configuration.<старое_имя_конфигурации>`. Это хвост исходной конфигурации, а не объект расширения; такие `object`-узлы нужно удалять целиком.
@@ -96,7 +103,7 @@
 - Сохраняй существующую русскоязычную формулировку логов и ошибок, если нет причины стандартизировать затронутую область
 - Не делай попутную “косметическую” очистку в `change.go`
 - Не переименовывай устоявшиеся технические режимы (`Native`, `AdoptedStub`) в документации и комментариях без явной причины
-- Если нужен `AdoptedStubExt`, называй его именно так; не подменяй формулировками вроде “почти полный adopted” или “stub с полями”
+- Если нужен `AdoptedStubExt` или `AdoptedStubExtMetaData`, называй его именно так; не подменяй формулировками вроде “почти полный adopted” или “stub с полями”
 
 ## Тесты
 

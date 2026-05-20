@@ -35,12 +35,6 @@ var (
 	styleReferencePattern     = regexp.MustCompile(`(?:^|[^[:alnum:]_])style:([^\s<>"':/\\]+)`)
 	moduleMethodHeaderPattern = regexp.MustCompile(`^(\s*)(Процедура|Функция)(\s+)([A-Za-zА-Яа-яЁё_][A-Za-zА-Яа-яЁё0-9_]*)`)
 
-	adoptedSubsystemRoots = map[string]struct{}{
-		"СтандартныеПодсистемы":        {},
-		"Администрирование":            {},
-		"ПодключаемыеОтчетыИОбработки": {},
-	}
-
 	guidFieldNames = map[string]struct{}{
 		"id":       {},
 		"objectid": {},
@@ -229,10 +223,11 @@ type FileProcessingContext struct {
 }
 
 type objectDecision struct {
-	Belonging        string
-	Excluded         bool
-	Truncated        bool
-	SearchResultCode bool
+	Belonging              string
+	Excluded               bool
+	Truncated              bool
+	SearchResultCode       bool
+	AdoptedStubExtMetaData bool
 }
 
 type subsystemState struct {
@@ -254,6 +249,30 @@ type adoptedStubMetaDataRule struct {
 
 type targetMergeRuleSet struct {
 	ObjectKeys map[string]struct{}
+}
+
+type targetCompatibilitySet struct {
+	Enabled bool
+	Keys    map[string]struct{}
+}
+
+type preparedTargetMergeObject struct {
+	Key                 string
+	Kind                string
+	CurrentCtx          *FileProcessingContext
+	TargetCtx           *FileProcessingContext
+	CurrentContentCtx   *FileProcessingContext
+	TargetContentCtx    *FileProcessingContext
+	ExchangePlanRelPath string
+}
+
+type targetMergePerfStats struct {
+	MergeObjects       int
+	TargetRefs         int
+	ImportedTargetRefs int
+	SkippedTargetRefs  int
+	CacheHits          int
+	CacheMisses        int
 }
 
 type searchResultObjectOverlay struct {
@@ -358,17 +377,22 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 
 	log.Printf("xml step: build object sets")
 	buildObjectSetsStartedAt := time.Now()
-	includedNativeObjects := collectConfiguredNativeObjects(contexts, cfg.IncludedNativeObjects)
+	explicitNativeObjects := collectConfiguredNativeObjects(contexts, cfg.IncludedNativeObjects)
 	includedAdoptedStubObjects := collectConfiguredAdoptedStubObjects(contexts, cfg)
 	adoptedStubMetaDataRules := collectAdoptedStubMetaDataRules(cfg, dir)
 	for key := range adoptedStubMetaDataRules {
 		includedAdoptedStubObjects[key] = struct{}{}
 	}
 	forbiddenAdoptedStubObjects := collectConfiguredForbiddenStubObjects(contexts, cfg.ForbiddenAdoptedStubObjects)
-	primaryNativeObjects := collectPrimaryNativeObjects(contexts, cfg.NativePrefixes, includedNativeObjects)
+	prefixNativeObjects := collectNativePrefixObjects(contexts, cfg.NativePrefixes)
+	primaryNativeObjects := mergeObjectSets(explicitNativeObjects, prefixNativeObjects)
 	excludedSubsystemObjects := collectExcludedSubsystemObjects(contexts, cfg.ExcludedSubsystems, cfg.NativePrefixes)
 	configuredExcludedObjects := collectConfiguredExcludedObjects(contexts, cfg.ExcludedObjects)
 	excludedObjects := mergeObjectSets(excludedSubsystemObjects, configuredExcludedObjects)
+	targetCompatibilitySet, err := collectTargetCompatibilitySet(cfg)
+	if err != nil {
+		return err
+	}
 	logXMLStepCompleted("build object sets", buildObjectSetsStartedAt)
 	log.Printf("xml step: collect subsystem decisions")
 	collectSubsystemDecisionsStartedAt := time.Now()
@@ -388,9 +412,10 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 				continue
 			}
 		}
-		decisions[ctx.OwnerKey] = decideObject(ctx, cfg, primaryNativeObjects, excludedObjects, includedAdoptedStubObjects, forbiddenAdoptedStubObjects)
+		decisions[ctx.OwnerKey] = decideObject(ctx, cfg, explicitNativeObjects, prefixNativeObjects, excludedObjects, includedAdoptedStubObjects, forbiddenAdoptedStubObjects)
 	}
 	applyAdoptedStubMetaDataRules(decisions, adoptedStubMetaDataRules, excludedObjects, forbiddenAdoptedStubObjects)
+	applyTargetCompatibilitySet(decisions, contexts, targetCompatibilitySet, forbiddenAdoptedStubObjects)
 	logXMLStepCompleted("collect subsystem decisions", collectSubsystemDecisionsStartedAt, fmt.Sprintf("decisions=%d", len(decisions)))
 
 	searchResultState, err := collectSearchResultState(cfg, dir, contexts, decisions, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects)
@@ -405,14 +430,16 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 	incomingReferenceGraph := collectIncomingReferenceGraph(referenceGraph)
 	adoptedStubExtReferenceGraph := collectAdoptedStubExtReferenceGraph(contexts, decisions, searchResultState)
 	formDynamicListContracts := collectFormDynamicListContracts(contexts, decisions, searchResultState)
-	promoteReferencedObjectsToAdoptedStubIndexed(contexts, indexes, decisions, cfg, referenceGraph, incomingReferenceGraph, adoptedStubExtReferenceGraph, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects, targetMergeRules.ObjectKeys)
+	promoteReferencedObjectsToAdoptedStubIndexed(contexts, indexes, decisions, cfg, referenceGraph, incomingReferenceGraph, adoptedStubExtReferenceGraph, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects, targetMergeRules.ObjectKeys, targetCompatibilitySet)
 	promoteRegisterDocumentOwnersToNativeIndexed(contexts, indexes, decisions, cfg, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects, collectRegisterDocumentReferences(contexts))
 	applyFormDynamicListContracts(decisions, formDynamicListContracts, forbiddenAdoptedStubObjects)
 	applyAdoptedStubMetaDataRules(decisions, adoptedStubMetaDataRules, excludedObjects, forbiddenAdoptedStubObjects)
-	contexts, indexes, err = mergeTargetMetadataComposition(cfg, dir, contexts, indexes, decisions, targetMergeRules.ObjectKeys, excludedObjects, forbiddenAdoptedStubObjects)
+	applyTargetCompatibilitySet(decisions, contexts, targetCompatibilitySet, forbiddenAdoptedStubObjects)
+	contexts, indexes, err = mergeTargetMetadataComposition(cfg, dir, contexts, indexes, decisions, targetMergeRules.ObjectKeys, excludedObjects, forbiddenAdoptedStubObjects, targetCompatibilitySet)
 	if err != nil {
 		return err
 	}
+	applyTargetCompatibilitySet(decisions, contexts, targetCompatibilitySet, forbiddenAdoptedStubObjects)
 	retainedOwnerCommandCandidates := collectOwnerCommandCandidates(contexts, decisions)
 	logXMLStepCompleted("promote referenced objects", promoteReferencedObjectsStartedAt, fmt.Sprintf("decisions=%d", len(decisions)))
 
@@ -551,14 +578,18 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 		}
 
 		if decision.Belonging != "Native" && ctx.Metadata && isTopLevelMetadataFile(ctx) &&
-			ctx.OwnerKey != "Configuration" && ctx.OwnerKey != "Language.Русский" &&
-			ctx.OwnerKind != "DefinedType" && ctx.OwnerKind != "EventSubscription" {
+			ctx.OwnerKey != "Configuration" && ctx.OwnerKey != "Language.Русский" {
 			changed = cleanupAdoptedObjectFormReferences(ctx.Properties) || changed
 			contract, hasContract := formDynamicListContracts[ctx.OwnerKey]
 			overlay := searchResultObjectOverlayForKey(searchResultState, ctx.OwnerKey)
 			overlay = mergeSearchResultOverlayCommands(overlay, retainedOwnerCommandCandidates[ctx.OwnerKey])
 			rule, hasRule := adoptedStubMetaDataRules[ctx.OwnerKey]
-			if hasContract && hasRule {
+			if isAdoptedStubExtMetaData(ctx, decision) {
+				changed = normalizeAdoptedStubExtMetaData(ctx.Doc, ctx.OwnerKind, overlay) || changed
+			} else if ctx.OwnerKind == "DefinedType" || ctx.OwnerKind == "EventSubscription" {
+				// Для специальных adopted metadata-object сохраняем composition/source
+				// и не минимизируем их до обычного AdoptedStub.
+			} else if hasContract && hasRule {
 				changed = normalizeAdoptedStubExtFormComposition(ctx.Doc, mergeAdoptedStubMetaDataIntoFormContract(contract, rule), overlay) || changed
 			} else if hasRule {
 				changed = normalizeAdoptedStubMetaDataComposition(ctx.Doc, ctx.OwnerKind, rule, overlay) || changed
@@ -578,7 +609,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 			changed = normalizeChartOfCharacteristicTypesPredefined(ctx, contexts) || changed
 		}
 
-		if decision.Truncated && ctx.Metadata && isTopLevelMetadataFile(ctx) {
+		if decision.Truncated && ctx.Metadata && isTopLevelMetadataFile(ctx) && !isAdoptedStubExtMetaData(ctx, decision) {
 			changed = normalizeTruncatedMetadataStub(ctx.Doc, ctx.Properties) || changed
 		}
 
@@ -591,7 +622,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 		}
 
 		changed = cleanupForbiddenRegisterMovements(ctx.Doc, blockedForbiddenObjectKeys) || changed
-		if ctx.OwnerKind != "DefinedType" && ctx.OwnerKind != "EventSubscription" {
+		if ctx.OwnerKind != "DefinedType" && ctx.OwnerKind != "EventSubscription" && !isAdoptedStubExtMetaData(ctx, decision) {
 			changed = cleanupExcludedReferences(ctx.Doc, excludedRefs, excludedMetadataPrefixes, truncatedKeys, truncatedChildPrefixes) || changed
 		}
 		bindingTargets := bindingTargetsByDoc[ctx.Doc]
@@ -846,17 +877,22 @@ func buildChangeFilesState(cfg *config.Configuration, dir string) (*changeFilesS
 
 	log.Printf("xml step: build object sets")
 	buildObjectSetsStartedAt := time.Now()
-	includedNativeObjects := collectConfiguredNativeObjects(contexts, cfg.IncludedNativeObjects)
+	explicitNativeObjects := collectConfiguredNativeObjects(contexts, cfg.IncludedNativeObjects)
 	includedAdoptedStubObjects := collectConfiguredAdoptedStubObjects(contexts, cfg)
 	adoptedStubMetaDataRules := collectAdoptedStubMetaDataRules(cfg, dir)
 	for key := range adoptedStubMetaDataRules {
 		includedAdoptedStubObjects[key] = struct{}{}
 	}
 	forbiddenAdoptedStubObjects := collectConfiguredForbiddenStubObjects(contexts, cfg.ForbiddenAdoptedStubObjects)
-	primaryNativeObjects := collectPrimaryNativeObjects(contexts, cfg.NativePrefixes, includedNativeObjects)
+	prefixNativeObjects := collectNativePrefixObjects(contexts, cfg.NativePrefixes)
+	primaryNativeObjects := mergeObjectSets(explicitNativeObjects, prefixNativeObjects)
 	excludedSubsystemObjects := collectExcludedSubsystemObjects(contexts, cfg.ExcludedSubsystems, cfg.NativePrefixes)
 	configuredExcludedObjects := collectConfiguredExcludedObjects(contexts, cfg.ExcludedObjects)
 	excludedObjects := mergeObjectSets(excludedSubsystemObjects, configuredExcludedObjects)
+	targetCompatibilitySet, err := collectTargetCompatibilitySet(cfg)
+	if err != nil {
+		return nil, err
+	}
 	logXMLStepCompleted("build object sets", buildObjectSetsStartedAt)
 
 	log.Printf("xml step: collect subsystem decisions")
@@ -877,9 +913,10 @@ func buildChangeFilesState(cfg *config.Configuration, dir string) (*changeFilesS
 				continue
 			}
 		}
-		decisions[ctx.OwnerKey] = decideObject(ctx, cfg, primaryNativeObjects, excludedObjects, includedAdoptedStubObjects, forbiddenAdoptedStubObjects)
+		decisions[ctx.OwnerKey] = decideObject(ctx, cfg, explicitNativeObjects, prefixNativeObjects, excludedObjects, includedAdoptedStubObjects, forbiddenAdoptedStubObjects)
 	}
 	applyAdoptedStubMetaDataRules(decisions, adoptedStubMetaDataRules, excludedObjects, forbiddenAdoptedStubObjects)
+	applyTargetCompatibilitySet(decisions, contexts, targetCompatibilitySet, forbiddenAdoptedStubObjects)
 	logXMLStepCompleted("collect subsystem decisions", collectSubsystemDecisionsStartedAt, fmt.Sprintf("decisions=%d", len(decisions)))
 
 	searchResultState, err := collectSearchResultState(cfg, dir, contexts, decisions, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects)
@@ -894,14 +931,16 @@ func buildChangeFilesState(cfg *config.Configuration, dir string) (*changeFilesS
 	incomingReferenceGraph := collectIncomingReferenceGraph(referenceGraph)
 	adoptedStubExtReferenceGraph := collectAdoptedStubExtReferenceGraph(contexts, decisions, searchResultState)
 	formDynamicListContracts := collectFormDynamicListContracts(contexts, decisions, searchResultState)
-	promoteReferencedObjectsToAdoptedStubIndexed(contexts, indexes, decisions, cfg, referenceGraph, incomingReferenceGraph, adoptedStubExtReferenceGraph, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects, targetMergeRules.ObjectKeys)
+	promoteReferencedObjectsToAdoptedStubIndexed(contexts, indexes, decisions, cfg, referenceGraph, incomingReferenceGraph, adoptedStubExtReferenceGraph, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects, targetMergeRules.ObjectKeys, targetCompatibilitySet)
 	promoteRegisterDocumentOwnersToNativeIndexed(contexts, indexes, decisions, cfg, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects, collectRegisterDocumentReferences(contexts))
 	applyFormDynamicListContracts(decisions, formDynamicListContracts, forbiddenAdoptedStubObjects)
 	applyAdoptedStubMetaDataRules(decisions, adoptedStubMetaDataRules, excludedObjects, forbiddenAdoptedStubObjects)
-	contexts, indexes, err = mergeTargetMetadataComposition(cfg, dir, contexts, indexes, decisions, targetMergeRules.ObjectKeys, excludedObjects, forbiddenAdoptedStubObjects)
+	applyTargetCompatibilitySet(decisions, contexts, targetCompatibilitySet, forbiddenAdoptedStubObjects)
+	contexts, indexes, err = mergeTargetMetadataComposition(cfg, dir, contexts, indexes, decisions, targetMergeRules.ObjectKeys, excludedObjects, forbiddenAdoptedStubObjects, targetCompatibilitySet)
 	if err != nil {
 		return nil, err
 	}
+	applyTargetCompatibilitySet(decisions, contexts, targetCompatibilitySet, forbiddenAdoptedStubObjects)
 	logXMLStepCompleted("promote referenced objects", promoteReferencedObjectsStartedAt, fmt.Sprintf("decisions=%d", len(decisions)))
 
 	collectCleanupSetsStartedAt := time.Now()
@@ -1057,12 +1096,6 @@ func collectSubsystemDecisions(contexts []*FileProcessingContext, cfg *config.Co
 			continue
 		}
 
-		root := chain[0]
-		_, adoptedRoot := adoptedSubsystemRoots[root]
-		if !adoptedRoot && !hasNativePrefix(root, cfg.NativePrefixes) && !subsystemChainHasNativeAncestor(chain, cfg.NativePrefixes) {
-			continue
-		}
-
 		states = append(states, subsystemState{
 			Key:   ctx.OwnerKey,
 			Name:  ctx.OwnerName,
@@ -1071,11 +1104,11 @@ func collectSubsystemDecisions(contexts []*FileProcessingContext, cfg *config.Co
 	}
 
 	for _, state := range states {
-		if !hasNativePrefix(state.Name, cfg.NativePrefixes) {
+		if !hasNativePrefix(state.Name, cfg.NativePrefixes) && !subsystemChainHasNativeAncestor(state.Chain, cfg.NativePrefixes) {
 			continue
 		}
-		for _, ancestor := range state.Chain[:len(state.Chain)-1] {
-			adopted[ancestor] = struct{}{}
+		for idx := 1; idx < len(state.Chain); idx++ {
+			adopted[subsystemChainKey(state.Chain[:idx])] = struct{}{}
 		}
 	}
 
@@ -1093,11 +1126,7 @@ func collectSubsystemDecisions(contexts []*FileProcessingContext, cfg *config.Co
 				decision = objectDecision{Belonging: "Native"}
 			case subsystemChainHasNativeAncestor(state.Chain, cfg.NativePrefixes):
 				decision = objectDecision{Belonging: "Native"}
-			case len(state.Chain) == 1:
-				if decision.Belonging != "Native" {
-					decision = objectDecision{Belonging: "AdoptedStub"}
-				}
-			case containsName(adopted, state.Name):
+			case containsName(adopted, subsystemChainKey(state.Chain)):
 				if decision.Belonging != "Native" {
 					decision = objectDecision{Belonging: "AdoptedStub"}
 				}
@@ -1136,10 +1165,15 @@ func subsystemChainHasNativeAncestor(chain []string, nativePrefixes []string) bo
 	return false
 }
 
+func subsystemChainKey(chain []string) string {
+	return strings.Join(chain, ".")
+}
+
 func decideObject(
 	ctx *FileProcessingContext,
 	cfg *config.Configuration,
-	primaryNativeObjects map[string]struct{},
+	explicitNativeObjects map[string]struct{},
+	prefixNativeObjects map[string]struct{},
 	excludedObjects map[string]struct{},
 	includedAdoptedStubObjects map[string]struct{},
 	forbiddenAdoptedStubObjects map[string]struct{},
@@ -1163,14 +1197,19 @@ func decideObject(
 		return objectDecision{Excluded: true}
 	}
 
-	if _, primary := primaryNativeObjects[ctx.OwnerKey]; primary {
-		debugDecision(ctx.OwnerKey, "native by primary set")
+	if _, explicit := explicitNativeObjects[ctx.OwnerKey]; explicit {
+		debugDecision(ctx.OwnerKey, "native by explicit include")
 		return objectDecision{Belonging: "Native"}
 	}
 
 	if _, excluded := excludedObjects[ctx.OwnerKey]; excluded {
 		debugDecision(ctx.OwnerKey, "soft-excluded by excluded object set")
 		return objectDecision{Excluded: true}
+	}
+
+	if _, primary := prefixNativeObjects[ctx.OwnerKey]; primary {
+		debugDecision(ctx.OwnerKey, "native by prefix-native set")
+		return objectDecision{Belonging: "Native"}
 	}
 
 	if _, included := includedAdoptedStubObjects[ctx.OwnerKey]; included {
@@ -1470,6 +1509,132 @@ func collectTargetMergeRules(cfg *config.Configuration, dir string) targetMergeR
 	return result
 }
 
+func collectTargetCompatibilitySet(cfg *config.Configuration) (targetCompatibilitySet, error) {
+	result := targetCompatibilitySet{Keys: make(map[string]struct{})}
+	if cfg == nil || strings.TrimSpace(cfg.Target.XMLDump) == "" {
+		return result, nil
+	}
+
+	info, err := os.Stat(cfg.Target.XMLDump)
+	if err != nil {
+		return result, fmt.Errorf("не удалось получить доступ к XML-дампу конфигурации-приемника %s: %w", cfg.Target.XMLDump, err)
+	}
+	if !info.IsDir() {
+		return result, fmt.Errorf("путь xml_dump должен указывать на каталог XML-выгрузки конфигурации-приемника: %s", cfg.Target.XMLDump)
+	}
+
+	result.Enabled = true
+	topLevelDirs := map[string]string{
+		"DefinedTypes":       "DefinedType",
+		"EventSubscriptions": "EventSubscription",
+		"ExchangePlans":      "ExchangePlan",
+	}
+
+	for relDir, expectedKind := range topLevelDirs {
+		dirPath := filepath.Join(cfg.Target.XMLDump, relDir)
+		entries, err := os.ReadDir(dirPath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return result, fmt.Errorf("не удалось прочитать каталог %s: %w", dirPath, err)
+		}
+
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".xml") {
+				continue
+			}
+			relPath := filepath.ToSlash(filepath.Join(relDir, entry.Name()))
+			doc, err := readXMLFile(filepath.Join(dirPath, entry.Name()))
+			if err != nil {
+				return result, err
+			}
+			kind, _, key := detectOwner(relPath, doc)
+			if kind != expectedKind || key == "" {
+				continue
+			}
+			result.Keys[key] = struct{}{}
+		}
+	}
+
+	return result, nil
+}
+
+func applyTargetCompatibilitySet(
+	decisions map[string]objectDecision,
+	contexts []*FileProcessingContext,
+	targetCompatibility targetCompatibilitySet,
+	forbidden map[string]struct{},
+) {
+	if !targetCompatibility.Enabled || len(decisions) == 0 {
+		return
+	}
+
+	for _, ctx := range contexts {
+		if ctx == nil || ctx.OwnerKey == "" || !isTargetSensitiveKind(ctx.OwnerKind) {
+			continue
+		}
+		if _, blocked := forbidden[ctx.OwnerKey]; blocked {
+			continue
+		}
+
+		decision, exists := decisions[ctx.OwnerKey]
+		if !exists || decision.Excluded || decision.Belonging == "Native" {
+			continue
+		}
+		if _, ok := targetCompatibility.Keys[ctx.OwnerKey]; ok {
+			continue
+		}
+
+		decision = objectDecision{
+			Excluded:         true,
+			SearchResultCode: decision.SearchResultCode,
+		}
+		decisions[ctx.OwnerKey] = decision
+		debugDecision(ctx.OwnerKey, "soft-excluded by targetCompatibilitySet")
+	}
+}
+
+func isTargetSensitiveKind(kind string) bool {
+	switch kind {
+	case "DefinedType", "EventSubscription", "ExchangePlan":
+		return true
+	default:
+		return false
+	}
+}
+
+func isTargetSensitiveObjectKey(key string) bool {
+	kind, _ := splitObjectKey(key)
+	return isTargetSensitiveKind(kind)
+}
+
+func targetCompatibilityAllowsDecision(key string, decision objectDecision, targetCompatibility targetCompatibilitySet) bool {
+	if !targetCompatibility.Enabled || !isTargetSensitiveObjectKey(key) {
+		return true
+	}
+	if !decision.Excluded && decision.Belonging == "Native" {
+		return true
+	}
+	_, ok := targetCompatibility.Keys[key]
+	return ok
+}
+
+func canPromoteTargetSensitiveObject(
+	key string,
+	decision objectDecision,
+	primaryNativeObjects map[string]struct{},
+	targetCompatibility targetCompatibilitySet,
+) bool {
+	if !targetCompatibility.Enabled || !isTargetSensitiveObjectKey(key) {
+		return true
+	}
+	if _, primary := primaryNativeObjects[key]; primary {
+		return true
+	}
+	return targetCompatibilityAllowsDecision(key, decision, targetCompatibility)
+}
+
 func mergeTargetMetadataComposition(
 	cfg *config.Configuration,
 	root string,
@@ -1479,7 +1644,9 @@ func mergeTargetMetadataComposition(
 	targetMergeObjectKeys map[string]struct{},
 	excludedObjects map[string]struct{},
 	forbiddenAdoptedStubObjects map[string]struct{},
+	targetCompatibility targetCompatibilitySet,
 ) ([]*FileProcessingContext, *contextIndexes, error) {
+	startedAt := time.Now()
 	if cfg == nil || len(targetMergeObjectKeys) == 0 {
 		return contexts, indexes, nil
 	}
@@ -1495,17 +1662,157 @@ func mergeTargetMetadataComposition(
 	if !info.IsDir() {
 		return nil, nil, fmt.Errorf("путь xml_dump должен указывать на каталог XML-выгрузки конфигурации-приемника: %s", cfg.Target.XMLDump)
 	}
+	log.Printf("xml step: target merge started merge_objects=%d", len(targetMergeObjectKeys))
 
-	targetContexts, err := loadXMLContexts(cfg.Target.XMLDump)
-	if err != nil {
-		return nil, nil, fmt.Errorf("не удалось загрузить XML-дамп конфигурации-приемника %s: %w", cfg.Target.XMLDump, err)
-	}
-	targetIndexes := buildContextIndexes(targetContexts)
 	configurationCtx := findContextByOwnerKeyIndexed(indexes, contexts, "Configuration")
 	configDumpCtx := findContextByRelPath(indexes, contexts, configDumpInfo)
-	targetConfigDumpCtx := findContextByRelPath(targetIndexes, targetContexts, configDumpInfo)
+	targetContexts := make([]*FileProcessingContext, 0, len(targetMergeObjectKeys))
+	targetIndexes := buildContextIndexes(targetContexts)
+	targetContextsByKey := make(map[string]*FileProcessingContext, len(targetMergeObjectKeys))
+	targetMissingKeys := make(map[string]struct{})
+	targetContextsByRelPath := make(map[string]*FileProcessingContext, len(targetMergeObjectKeys))
+	targetMissingRelPaths := make(map[string]struct{})
+	collectedTargetRefs := make(map[string]struct{})
+	mergeObjects := make([]preparedTargetMergeObject, 0, len(targetMergeObjectKeys))
+	dirtyDocs := make(map[string]*FileProcessingContext)
+	stats := targetMergePerfStats{MergeObjects: len(targetMergeObjectKeys)}
+	configurationDirty := false
+	configDumpDirty := false
 
-	ensureTargetValueAvailable := func(value string) (bool, error) {
+	loadTargetContextByRelPath := func(relPath string) (*FileProcessingContext, error) {
+		if relPath == "" {
+			return nil, nil
+		}
+		relPath = filepath.ToSlash(relPath)
+		if existing, ok := targetContextsByRelPath[relPath]; ok {
+			stats.CacheHits++
+			return existing, nil
+		}
+		if _, missing := targetMissingRelPaths[relPath]; missing {
+			stats.CacheHits++
+			return nil, nil
+		}
+		stats.CacheMisses++
+
+		path := filepath.Join(cfg.Target.XMLDump, filepath.FromSlash(relPath))
+		info, err := os.Stat(path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				targetMissingRelPaths[relPath] = struct{}{}
+				return nil, nil
+			}
+			return nil, fmt.Errorf("ошибка при доступе к файлу %s: %w", path, err)
+		}
+		if info.IsDir() {
+			return nil, fmt.Errorf("ожидался XML-файл, а не каталог: %s", path)
+		}
+
+		doc, err := readXMLFile(path)
+		if err != nil {
+			return nil, err
+		}
+
+		kind, name, key := detectOwner(relPath, doc)
+		ctx := &FileProcessingContext{
+			Doc:              doc,
+			Path:             path,
+			RelPath:          filepath.ToSlash(relPath),
+			FileName:         filepath.Base(path),
+			Metadata:         isMetadataObjectDoc(doc),
+			TopLevelMetadata: isTopLevelMetadataRelPath(relPath),
+			Properties:       findProperties(doc),
+			OwnerKind:        kind,
+			OwnerName:        name,
+			OwnerKey:         key,
+		}
+		targetContexts = append(targetContexts, ctx)
+		appendContextToIndexes(targetIndexes, ctx)
+		targetContextsByRelPath[ctx.RelPath] = ctx
+		if ctx.OwnerKey != "" {
+			targetContextsByKey[ctx.OwnerKey] = ctx
+		}
+		return ctx, nil
+	}
+
+	loadTargetTopLevelContextByKey := func(key string) (*FileProcessingContext, error) {
+		if existing, ok := targetContextsByKey[key]; ok {
+			stats.CacheHits++
+			return existing, nil
+		}
+		if _, missing := targetMissingKeys[key]; missing {
+			stats.CacheHits++
+			return nil, nil
+		}
+		relPath, ok := topLevelMetadataRelPathForKey(key)
+		if !ok {
+			targetMissingKeys[key] = struct{}{}
+			return nil, nil
+		}
+		ctx, err := loadTargetContextByRelPath(relPath)
+		if err != nil {
+			return nil, err
+		}
+		if ctx == nil {
+			targetMissingKeys[key] = struct{}{}
+			return nil, nil
+		}
+		if ctx.OwnerKey != key {
+			return nil, fmt.Errorf("ожидался объект %s в XML-дампе конфигурации-приемника, получен %s", key, ctx.OwnerKey)
+		}
+		targetContextsByKey[key] = ctx
+		return ctx, nil
+	}
+
+	markDirty := func(ctx *FileProcessingContext) {
+		if ctx == nil || ctx.Path == "" {
+			return
+		}
+		dirtyDocs[ctx.Path] = ctx
+	}
+
+	ensureTargetTopLevelObjectImported := func(key string, currentCtx *FileProcessingContext, targetCtx *FileProcessingContext) (*FileProcessingContext, bool, error) {
+		if targetCtx == nil || targetCtx.Doc == nil || !isTopLevelMetadataFile(targetCtx) {
+			return nil, false, fmt.Errorf("не удалось найти объект %s в XML-дампе конфигурации-приемника", key)
+		}
+
+		imported := false
+		if currentCtx == nil || currentCtx.Doc == nil {
+			var err error
+			currentCtx, err = cloneTopLevelContextIntoRoot(root, targetCtx)
+			if err != nil {
+				return nil, false, err
+			}
+			contexts = append(contexts, currentCtx)
+			appendContextToIndexes(indexes, currentCtx)
+			imported = true
+		}
+
+		decisions[key] = objectDecision{
+			Belonging: "AdoptedStub",
+			Truncated: shouldTruncateAdoptedStub(currentCtx),
+		}
+
+		if configurationCtx != nil && configurationCtx.Doc != nil {
+			changed := ensureConfigurationChildObject(configurationCtx.Doc, key)
+			if changed {
+				configurationDirty = true
+			}
+		}
+
+		if configDumpCtx != nil && configDumpCtx.Doc != nil {
+			changed, err := ensureConfigDumpInfoMetadataEntry(configDumpCtx.Doc, key, currentCtx, targetCtx)
+			if err != nil {
+				return nil, false, err
+			}
+			if changed {
+				configDumpDirty = true
+			}
+		}
+
+		return currentCtx, imported, nil
+	}
+
+	collectTargetValueRefs := func(value string) (bool, error) {
 		refs := metadataReferencesFromValue(value)
 		if len(refs) == 0 {
 			return true, nil
@@ -1525,92 +1832,107 @@ func mergeTargetMetadataComposition(
 				continue
 			}
 
-			targetCtx := findContextByOwnerKeyIndexed(targetIndexes, targetContexts, ref)
-			if targetCtx == nil || targetCtx.Doc == nil || !isTopLevelMetadataFile(targetCtx) {
-				return false, fmt.Errorf("не удалось найти объект %s в XML-дампе конфигурации-приемника", ref)
-			}
-
-			newCtx, err := cloneTopLevelContextIntoRoot(root, targetCtx)
+			targetCtx, err := loadTargetTopLevelContextByKey(ref)
 			if err != nil {
 				return false, err
 			}
-			contexts = append(contexts, newCtx)
-			appendContextToIndexes(indexes, newCtx)
-			decisions[ref] = objectDecision{
-				Belonging: "AdoptedStub",
-				Truncated: shouldTruncateAdoptedStub(newCtx),
+			if targetCtx == nil {
+				return false, nil
 			}
-
-			if configurationCtx != nil && configurationCtx.Doc != nil {
-				changed := ensureConfigurationChildObject(configurationCtx.Doc, ref)
-				if changed {
-					if err := configurationCtx.Doc.WriteToFile(configurationCtx.Path); err != nil {
-						return false, fmt.Errorf("ошибка при записи файла %s: %w", configurationCtx.Path, err)
-					}
-				}
-			}
-
-			if configDumpCtx != nil && configDumpCtx.Doc != nil {
-				changed, err := ensureConfigDumpInfoMetadataEntry(configDumpCtx.Doc, targetConfigDumpCtx, ref)
-				if err != nil {
-					return false, err
-				}
-				if changed {
-					if err := configDumpCtx.Doc.WriteToFile(configDumpCtx.Path); err != nil {
-						return false, fmt.Errorf("ошибка при записи файла %s: %w", configDumpCtx.Path, err)
-					}
-				}
-			}
+			collectedTargetRefs[ref] = struct{}{}
 		}
 
 		return true, nil
 	}
 
+	allowCollectedTargetValue := func(value string) (bool, error) {
+		refs := metadataReferencesFromValue(value)
+		if len(refs) == 0 {
+			return true, nil
+		}
+		for _, ref := range refs {
+			if _, forbidden := forbiddenAdoptedStubObjects[ref]; forbidden {
+				return false, nil
+			}
+			if _, excluded := excludedObjects[ref]; excluded {
+				return false, nil
+			}
+			decision, exists := decisions[ref]
+			if !exists || decision.Excluded {
+				return false, nil
+			}
+		}
+		return true, nil
+	}
+
+	keys := make([]string, 0, len(targetMergeObjectKeys))
 	for key := range targetMergeObjectKeys {
-		decision, exists := decisions[key]
-		if !exists || decision.Excluded {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		if _, forbidden := forbiddenAdoptedStubObjects[key]; forbidden {
 			continue
 		}
 
-		currentCtx := findContextByOwnerKeyIndexed(indexes, contexts, key)
-		targetCtx := findContextByOwnerKeyIndexed(targetIndexes, targetContexts, key)
-		if currentCtx == nil || targetCtx == nil || currentCtx.Doc == nil || targetCtx.Doc == nil {
+		targetCtx, err := loadTargetTopLevelContextByKey(key)
+		if err != nil {
+			return nil, nil, err
+		}
+		if targetCtx == nil || targetCtx.Doc == nil {
 			continue
 		}
+		currentCtx := findContextByOwnerKeyIndexed(indexes, contexts, key)
+		decision, exists := decisions[key]
+		if !exists || decision.Excluded || currentCtx == nil || currentCtx.Doc == nil {
+			if _, compatible := targetCompatibility.Keys[key]; !compatible {
+				continue
+			}
+			currentCtx, _, err = ensureTargetTopLevelObjectImported(key, currentCtx, targetCtx)
+			if err != nil {
+				return nil, nil, err
+			}
+			decision = decisions[key]
+			exists = true
+		}
+		if !exists || decision.Excluded || currentCtx == nil || currentCtx.Doc == nil {
+			continue
+		}
+		if !targetCompatibilityAllowsDecision(key, decision, targetCompatibility) {
+			continue
+		}
+		decision = preserveAdoptedStubExtMetaData(decision)
+		decisions[key] = decision
 
 		kind, _ := splitObjectKey(key)
+		prepared := preparedTargetMergeObject{
+			Key:        key,
+			Kind:       kind,
+			CurrentCtx: currentCtx,
+			TargetCtx:  targetCtx,
+		}
 		switch kind {
 		case "DefinedType":
-			currentType := currentCtx.Properties.FindElement("./Type")
 			targetType := targetCtx.Properties.FindElement("./Type")
-			changed, err := mergeMetadataValueContainer(currentCtx.Properties, "Type", currentType, targetType, decisions, ensureTargetValueAvailable)
-			if err != nil {
+			if err := collectMetadataValueContainerRefs(targetType, collectTargetValueRefs); err != nil {
 				return nil, nil, err
-			}
-			if changed {
-				if err := currentCtx.Doc.WriteToFile(currentCtx.Path); err != nil {
-					return nil, nil, fmt.Errorf("ошибка при записи файла %s: %w", currentCtx.Path, err)
-				}
 			}
 		case "EventSubscription":
-			currentSource := currentCtx.Properties.FindElement("./Source")
 			targetSource := targetCtx.Properties.FindElement("./Source")
-			changed, err := mergeMetadataValueContainer(currentCtx.Properties, "Source", currentSource, targetSource, decisions, ensureTargetValueAvailable)
-			if err != nil {
+			if err := collectMetadataValueContainerRefs(targetSource, collectTargetValueRefs); err != nil {
 				return nil, nil, err
-			}
-			if changed {
-				if err := currentCtx.Doc.WriteToFile(currentCtx.Path); err != nil {
-					return nil, nil, fmt.Errorf("ошибка при записи файла %s: %w", currentCtx.Path, err)
-				}
 			}
 		case "ExchangePlan":
 			contentRelPath := strings.TrimSuffix(currentCtx.RelPath, ".xml") + "/Ext/Content.xml"
-			currentContentCtx := findContextByRelPath(indexes, contexts, contentRelPath)
-			targetContentCtx := findContextByRelPath(targetIndexes, targetContexts, contentRelPath)
-			if targetContentCtx == nil || targetContentCtx.Doc == nil {
-				continue
+			targetContentCtx, err := loadTargetContextByRelPath(contentRelPath)
+			if err != nil {
+				return nil, nil, err
 			}
+			if targetContentCtx == nil || targetContentCtx.Doc == nil {
+				break
+			}
+			currentContentCtx := findContextByRelPath(indexes, contexts, contentRelPath)
 			if currentContentCtx == nil {
 				currentContentCtx, err = cloneContextIntoRoot(root, targetContentCtx)
 				if err != nil {
@@ -1619,19 +1941,176 @@ func mergeTargetMetadataComposition(
 				contexts = append(contexts, currentContentCtx)
 				appendContextToIndexes(indexes, currentContentCtx)
 			}
-			changed, err := mergeExchangePlanContent(currentContentCtx.Doc, targetContentCtx.Doc, decisions, ensureTargetValueAvailable)
+			prepared.ExchangePlanRelPath = contentRelPath
+			prepared.CurrentContentCtx = currentContentCtx
+			prepared.TargetContentCtx = targetContentCtx
+			if err := collectExchangePlanContentRefs(targetContentCtx.Doc, collectTargetValueRefs); err != nil {
+				return nil, nil, err
+			}
+		}
+		mergeObjects = append(mergeObjects, prepared)
+	}
+
+	stats.TargetRefs = len(collectedTargetRefs)
+	importKeys := make([]string, 0, len(collectedTargetRefs))
+	for key := range collectedTargetRefs {
+		importKeys = append(importKeys, key)
+	}
+	sort.Strings(importKeys)
+
+	for _, key := range importKeys {
+		if _, forbidden := forbiddenAdoptedStubObjects[key]; forbidden {
+			stats.SkippedTargetRefs++
+			continue
+		}
+		if _, excluded := excludedObjects[key]; excluded {
+			stats.SkippedTargetRefs++
+			continue
+		}
+
+		currentCtx := findContextByOwnerKeyIndexed(indexes, contexts, key)
+		decision, exists := decisions[key]
+		if exists && decision.Excluded {
+			stats.SkippedTargetRefs++
+			continue
+		} else if exists && currentCtx != nil && currentCtx.Doc != nil {
+			stats.SkippedTargetRefs++
+			continue
+		}
+		if isTargetSensitiveObjectKey(key) {
+			stats.SkippedTargetRefs++
+			continue
+		}
+
+		targetCtx, err := loadTargetTopLevelContextByKey(key)
+		if err != nil {
+			return nil, nil, err
+		}
+		if targetCtx == nil {
+			stats.SkippedTargetRefs++
+			continue
+		}
+
+		_, imported, err := ensureTargetTopLevelObjectImported(key, currentCtx, targetCtx)
+		if err != nil {
+			return nil, nil, err
+		}
+		if imported {
+			stats.ImportedTargetRefs++
+			continue
+		}
+		stats.SkippedTargetRefs++
+	}
+
+	for _, prepared := range mergeObjects {
+		switch prepared.Kind {
+		case "DefinedType":
+			currentType := prepared.CurrentCtx.Properties.FindElement("./Type")
+			targetType := prepared.TargetCtx.Properties.FindElement("./Type")
+			changed, err := mergeMetadataValueContainer(prepared.CurrentCtx.Properties, "Type", currentType, targetType, decisions, allowCollectedTargetValue)
 			if err != nil {
 				return nil, nil, err
 			}
 			if changed {
-				if err := currentContentCtx.Doc.WriteToFile(currentContentCtx.Path); err != nil {
-					return nil, nil, fmt.Errorf("ошибка при записи файла %s: %w", currentContentCtx.Path, err)
-				}
+				markDirty(prepared.CurrentCtx)
+			}
+		case "EventSubscription":
+			currentSource := prepared.CurrentCtx.Properties.FindElement("./Source")
+			targetSource := prepared.TargetCtx.Properties.FindElement("./Source")
+			changed, err := mergeMetadataValueContainer(prepared.CurrentCtx.Properties, "Source", currentSource, targetSource, decisions, allowCollectedTargetValue)
+			if err != nil {
+				return nil, nil, err
+			}
+			if changed {
+				markDirty(prepared.CurrentCtx)
+			}
+		case "ExchangePlan":
+			if prepared.CurrentContentCtx == nil || prepared.TargetContentCtx == nil {
+				continue
+			}
+			changed, err := mergeExchangePlanContent(prepared.CurrentContentCtx.Doc, prepared.TargetContentCtx.Doc, decisions, allowCollectedTargetValue)
+			if err != nil {
+				return nil, nil, err
+			}
+			if changed {
+				markDirty(prepared.CurrentContentCtx)
 			}
 		}
 	}
 
+	dirtyPaths := make([]string, 0, len(dirtyDocs))
+	for path := range dirtyDocs {
+		dirtyPaths = append(dirtyPaths, path)
+	}
+	sort.Strings(dirtyPaths)
+	for _, path := range dirtyPaths {
+		ctx := dirtyDocs[path]
+		if err := ctx.Doc.WriteToFile(ctx.Path); err != nil {
+			return nil, nil, fmt.Errorf("ошибка при записи файла %s: %w", ctx.Path, err)
+		}
+	}
+
+	if configurationDirty && configurationCtx != nil && configurationCtx.Doc != nil {
+		if err := configurationCtx.Doc.WriteToFile(configurationCtx.Path); err != nil {
+			return nil, nil, fmt.Errorf("ошибка при записи файла %s: %w", configurationCtx.Path, err)
+		}
+	}
+	if configDumpDirty && configDumpCtx != nil && configDumpCtx.Doc != nil {
+		if err := configDumpCtx.Doc.WriteToFile(configDumpCtx.Path); err != nil {
+			return nil, nil, fmt.Errorf("ошибка при записи файла %s: %w", configDumpCtx.Path, err)
+		}
+	}
+
+	log.Printf(
+		"xml step: target merge completed in %s (merge_objects=%d target_refs=%d imported=%d skipped=%d cache_hits=%d cache_misses=%d)",
+		time.Since(startedAt).Round(100*time.Millisecond),
+		stats.MergeObjects,
+		stats.TargetRefs,
+		stats.ImportedTargetRefs,
+		stats.SkippedTargetRefs,
+		stats.CacheHits,
+		stats.CacheMisses,
+	)
+
 	return contexts, indexes, nil
+}
+
+func collectMetadataValueContainerRefs(
+	targetContainer *etree.Element,
+	allowTargetValue func(string) (bool, error),
+) error {
+	if targetContainer == nil {
+		return nil
+	}
+	for _, child := range targetContainer.ChildElements() {
+		value := strings.TrimSpace(child.Text())
+		if value == "" {
+			continue
+		}
+		if _, err := allowTargetValue(value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func collectExchangePlanContentRefs(
+	targetDoc *etree.Document,
+	allowTargetValue func(string) (bool, error),
+) error {
+	if targetDoc == nil || targetDoc.Root() == nil {
+		return nil
+	}
+	for _, item := range targetDoc.Root().FindElements("./Item") {
+		metadata := strings.TrimSpace(textOfFirst(item, "./Metadata"))
+		if metadata == "" {
+			continue
+		}
+		if _, err := allowTargetValue(metadata); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func mergeMetadataValueContainer(
@@ -1826,14 +2305,13 @@ func appendContextToIndexes(indexes *contextIndexes, ctx *FileProcessingContext)
 	indexes.byFileName[ctx.FileName] = append(indexes.byFileName[ctx.FileName], ctx)
 }
 
-func ensureConfigDumpInfoMetadataEntry(doc *etree.Document, targetConfigDumpCtx *FileProcessingContext, metadataName string) (bool, error) {
-	if doc == nil || targetConfigDumpCtx == nil || targetConfigDumpCtx.Doc == nil {
+func ensureConfigDumpInfoMetadataEntry(doc *etree.Document, metadataName string, candidateContexts ...*FileProcessingContext) (bool, error) {
+	if doc == nil {
 		return false, nil
 	}
 
 	configVersions := findConfigVersionsElement(doc)
-	targetVersions := findConfigVersionsElement(targetConfigDumpCtx.Doc)
-	if configVersions == nil || targetVersions == nil {
+	if configVersions == nil {
 		return false, fmt.Errorf("не удалось обновить ConfigDumpInfo.xml для %s", metadataName)
 	}
 
@@ -1841,13 +2319,33 @@ func ensureConfigDumpInfoMetadataEntry(doc *etree.Document, targetConfigDumpCtx 
 		return false, nil
 	}
 
-	targetEntry := findConfigDumpMetadataEntry(targetVersions, metadataName)
-	if targetEntry == nil {
-		return false, fmt.Errorf("не удалось найти запись %s в target ConfigDumpInfo.xml", metadataName)
+	metadataID := ""
+	for _, ctx := range candidateContexts {
+		metadataID = metadataUUIDForConfigDumpEntry(ctx)
+		if metadataID != "" {
+			break
+		}
+	}
+	if metadataID == "" {
+		return false, fmt.Errorf("не удалось определить uuid для записи %s в ConfigDumpInfo.xml", metadataName)
 	}
 
-	configVersions.AddChild(targetEntry.Copy())
+	entry := etree.NewElement("Metadata")
+	entry.CreateAttr("name", metadataName)
+	entry.CreateAttr("id", metadataID)
+	configVersions.AddChild(entry)
 	return true, nil
+}
+
+func metadataUUIDForConfigDumpEntry(ctx *FileProcessingContext) string {
+	if ctx == nil || ctx.Doc == nil {
+		return ""
+	}
+	target := metadataTargetElement(ctx.Doc)
+	if target == nil {
+		return ""
+	}
+	return normalizeGUIDValue(target.SelectAttrValue("uuid", ""))
 }
 
 func ensureConfigurationChildObject(doc *etree.Document, metadataName string) bool {
@@ -1901,6 +2399,22 @@ func findConfigDumpMetadataEntry(configVersions *etree.Element, metadataName str
 		}
 	}
 	return nil
+}
+
+func topLevelMetadataRelPathForKey(key string) (string, bool) {
+	kind, name := splitObjectKey(key)
+	if kind == "" || name == "" {
+		return "", false
+	}
+
+	for dir, candidateKind := range metadataKinds {
+		if candidateKind != kind {
+			continue
+		}
+		return filepath.ToSlash(filepath.Join(dir, name+".xml")), true
+	}
+
+	return "", false
 }
 
 func normalizeGUIDValue(value string) string {
@@ -2321,6 +2835,29 @@ func shouldTruncateAdoptedStub(ctx *FileProcessingContext) bool {
 	}
 }
 
+func preserveAdoptedStubExtMetaData(decision objectDecision) objectDecision {
+	decision.Belonging = "AdoptedStub"
+	decision.Excluded = false
+	decision.Truncated = false
+	decision.AdoptedStubExtMetaData = true
+	return decision
+}
+
+func isAdoptedStubExtMetaData(ctx *FileProcessingContext, decision objectDecision) bool {
+	if !decision.AdoptedStubExtMetaData || decision.Belonging != "AdoptedStub" {
+		return false
+	}
+	if ctx == nil {
+		return false
+	}
+	switch ctx.OwnerKind {
+	case "DefinedType", "ExchangePlan", "EventSubscription":
+		return true
+	default:
+		return false
+	}
+}
+
 func cleanupExcludedReferences(doc *etree.Document, excluded map[string]map[string]struct{}, excludedMetadataPrefixes []string, truncatedKeys map[string]struct{}, truncatedChildPrefixes []string) bool {
 	root := doc.Root()
 	if root == nil {
@@ -2452,7 +2989,7 @@ func promoteReferencedObjectsToAdoptedStub(
 	excludedObjects map[string]struct{},
 	forbiddenAdoptedStubObjects map[string]struct{},
 ) {
-	promoteReferencedObjectsToAdoptedStubIndexed(contexts, nil, decisions, cfg, referenceGraph, incomingReferenceGraph, adoptedStubExtReferenceGraph, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects, nil)
+	promoteReferencedObjectsToAdoptedStubIndexed(contexts, nil, decisions, cfg, referenceGraph, incomingReferenceGraph, adoptedStubExtReferenceGraph, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects, nil, targetCompatibilitySet{})
 }
 
 func promoteReferencedObjectsToAdoptedStubIndexed(
@@ -2467,6 +3004,7 @@ func promoteReferencedObjectsToAdoptedStubIndexed(
 	excludedObjects map[string]struct{},
 	forbiddenAdoptedStubObjects map[string]struct{},
 	targetMergeObjectKeys map[string]struct{},
+	targetCompatibility targetCompatibilitySet,
 ) {
 	for {
 		changed := false
@@ -2481,6 +3019,9 @@ func promoteReferencedObjectsToAdoptedStubIndexed(
 				continue
 			}
 			regularSource := isRefDrivenInclusionSource(ctx, decision)
+			if regularSource && !targetCompatibilityAllowsDecision(ctx.OwnerKey, decision, targetCompatibility) {
+				regularSource = false
+			}
 			if regularSource && shouldDeferTargetMergeSource(ctx, targetMergeObjectKeys) {
 				regularSource = false
 			}
@@ -2504,6 +3045,10 @@ func promoteReferencedObjectsToAdoptedStubIndexed(
 				}
 
 				refDecision, refExists := decisions[ref]
+				if !canPromoteTargetSensitiveObject(ref, refDecision, primaryNativeObjects, targetCompatibility) {
+					debugDecision(ref, "kept excluded: targetCompatibilitySet")
+					continue
+				}
 				if refExists && refDecision.Belonging == "Native" {
 					continue
 				}
@@ -2621,6 +3166,9 @@ func isReferencedOnlyByNativeSubsystems(
 }
 
 func isRefDrivenInclusionSource(ctx *FileProcessingContext, decision objectDecision) bool {
+	if ctx != nil && ctx.OwnerKind == "Subsystem" {
+		return decision.Belonging == "Native"
+	}
 	if decision.Belonging == "Native" {
 		return true
 	}
@@ -4463,14 +5011,6 @@ func collectConfiguredObjectKeys(contexts []*FileProcessingContext, configured [
 		}
 	}
 
-	return result
-}
-
-func collectPrimaryNativeObjects(contexts []*FileProcessingContext, nativePrefixes []string, includedNativeObjects map[string]struct{}) map[string]struct{} {
-	result := collectNativePrefixObjects(contexts, nativePrefixes)
-	for key := range includedNativeObjects {
-		result[key] = struct{}{}
-	}
 	return result
 }
 
@@ -8411,6 +8951,17 @@ func normalizeAdoptedObjectComposition(doc *etree.Document, ownerKind string, ov
 	return changed
 }
 
+func normalizeAdoptedStubExtMetaData(doc *etree.Document, ownerKind string, overlay searchResultObjectOverlay) bool {
+	switch ownerKind {
+	case "DefinedType", "EventSubscription":
+		return false
+	case "ExchangePlan":
+		return normalizeAdoptedObjectComposition(doc, ownerKind, overlay)
+	default:
+		return false
+	}
+}
+
 func normalizeAdoptedStubMetaDataComposition(doc *etree.Document, ownerKind string, rule adoptedStubMetaDataRule, overlay searchResultObjectOverlay) bool {
 	if doc == nil {
 		return false
@@ -9110,7 +9661,12 @@ func finalizeRetainedOwnerCommands(
 		overlay = mergeSearchResultOverlayCommands(overlay, retainedOwnerCommands[ownerKey])
 		contract, hasContract := formDynamicListContracts[ownerKey]
 		rule, hasRule := adoptedStubMetaDataRules[ownerKey]
-		if hasContract && hasRule {
+		if isAdoptedStubExtMetaData(ctx, decision) {
+			changed = normalizeAdoptedStubExtMetaData(ctx.Doc, ctx.OwnerKind, overlay) || changed
+		} else if ctx.OwnerKind == "DefinedType" || ctx.OwnerKind == "EventSubscription" {
+			// Для специальных adopted metadata-object сохраняем composition/source
+			// и не минимизируем их до обычного AdoptedStub.
+		} else if hasContract && hasRule {
 			changed = normalizeAdoptedStubExtFormComposition(ctx.Doc, mergeAdoptedStubMetaDataIntoFormContract(contract, rule), overlay) || changed
 		} else if hasRule {
 			changed = normalizeAdoptedStubMetaDataComposition(ctx.Doc, ctx.OwnerKind, rule, overlay) || changed
