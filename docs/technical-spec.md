@@ -56,6 +56,7 @@ go build ./...
 - собирать `targetCompatibilitySet` lightweight-коллектором только по `DefinedTypes/*.xml`, `EventSubscriptions/*.xml`, `ExchangePlans/*.xml`; остальные metadata-каталоги и вложенные директории игнорировать
 - merge применять только к `DefinedType`, `ExchangePlan` и `EventSubscription`, перечисленным в `упо_MetaDataFile`; `target.xml_dump` не является глобальным source graph
 - для этих merge-объектов использовать отдельный adopted-режим `AdoptedStubExtMetaData`: объект не `Native`, не сводится к пустому stub, сохраняет `Properties/Type`, `Ext/Content.xml` или `Properties/Source`, участвует в target-ref-driven ссылках, но не переносит формы и BSL
+- если adopted top-level metadata-object совпал с объектом в `target.xml_dump` по top-level `id/uuid`, но target использует другое имя, итоговый extension должен использовать target-имя; stale source-name не должен попадать в `Configuration.xml`, `ConfigDumpInfo.xml` и GUID replacement как отдельный объект
 
 Ключевой рабочий конфиг:
 - [`../configs/config.json`](../configs/config.json)

@@ -440,6 +440,10 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 		return err
 	}
 	applyTargetCompatibilitySet(decisions, contexts, targetCompatibilitySet, forbiddenAdoptedStubObjects)
+	contexts, indexes, err = canonicalizeTargetRenamedAdoptedObjects(cfg, dir, contexts, indexes, decisions)
+	if err != nil {
+		return err
+	}
 	retainedOwnerCommandCandidates := collectOwnerCommandCandidates(contexts, decisions)
 	logXMLStepCompleted("promote referenced objects", promoteReferencedObjectsStartedAt, fmt.Sprintf("decisions=%d", len(decisions)))
 
@@ -941,6 +945,10 @@ func buildChangeFilesState(cfg *config.Configuration, dir string) (*changeFilesS
 		return nil, err
 	}
 	applyTargetCompatibilitySet(decisions, contexts, targetCompatibilitySet, forbiddenAdoptedStubObjects)
+	contexts, indexes, err = canonicalizeTargetRenamedAdoptedObjects(cfg, dir, contexts, indexes, decisions)
+	if err != nil {
+		return nil, err
+	}
 	logXMLStepCompleted("promote referenced objects", promoteReferencedObjectsStartedAt, fmt.Sprintf("decisions=%d", len(decisions)))
 
 	collectCleanupSetsStartedAt := time.Now()
@@ -1618,6 +1626,243 @@ func targetCompatibilityAllowsDecision(key string, decision objectDecision, targ
 	}
 	_, ok := targetCompatibility.Keys[key]
 	return ok
+}
+
+func collectTargetTopLevelMetadataKeysByUUID(targetXMLDump string) (map[string]string, error) {
+	result := make(map[string]string)
+	targetXMLDump = strings.TrimSpace(targetXMLDump)
+	if targetXMLDump == "" {
+		return result, nil
+	}
+
+	configDumpPath := filepath.Join(targetXMLDump, configDumpInfo)
+	info, err := os.Stat(configDumpPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return result, nil
+		}
+		return nil, fmt.Errorf("не удалось получить доступ к %s: %w", configDumpPath, err)
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("ожидался XML-файл, а не каталог: %s", configDumpPath)
+	}
+
+	doc, err := readXMLFile(configDumpPath)
+	if err != nil {
+		return nil, err
+	}
+	configVersions := findConfigVersionsElement(doc)
+	if configVersions == nil {
+		return result, nil
+	}
+
+	for _, child := range configVersions.ChildElements() {
+		if !strings.EqualFold(localName(child.Tag), "Metadata") {
+			continue
+		}
+		name := strings.TrimSpace(child.SelectAttrValue("name", ""))
+		id := normalizeGUIDValue(child.SelectAttrValue("id", ""))
+		if name == "" || id == "" {
+			continue
+		}
+		topKey, segments, ok := parseMetadataPath(name)
+		if !ok || len(segments) != 0 {
+			continue
+		}
+		if _, exists := result[id]; !exists {
+			result[id] = topKey
+		}
+	}
+
+	return result, nil
+}
+
+func canonicalizeTargetRenamedAdoptedObjects(
+	cfg *config.Configuration,
+	root string,
+	contexts []*FileProcessingContext,
+	indexes *contextIndexes,
+	decisions map[string]objectDecision,
+) ([]*FileProcessingContext, *contextIndexes, error) {
+	if cfg == nil || strings.TrimSpace(cfg.Target.XMLDump) == "" || len(contexts) == 0 || len(decisions) == 0 {
+		return contexts, indexes, nil
+	}
+	if indexes == nil {
+		indexes = buildContextIndexes(contexts)
+	}
+
+	targetKeysByUUID, err := collectTargetTopLevelMetadataKeysByUUID(cfg.Target.XMLDump)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(targetKeysByUUID) == 0 {
+		return contexts, indexes, nil
+	}
+
+	configurationCtx := findContextByOwnerKeyIndexed(indexes, contexts, "Configuration")
+	configDumpCtx := findContextByRelPath(indexes, contexts, configDumpInfo)
+	targetCache := make(map[string]*FileProcessingContext)
+	loadTargetTopLevelContextByKey := func(key string) (*FileProcessingContext, error) {
+		if ctx, ok := targetCache[key]; ok {
+			return ctx, nil
+		}
+		relPath, ok := topLevelMetadataRelPathForKey(key)
+		if !ok {
+			targetCache[key] = nil
+			return nil, nil
+		}
+		path := filepath.Join(cfg.Target.XMLDump, filepath.FromSlash(relPath))
+		info, err := os.Stat(path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				targetCache[key] = nil
+				return nil, nil
+			}
+			return nil, fmt.Errorf("ошибка при доступе к файлу %s: %w", path, err)
+		}
+		if info.IsDir() {
+			return nil, fmt.Errorf("ожидался XML-файл, а не каталог: %s", path)
+		}
+		doc, err := readXMLFile(path)
+		if err != nil {
+			return nil, err
+		}
+		kind, name, ownerKey := detectOwner(relPath, doc)
+		ctx := &FileProcessingContext{
+			Doc:              doc,
+			Path:             path,
+			RelPath:          filepath.ToSlash(relPath),
+			FileName:         filepath.Base(path),
+			Metadata:         isMetadataObjectDoc(doc),
+			TopLevelMetadata: isTopLevelMetadataRelPath(relPath),
+			Properties:       findProperties(doc),
+			OwnerKind:        kind,
+			OwnerName:        name,
+			OwnerKey:         ownerKey,
+		}
+		targetCache[key] = ctx
+		return ctx, nil
+	}
+
+	type renameCandidate struct {
+		Key      string
+		Decision objectDecision
+	}
+
+	byUUID := make(map[string][]renameCandidate)
+	for _, ctx := range contexts {
+		if ctx == nil || !ctx.Metadata || !isTopLevelMetadataFile(ctx) || ctx.OwnerKey == "" {
+			continue
+		}
+		decision, ok := decisions[ctx.OwnerKey]
+		if !ok || decision.Excluded || decision.Belonging == "Native" {
+			continue
+		}
+		currentUUID := metadataUUIDForConfigDumpEntry(ctx)
+		if currentUUID == "" {
+			continue
+		}
+		canonicalKey, ok := targetKeysByUUID[currentUUID]
+		if !ok || canonicalKey == "" {
+			continue
+		}
+		kind, _ := splitObjectKey(canonicalKey)
+		if kind == "" || kind != ctx.OwnerKind {
+			continue
+		}
+		byUUID[currentUUID] = append(byUUID[currentUUID], renameCandidate{Key: ctx.OwnerKey, Decision: decision})
+	}
+
+	uuids := make([]string, 0, len(byUUID))
+	for uuid := range byUUID {
+		uuids = append(uuids, uuid)
+	}
+	sort.Strings(uuids)
+
+	for _, uuid := range uuids {
+		candidates := byUUID[uuid]
+		if len(candidates) == 0 {
+			continue
+		}
+		canonicalKey := targetKeysByUUID[uuid]
+		if canonicalKey == "" {
+			continue
+		}
+
+		canonicalCtx := findTopLevelMetadataContextByOwnerKeyIndexed(indexes, contexts, canonicalKey)
+		if canonicalCtx == nil {
+			targetCtx, err := loadTargetTopLevelContextByKey(canonicalKey)
+			if err != nil {
+				return nil, nil, err
+			}
+			if targetCtx == nil {
+				continue
+			}
+			canonicalCtx, err = cloneTopLevelContextIntoRoot(root, targetCtx)
+			if err != nil {
+				return nil, nil, err
+			}
+			contexts = append(contexts, canonicalCtx)
+			appendContextToIndexes(indexes, canonicalCtx)
+		}
+
+		canonicalDecision, hasCanonicalDecision := decisions[canonicalKey]
+		if !hasCanonicalDecision || canonicalDecision.Excluded {
+			canonicalDecision = objectDecision{
+				Belonging: "AdoptedStub",
+				Truncated: shouldTruncateAdoptedStub(canonicalCtx),
+			}
+		}
+
+		configurationChanged := false
+		configDumpChanged := false
+		for _, candidate := range candidates {
+			if candidate.Key == canonicalKey {
+				canonicalDecision.SearchResultCode = canonicalDecision.SearchResultCode || candidate.Decision.SearchResultCode
+				canonicalDecision.AdoptedStubExtMetaData = canonicalDecision.AdoptedStubExtMetaData || candidate.Decision.AdoptedStubExtMetaData
+				canonicalDecision.Truncated = canonicalDecision.Truncated || candidate.Decision.Truncated
+				continue
+			}
+
+			decisions[candidate.Key] = objectDecision{Excluded: true}
+			if configurationCtx != nil && configurationCtx.Doc != nil {
+				configurationChanged = removeConfigurationChildObject(configurationCtx.Doc, candidate.Key) || configurationChanged
+			}
+			if configDumpCtx != nil && configDumpCtx.Doc != nil {
+				configDumpChanged = removeConfigDumpInfoMetadataEntries(configDumpCtx.Doc, candidate.Key) || configDumpChanged
+			}
+			log.Printf("xml step: canonicalized target rename %s -> %s uuid=%s", candidate.Key, canonicalKey, uuid)
+		}
+
+		canonicalDecision.Excluded = false
+		if canonicalDecision.Belonging == "" {
+			canonicalDecision.Belonging = "AdoptedStub"
+			canonicalDecision.Truncated = shouldTruncateAdoptedStub(canonicalCtx)
+		}
+		decisions[canonicalKey] = canonicalDecision
+		if configurationCtx != nil && configurationCtx.Doc != nil {
+			configurationChanged = ensureConfigurationChildObject(configurationCtx.Doc, canonicalKey) || configurationChanged
+		}
+		if configDumpCtx != nil && configDumpCtx.Doc != nil {
+			updated, err := ensureConfigDumpInfoMetadataEntry(configDumpCtx.Doc, canonicalKey, canonicalCtx)
+			if err != nil {
+				return nil, nil, err
+			}
+			configDumpChanged = updated || configDumpChanged
+		}
+		if configurationChanged && configurationCtx != nil && configurationCtx.Doc != nil {
+			if err := configurationCtx.Doc.WriteToFile(configurationCtx.Path); err != nil {
+				return nil, nil, fmt.Errorf("ошибка при записи файла %s: %w", configurationCtx.Path, err)
+			}
+		}
+		if configDumpChanged && configDumpCtx != nil && configDumpCtx.Doc != nil {
+			if err := configDumpCtx.Doc.WriteToFile(configDumpCtx.Path); err != nil {
+				return nil, nil, fmt.Errorf("ошибка при записи файла %s: %w", configDumpCtx.Path, err)
+			}
+		}
+	}
+
+	return contexts, indexes, nil
 }
 
 func canPromoteTargetSensitiveObject(
@@ -2365,6 +2610,37 @@ func ensureConfigurationChildObject(doc *etree.Document, metadataName string) bo
 	return true
 }
 
+func removeConfigurationChildObject(doc *etree.Document, metadataName string) bool {
+	target := metadataTargetElement(doc)
+	if target == nil {
+		return false
+	}
+
+	kind, name := splitObjectKey(metadataName)
+	if kind == "" || name == "" {
+		return false
+	}
+
+	tag, ok := configurationChildObjectTag(kind)
+	if !ok {
+		return false
+	}
+
+	childObjects := target.FindElement("./ChildObjects")
+	if childObjects == nil {
+		return false
+	}
+
+	changed := false
+	for _, child := range append([]*etree.Element(nil), childObjects.ChildElements()...) {
+		if strings.EqualFold(localName(child.Tag), tag) && strings.TrimSpace(child.Text()) == name {
+			childObjects.RemoveChild(child)
+			changed = true
+		}
+	}
+	return changed
+}
+
 func findConfigVersionsElement(doc *etree.Document) *etree.Element {
 	if doc == nil || doc.Root() == nil {
 		return nil
@@ -2385,6 +2661,29 @@ func findConfigDumpMetadataEntry(configVersions *etree.Element, metadataName str
 		}
 	}
 	return nil
+}
+
+func removeConfigDumpInfoMetadataEntries(doc *etree.Document, metadataName string) bool {
+	configVersions := findConfigVersionsElement(doc)
+	if configVersions == nil {
+		return false
+	}
+
+	prefix := metadataName + "."
+	changed := false
+	for _, child := range append([]*etree.Element(nil), configVersions.ChildElements()...) {
+		if !strings.EqualFold(localName(child.Tag), "Metadata") {
+			continue
+		}
+		name := strings.TrimSpace(child.SelectAttrValue("name", ""))
+		if name != metadataName && !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		configVersions.RemoveChild(child)
+		changed = true
+	}
+
+	return changed
 }
 
 func topLevelMetadataRelPathForKey(key string) (string, bool) {
