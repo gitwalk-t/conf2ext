@@ -43,6 +43,12 @@ go build ./...
 go test ./...
 ```
 
+### PowerShell gotchas
+
+Если orchestrator пишет вспомогательные PowerShell-скрипты (cleanup/status wrapper), избегай имен переменных, которые конфликтуют со встроенными переменными PowerShell. Минимально важное:
+- не используй `$PID` как имя переменной: это встроенная read-only переменная
+- для чтения PID из файла используй `$pidVal` / `$wrapperPid` / `$runPid`
+
 3. Запустить новый прогон только hidden wrapper-процессом:
 
 ```powershell
@@ -80,6 +86,17 @@ $process.Id | Set-Content -Encoding UTF8 $pidFile
 - PID wrapper-процесса
 - stdout log
 - stderr log
+
+4.5. Сразу после старта wrapper завести heartbeat-monitoring раз в 10 минут:
+
+- Heartbeat должен быть создан в этом же треде
+- Для проверки статуса использовать `.codex/skills/check-run-status.md`
+- Не перезапускать прогон и не завершать процессы
+- В ответе пользователю явно указать, что heartbeat создан, и его период (10 минут)
+
+4.6. Перед тем как “отпустить” запуск, убедиться, что heartbeat действительно заведен:
+
+- если heartbeat отсутствует, создать его сразу, не дожидаясь отдельного напоминания
 
 5. Для heartbeat/monitoring всегда использовать:
 
