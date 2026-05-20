@@ -2394,27 +2394,29 @@ func mergeDefinedTypeTargetComposition(
 		currentContainer = properties.CreateElement(targetContainer.Tag)
 	}
 
-	targetEntries := collectMetadataValueEntries(targetContainer)
-	checkEntries := make([]metadataValueEntry, 0, len(targetEntries))
-	targetValues := make(map[string]struct{}, len(targetEntries))
-	for _, entry := range targetEntries {
-		allowed, err := allowTargetValue(entry.Value)
-		if err != nil {
-			return false, err
+	checkEntries := make([]*etree.Element, 0, len(targetContainer.ChildElements()))
+	targetValues := make(map[string]struct{})
+	for _, child := range targetContainer.ChildElements() {
+		if localName(child.Tag) == "Type" {
+			value := strings.TrimSpace(child.Text())
+			if value == "" {
+				continue
+			}
+			allowed, err := allowTargetValue(value)
+			if err != nil {
+				return false, err
+			}
+			if !allowed {
+				continue
+			}
+			targetValues[value] = struct{}{}
 		}
-		if !allowed {
-			continue
-		}
-		if _, exists := targetValues[entry.Value]; exists {
-			continue
-		}
-		targetValues[entry.Value] = struct{}{}
-		checkEntries = append(checkEntries, entry)
+		checkEntries = append(checkEntries, child.Copy())
 	}
 
 	extendEntries := make([]metadataValueEntry, 0)
 	seenExtendValues := make(map[string]struct{})
-	for _, entry := range collectMetadataValueEntries(currentContainer) {
+	for _, entry := range collectDefinedTypeTypeEntries(currentContainer) {
 		if !shouldKeepDefinedTypeExtendValue(entry.Value, decisions) {
 			continue
 		}
@@ -2432,13 +2434,13 @@ func mergeDefinedTypeTargetComposition(
 	return true, nil
 }
 
-func collectMetadataValueEntries(container *etree.Element) []metadataValueEntry {
+func collectDefinedTypeTypeEntries(container *etree.Element) []metadataValueEntry {
 	if container == nil {
 		return nil
 	}
 
-	appendEntry := func(result []metadataValueEntry, child *etree.Element) []metadataValueEntry {
-		if child == nil {
+	appendTypeEntry := func(result []metadataValueEntry, child *etree.Element) []metadataValueEntry {
+		if child == nil || localName(child.Tag) != "Type" {
 			return result
 		}
 		value := strings.TrimSpace(child.Text())
@@ -2456,10 +2458,10 @@ func collectMetadataValueEntries(container *etree.Element) []metadataValueEntry 
 		switch localName(child.Tag) {
 		case "CheckValue", "ExtendValue":
 			for _, nested := range child.ChildElements() {
-				result = appendEntry(result, nested)
+				result = appendTypeEntry(result, nested)
 			}
 		default:
-			result = appendEntry(result, child)
+			result = appendTypeEntry(result, child)
 		}
 	}
 	return result
@@ -2562,7 +2564,7 @@ func shouldKeepDefinedTypeExtendValue(value string, decisions map[string]objectD
 	return true
 }
 
-func rebuildDefinedTypeAsExtendedProperty(container *etree.Element, checkEntries, extendEntries []metadataValueEntry) {
+func rebuildDefinedTypeAsExtendedProperty(container *etree.Element, checkEntries []*etree.Element, extendEntries []metadataValueEntry) {
 	if container == nil {
 		return
 	}
@@ -2577,8 +2579,8 @@ func rebuildDefinedTypeAsExtendedProperty(container *etree.Element, checkEntries
 	checkValue := container.CreateElement("xr:CheckValue")
 	checkValue.CreateAttr("xsi:type", "v8:TypeDescription")
 	for _, entry := range checkEntries {
-		if entry.Element != nil {
-			checkValue.AddChild(entry.Element.Copy())
+		if entry != nil {
+			checkValue.AddChild(entry.Copy())
 		}
 	}
 

@@ -3145,6 +3145,10 @@ func TestMergeDefinedTypeTargetCompositionUsesExtendedProperty(t *testing.T) {
       <Type>
         <v8:Type xmlns:v8="http://v8.1c.ru/8.1/data/core">cfg:CatalogRef.A</v8:Type>
         <v8:Type xmlns:v8="http://v8.1c.ru/8.1/data/core">cfg:CatalogRef.B</v8:Type>
+        <StringQualifiers>
+          <Length>20</Length>
+          <AllowedLength>Variable</AllowedLength>
+        </StringQualifiers>
       </Type>
     </Properties>
   </DefinedType>
@@ -3192,18 +3196,32 @@ func TestMergeDefinedTypeTargetCompositionUsesExtendedProperty(t *testing.T) {
 
 	checkValues := []string{}
 	for _, el := range checkValue.ChildElements() {
-		checkValues = append(checkValues, strings.TrimSpace(el.Text()))
+		if localName(el.Tag) == "Type" {
+			checkValues = append(checkValues, strings.TrimSpace(el.Text()))
+		}
 	}
 	if fmt.Sprint(checkValues) != fmt.Sprint([]string{"cfg:CatalogRef.A", "cfg:CatalogRef.B"}) {
 		t.Fatalf("unexpected CheckValue composition: %#v", checkValues)
 	}
+	stringQualifiers := checkValue.FindElement("./*[local-name()='StringQualifiers']")
+	if stringQualifiers == nil {
+		t.Fatalf("expected target qualifier block in CheckValue")
+	}
+	if got := strings.TrimSpace(textOf(stringQualifiers, "Length")); got != "20" {
+		t.Fatalf("unexpected StringQualifiers/Length in CheckValue: %q", got)
+	}
 
 	extendValues := []string{}
 	for _, el := range extendValue.ChildElements() {
-		extendValues = append(extendValues, strings.TrimSpace(el.Text()))
+		if localName(el.Tag) == "Type" {
+			extendValues = append(extendValues, strings.TrimSpace(el.Text()))
+		}
 	}
 	if fmt.Sprint(extendValues) != fmt.Sprint([]string{"d4p1:CatalogRef.C", "cfg:CatalogRef.D"}) {
 		t.Fatalf("unexpected ExtendValue composition: %#v", extendValues)
+	}
+	if extendValue.FindElement("./*[local-name()='StringQualifiers']") != nil {
+		t.Fatalf("did not expect qualifier block in ExtendValue")
 	}
 	for _, el := range extendValue.ChildElements() {
 		if strings.TrimSpace(el.Text()) == "d4p1:CatalogRef.C" && el.SelectAttrValue("xmlns:d4p1", "") == "" {
