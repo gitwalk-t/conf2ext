@@ -1,6 +1,7 @@
 package xmlutils
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -3236,6 +3237,367 @@ func TestCanonicalizeTargetRenamedAdoptedObjectsPrefersTargetName(t *testing.T) 
 
 	if ctx := findTopLevelMetadataContextByOwnerKeyIndexed(indexes, contexts, "Catalog.ИсточникУстаревший"); ctx == nil {
 		t.Fatalf("expected canonical target context to be present")
+	}
+}
+
+func TestCanonicalizeTargetRenamedAdoptedObjectsSkipsSameTargetKey(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	targetRoot := t.TempDir()
+	writeFile := func(base, relPath, content string) {
+		t.Helper()
+		path := filepath.Join(base, relPath)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	writeFile(root, "Configuration.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Configuration>
+    <ChildObjects>
+      <Catalog>Источник</Catalog>
+    </ChildObjects>
+  </Configuration>
+</MetaDataObject>`)
+	writeFile(root, "ConfigDumpInfo.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo">
+  <ConfigVersions>
+    <Metadata name="Catalog.Источник" id="11111111-1111-1111-1111-111111111111"/>
+  </ConfigVersions>
+</ConfigDumpInfo>`)
+	writeFile(root, filepath.Join("Catalogs", "Источник.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog uuid="11111111-1111-1111-1111-111111111111">
+    <Properties><Name>Источник</Name></Properties>
+  </Catalog>
+</MetaDataObject>`)
+
+	writeFile(targetRoot, "ConfigDumpInfo.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo">
+  <ConfigVersions>
+    <Metadata name="Catalog.Источник" id="11111111-1111-1111-1111-111111111111"/>
+  </ConfigVersions>
+</ConfigDumpInfo>`)
+
+	contexts, err := loadXMLContexts(root)
+	if err != nil {
+		t.Fatalf("load contexts: %v", err)
+	}
+	indexes := buildContextIndexes(contexts)
+	decisions := map[string]objectDecision{
+		"Configuration":    {Belonging: "AdoptedStub"},
+		"Catalog.Источник": {Belonging: "AdoptedStub"},
+	}
+
+	contexts, indexes, err = canonicalizeTargetRenamedAdoptedObjects(&config.Configuration{
+		Target: config.Target{XMLDump: targetRoot},
+	}, root, contexts, indexes, decisions)
+	if err != nil {
+		t.Fatalf("canonicalize target renamed adopted objects: %v", err)
+	}
+
+	if decision := decisions["Catalog.Источник"]; decision.Excluded || decision.Belonging != "AdoptedStub" {
+		t.Fatalf("expected source object to stay unchanged, got %#v", decision)
+	}
+	if ctx := findTopLevelMetadataContextByOwnerKeyIndexed(indexes, contexts, "Catalog.Источник"); ctx == nil {
+		t.Fatalf("expected original context to stay present")
+	}
+
+	configurationDoc := etree.NewDocument()
+	if err := configurationDoc.ReadFromFile(filepath.Join(root, "Configuration.xml")); err != nil {
+		t.Fatalf("read configuration xml: %v", err)
+	}
+	if !hasConfigurationChildObject(configurationDoc, "Catalog", "Источник") {
+		t.Fatalf("expected configuration child object to stay unchanged")
+	}
+	configDumpDoc := etree.NewDocument()
+	if err := configDumpDoc.ReadFromFile(filepath.Join(root, "ConfigDumpInfo.xml")); err != nil {
+		t.Fatalf("read config dump info: %v", err)
+	}
+	if !hasMetadataName(configDumpDoc, "Catalog.Источник") {
+		t.Fatalf("expected config dump entry to stay unchanged")
+	}
+}
+
+func TestCanonicalizeTargetRenamedAdoptedObjectsUsesExistingCanonicalContext(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	targetRoot := t.TempDir()
+	writeFile := func(base, relPath, content string) {
+		t.Helper()
+		path := filepath.Join(base, relPath)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	writeFile(root, "Configuration.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Configuration>
+    <ChildObjects>
+      <Catalog>Источник</Catalog>
+      <Catalog>ИсточникУстаревший</Catalog>
+    </ChildObjects>
+  </Configuration>
+</MetaDataObject>`)
+	writeFile(root, "ConfigDumpInfo.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo">
+  <ConfigVersions>
+    <Metadata name="Catalog.Источник" id="11111111-1111-1111-1111-111111111111">
+      <Metadata name="Catalog.Источник.Attribute.Код" id="22222222-2222-2222-2222-222222222222"/>
+    </Metadata>
+    <Metadata name="Catalog.ИсточникУстаревший" id="11111111-1111-1111-1111-111111111111"/>
+  </ConfigVersions>
+</ConfigDumpInfo>`)
+	writeFile(root, filepath.Join("Catalogs", "Источник.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog uuid="11111111-1111-1111-1111-111111111111">
+    <Properties><Name>Источник</Name></Properties>
+  </Catalog>
+</MetaDataObject>`)
+	writeFile(root, filepath.Join("Catalogs", "ИсточникУстаревший.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog uuid="11111111-1111-1111-1111-111111111111">
+    <Properties><Name>ИсточникУстаревший</Name></Properties>
+  </Catalog>
+</MetaDataObject>`)
+
+	writeFile(targetRoot, "ConfigDumpInfo.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo">
+  <ConfigVersions>
+    <Metadata name="Catalog.ИсточникУстаревший" id="11111111-1111-1111-1111-111111111111"/>
+  </ConfigVersions>
+</ConfigDumpInfo>`)
+
+	contexts, err := loadXMLContexts(root)
+	if err != nil {
+		t.Fatalf("load contexts: %v", err)
+	}
+	indexes := buildContextIndexes(contexts)
+	decisions := map[string]objectDecision{
+		"Configuration":    {Belonging: "AdoptedStub"},
+		"Catalog.Источник": {Belonging: "AdoptedStub", SearchResultCode: true},
+	}
+
+	_, _, err = canonicalizeTargetRenamedAdoptedObjects(&config.Configuration{
+		Target: config.Target{XMLDump: targetRoot},
+	}, root, contexts, indexes, decisions)
+	if err != nil {
+		t.Fatalf("canonicalize target renamed adopted objects: %v", err)
+	}
+
+	if decision := decisions["Catalog.Источник"]; !decision.Excluded {
+		t.Fatalf("expected stale source key to be excluded, got %#v", decision)
+	}
+	if decision := decisions["Catalog.ИсточникУстаревший"]; decision.Excluded || decision.Belonging != "AdoptedStub" || !decision.SearchResultCode {
+		t.Fatalf("expected canonical decision to reuse existing context and carry flags, got %#v", decision)
+	}
+}
+
+func TestCanonicalizeTargetRenamedAdoptedObjectsBatchRemovesMultipleStaleEntries(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	targetRoot := t.TempDir()
+	writeFile := func(base, relPath, content string) {
+		t.Helper()
+		path := filepath.Join(base, relPath)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	writeFile(root, "Configuration.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Configuration>
+    <ChildObjects>
+      <Catalog>Источник1</Catalog>
+      <Catalog>Источник2</Catalog>
+    </ChildObjects>
+  </Configuration>
+</MetaDataObject>`)
+	writeFile(root, "ConfigDumpInfo.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo">
+  <ConfigVersions>
+    <Metadata name="Catalog.Источник1" id="11111111-1111-1111-1111-111111111111">
+      <Metadata name="Catalog.Источник1.Attribute.Код" id="21111111-1111-1111-1111-111111111111"/>
+    </Metadata>
+    <Metadata name="Catalog.Источник2" id="33333333-3333-3333-3333-333333333333">
+      <Metadata name="Catalog.Источник2.Attribute.Код" id="43333333-3333-3333-3333-333333333333"/>
+    </Metadata>
+  </ConfigVersions>
+</ConfigDumpInfo>`)
+	writeFile(root, filepath.Join("Catalogs", "Источник1.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog uuid="11111111-1111-1111-1111-111111111111">
+    <Properties><Name>Источник1</Name></Properties>
+  </Catalog>
+</MetaDataObject>`)
+	writeFile(root, filepath.Join("Catalogs", "Источник2.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog uuid="33333333-3333-3333-3333-333333333333">
+    <Properties><Name>Источник2</Name></Properties>
+  </Catalog>
+</MetaDataObject>`)
+
+	writeFile(targetRoot, "ConfigDumpInfo.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo">
+  <ConfigVersions>
+    <Metadata name="Catalog.Канон1" id="11111111-1111-1111-1111-111111111111"/>
+    <Metadata name="Catalog.Канон2" id="33333333-3333-3333-3333-333333333333"/>
+  </ConfigVersions>
+</ConfigDumpInfo>`)
+	writeFile(targetRoot, filepath.Join("Catalogs", "Канон1.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog uuid="11111111-1111-1111-1111-111111111111">
+    <Properties><Name>Канон1</Name></Properties>
+  </Catalog>
+</MetaDataObject>`)
+	writeFile(targetRoot, filepath.Join("Catalogs", "Канон2.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog uuid="33333333-3333-3333-3333-333333333333">
+    <Properties><Name>Канон2</Name></Properties>
+  </Catalog>
+</MetaDataObject>`)
+
+	contexts, err := loadXMLContexts(root)
+	if err != nil {
+		t.Fatalf("load contexts: %v", err)
+	}
+	indexes := buildContextIndexes(contexts)
+	decisions := map[string]objectDecision{
+		"Configuration":     {Belonging: "AdoptedStub"},
+		"Catalog.Источник1": {Belonging: "AdoptedStub"},
+		"Catalog.Источник2": {Belonging: "AdoptedStub"},
+	}
+
+	_, _, err = canonicalizeTargetRenamedAdoptedObjects(&config.Configuration{
+		Target: config.Target{XMLDump: targetRoot},
+	}, root, contexts, indexes, decisions)
+	if err != nil {
+		t.Fatalf("canonicalize target renamed adopted objects: %v", err)
+	}
+
+	for _, staleKey := range []string{"Catalog.Источник1", "Catalog.Источник2"} {
+		if decision := decisions[staleKey]; !decision.Excluded {
+			t.Fatalf("expected stale key %s to be excluded, got %#v", staleKey, decision)
+		}
+	}
+	for _, canonicalKey := range []string{"Catalog.Канон1", "Catalog.Канон2"} {
+		if decision := decisions[canonicalKey]; decision.Excluded || decision.Belonging != "AdoptedStub" {
+			t.Fatalf("expected canonical key %s to stay adopted, got %#v", canonicalKey, decision)
+		}
+	}
+
+	configurationDoc := etree.NewDocument()
+	if err := configurationDoc.ReadFromFile(filepath.Join(root, "Configuration.xml")); err != nil {
+		t.Fatalf("read configuration xml: %v", err)
+	}
+	if hasConfigurationChildObject(configurationDoc, "Catalog", "Источник1") || hasConfigurationChildObject(configurationDoc, "Catalog", "Источник2") {
+		t.Fatalf("did not expect stale child objects after canonicalization")
+	}
+	if !hasConfigurationChildObject(configurationDoc, "Catalog", "Канон1") || !hasConfigurationChildObject(configurationDoc, "Catalog", "Канон2") {
+		t.Fatalf("expected canonical child objects after canonicalization")
+	}
+
+	configDumpDoc := etree.NewDocument()
+	if err := configDumpDoc.ReadFromFile(filepath.Join(root, "ConfigDumpInfo.xml")); err != nil {
+		t.Fatalf("read config dump info: %v", err)
+	}
+	for _, staleName := range []string{
+		"Catalog.Источник1",
+		"Catalog.Источник1.Attribute.Код",
+		"Catalog.Источник2",
+		"Catalog.Источник2.Attribute.Код",
+	} {
+		if hasMetadataName(configDumpDoc, staleName) {
+			t.Fatalf("did not expect stale config dump entry %s", staleName)
+		}
+	}
+	for _, canonicalName := range []string{"Catalog.Канон1", "Catalog.Канон2"} {
+		if !hasMetadataName(configDumpDoc, canonicalName) {
+			t.Fatalf("expected canonical config dump entry %s", canonicalName)
+		}
+	}
+}
+
+func TestCanonicalizeTargetRenamedAdoptedObjectsSkipsNativeAndExcluded(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		name     string
+		decision objectDecision
+	}
+
+	for _, tc := range []testCase{
+		{name: "Native", decision: objectDecision{Belonging: "Native"}},
+		{name: "Excluded", decision: objectDecision{Excluded: true}},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			targetRoot := t.TempDir()
+			writeFile := func(base, relPath, content string) {
+				t.Helper()
+				path := filepath.Join(base, relPath)
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+				}
+				if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+					t.Fatalf("write %s: %v", path, err)
+				}
+			}
+
+			writeFile(root, "Configuration.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Configuration><ChildObjects><Catalog>Источник</Catalog></ChildObjects></Configuration>
+</MetaDataObject>`)
+			writeFile(root, "ConfigDumpInfo.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo"><ConfigVersions><Metadata name="Catalog.Источник" id="11111111-1111-1111-1111-111111111111"/></ConfigVersions></ConfigDumpInfo>`)
+			writeFile(root, filepath.Join("Catalogs", "Источник.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><Catalog uuid="11111111-1111-1111-1111-111111111111"><Properties><Name>Источник</Name></Properties></Catalog></MetaDataObject>`)
+
+			writeFile(targetRoot, "ConfigDumpInfo.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo"><ConfigVersions><Metadata name="Catalog.Канон" id="11111111-1111-1111-1111-111111111111"/></ConfigVersions></ConfigDumpInfo>`)
+			writeFile(targetRoot, filepath.Join("Catalogs", "Канон.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><Catalog uuid="11111111-1111-1111-1111-111111111111"><Properties><Name>Канон</Name></Properties></Catalog></MetaDataObject>`)
+
+			contexts, err := loadXMLContexts(root)
+			if err != nil {
+				t.Fatalf("load contexts: %v", err)
+			}
+			indexes := buildContextIndexes(contexts)
+			decisions := map[string]objectDecision{
+				"Configuration":    {Belonging: "AdoptedStub"},
+				"Catalog.Источник": tc.decision,
+			}
+
+			_, _, err = canonicalizeTargetRenamedAdoptedObjects(&config.Configuration{
+				Target: config.Target{XMLDump: targetRoot},
+			}, root, contexts, indexes, decisions)
+			if err != nil {
+				t.Fatalf("canonicalize target renamed adopted objects: %v", err)
+			}
+
+			if _, exists := decisions["Catalog.Канон"]; exists {
+				t.Fatalf("did not expect canonical target decision for skipped %s object", tc.name)
+			}
+			if _, err := os.Stat(filepath.Join(root, "Catalogs", "Канон.xml")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("did not expect canonical xml import for skipped %s object, err=%v", tc.name, err)
+			}
+		})
 	}
 }
 

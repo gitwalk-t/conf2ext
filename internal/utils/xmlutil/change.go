@@ -1691,11 +1691,52 @@ func canonicalizeTargetRenamedAdoptedObjects(
 		indexes = buildContextIndexes(contexts)
 	}
 
+	type renameCandidate struct {
+		Key      string
+		UUID     string
+		Decision objectDecision
+	}
+
+	adoptedCandidates := make([]renameCandidate, 0)
+	adoptedUUIDs := make(map[string]struct{})
+	for _, ctx := range contexts {
+		if ctx == nil || !ctx.Metadata || !isTopLevelMetadataFile(ctx) || ctx.OwnerKey == "" {
+			continue
+		}
+		decision, ok := decisions[ctx.OwnerKey]
+		if !ok || decision.Excluded || decision.Belonging == "Native" {
+			continue
+		}
+		currentUUID := metadataUUIDForConfigDumpEntry(ctx)
+		if currentUUID == "" {
+			continue
+		}
+		adoptedCandidates = append(adoptedCandidates, renameCandidate{
+			Key:      ctx.OwnerKey,
+			UUID:     currentUUID,
+			Decision: decision,
+		})
+		adoptedUUIDs[currentUUID] = struct{}{}
+	}
+	if len(adoptedCandidates) == 0 {
+		return contexts, indexes, nil
+	}
+
 	targetKeysByUUID, err := collectTargetTopLevelMetadataKeysByUUID(cfg.Target.XMLDump)
 	if err != nil {
 		return nil, nil, err
 	}
 	if len(targetKeysByUUID) == 0 {
+		return contexts, indexes, nil
+	}
+	hasUUIDIntersection := false
+	for uuid := range adoptedUUIDs {
+		if _, ok := targetKeysByUUID[uuid]; ok {
+			hasUUIDIntersection = true
+			break
+		}
+	}
+	if !hasUUIDIntersection {
 		return contexts, indexes, nil
 	}
 
@@ -1744,33 +1785,21 @@ func canonicalizeTargetRenamedAdoptedObjects(
 		return ctx, nil
 	}
 
-	type renameCandidate struct {
-		Key      string
-		Decision objectDecision
-	}
-
 	byUUID := make(map[string][]renameCandidate)
-	for _, ctx := range contexts {
-		if ctx == nil || !ctx.Metadata || !isTopLevelMetadataFile(ctx) || ctx.OwnerKey == "" {
-			continue
-		}
-		decision, ok := decisions[ctx.OwnerKey]
-		if !ok || decision.Excluded || decision.Belonging == "Native" {
-			continue
-		}
-		currentUUID := metadataUUIDForConfigDumpEntry(ctx)
-		if currentUUID == "" {
-			continue
-		}
-		canonicalKey, ok := targetKeysByUUID[currentUUID]
-		if !ok || canonicalKey == "" {
+	for _, candidate := range adoptedCandidates {
+		canonicalKey, ok := targetKeysByUUID[candidate.UUID]
+		if !ok || canonicalKey == "" || canonicalKey == candidate.Key {
 			continue
 		}
 		kind, _ := splitObjectKey(canonicalKey)
-		if kind == "" || kind != ctx.OwnerKind {
+		currentKind, _ := splitObjectKey(candidate.Key)
+		if kind == "" || currentKind == "" || kind != currentKind {
 			continue
 		}
-		byUUID[currentUUID] = append(byUUID[currentUUID], renameCandidate{Key: ctx.OwnerKey, Decision: decision})
+		byUUID[candidate.UUID] = append(byUUID[candidate.UUID], candidate)
+	}
+	if len(byUUID) == 0 {
+		return contexts, indexes, nil
 	}
 
 	uuids := make([]string, 0, len(byUUID))
@@ -1779,6 +1808,9 @@ func canonicalizeTargetRenamedAdoptedObjects(
 	}
 	sort.Strings(uuids)
 
+	configurationChanged := false
+	configDumpChanged := false
+	staleKeys := make(map[string]struct{})
 	for _, uuid := range uuids {
 		candidates := byUUID[uuid]
 		if len(candidates) == 0 {
@@ -1814,23 +1846,12 @@ func canonicalizeTargetRenamedAdoptedObjects(
 			}
 		}
 
-		configurationChanged := false
-		configDumpChanged := false
 		for _, candidate := range candidates {
-			if candidate.Key == canonicalKey {
-				canonicalDecision.SearchResultCode = canonicalDecision.SearchResultCode || candidate.Decision.SearchResultCode
-				canonicalDecision.AdoptedStubExtMetaData = canonicalDecision.AdoptedStubExtMetaData || candidate.Decision.AdoptedStubExtMetaData
-				canonicalDecision.Truncated = canonicalDecision.Truncated || candidate.Decision.Truncated
-				continue
-			}
-
 			decisions[candidate.Key] = objectDecision{Excluded: true}
-			if configurationCtx != nil && configurationCtx.Doc != nil {
-				configurationChanged = removeConfigurationChildObject(configurationCtx.Doc, candidate.Key) || configurationChanged
-			}
-			if configDumpCtx != nil && configDumpCtx.Doc != nil {
-				configDumpChanged = removeConfigDumpInfoMetadataEntries(configDumpCtx.Doc, candidate.Key) || configDumpChanged
-			}
+			staleKeys[candidate.Key] = struct{}{}
+			canonicalDecision.SearchResultCode = canonicalDecision.SearchResultCode || candidate.Decision.SearchResultCode
+			canonicalDecision.AdoptedStubExtMetaData = canonicalDecision.AdoptedStubExtMetaData || candidate.Decision.AdoptedStubExtMetaData
+			canonicalDecision.Truncated = canonicalDecision.Truncated || candidate.Decision.Truncated
 			log.Printf("xml step: canonicalized target rename %s -> %s uuid=%s", candidate.Key, canonicalKey, uuid)
 		}
 
@@ -1850,15 +1871,25 @@ func canonicalizeTargetRenamedAdoptedObjects(
 			}
 			configDumpChanged = updated || configDumpChanged
 		}
-		if configurationChanged && configurationCtx != nil && configurationCtx.Doc != nil {
-			if err := configurationCtx.Doc.WriteToFile(configurationCtx.Path); err != nil {
-				return nil, nil, fmt.Errorf("ошибка при записи файла %s: %w", configurationCtx.Path, err)
-			}
+	}
+
+	if len(staleKeys) > 0 {
+		if configurationCtx != nil && configurationCtx.Doc != nil {
+			configurationChanged = removeConfigurationChildObjects(configurationCtx.Doc, staleKeys) || configurationChanged
 		}
-		if configDumpChanged && configDumpCtx != nil && configDumpCtx.Doc != nil {
-			if err := configDumpCtx.Doc.WriteToFile(configDumpCtx.Path); err != nil {
-				return nil, nil, fmt.Errorf("ошибка при записи файла %s: %w", configDumpCtx.Path, err)
-			}
+		if configDumpCtx != nil && configDumpCtx.Doc != nil {
+			configDumpChanged = removeConfigDumpInfoMetadataEntriesBatch(configDumpCtx.Doc, staleKeys) || configDumpChanged
+		}
+	}
+
+	if configurationChanged && configurationCtx != nil && configurationCtx.Doc != nil {
+		if err := configurationCtx.Doc.WriteToFile(configurationCtx.Path); err != nil {
+			return nil, nil, fmt.Errorf("ошибка при записи файла %s: %w", configurationCtx.Path, err)
+		}
+	}
+	if configDumpChanged && configDumpCtx != nil && configDumpCtx.Doc != nil {
+		if err := configDumpCtx.Doc.WriteToFile(configDumpCtx.Path); err != nil {
+			return nil, nil, fmt.Errorf("ошибка при записи файла %s: %w", configDumpCtx.Path, err)
 		}
 	}
 
@@ -2611,18 +2642,38 @@ func ensureConfigurationChildObject(doc *etree.Document, metadataName string) bo
 }
 
 func removeConfigurationChildObject(doc *etree.Document, metadataName string) bool {
+	if metadataName == "" {
+		return false
+	}
+	names := map[string]struct{}{metadataName: {}}
+	return removeConfigurationChildObjects(doc, names)
+}
+
+func removeConfigurationChildObjects(doc *etree.Document, metadataNames map[string]struct{}) bool {
+	if len(metadataNames) == 0 {
+		return false
+	}
 	target := metadataTargetElement(doc)
 	if target == nil {
 		return false
 	}
 
-	kind, name := splitObjectKey(metadataName)
-	if kind == "" || name == "" {
-		return false
+	namesByTag := make(map[string]map[string]struct{})
+	for metadataName := range metadataNames {
+		kind, name := splitObjectKey(metadataName)
+		if kind == "" || name == "" {
+			continue
+		}
+		tag, ok := configurationChildObjectTag(kind)
+		if !ok {
+			continue
+		}
+		if namesByTag[tag] == nil {
+			namesByTag[tag] = make(map[string]struct{})
+		}
+		namesByTag[tag][name] = struct{}{}
 	}
-
-	tag, ok := configurationChildObjectTag(kind)
-	if !ok {
+	if len(namesByTag) == 0 {
 		return false
 	}
 
@@ -2633,10 +2684,16 @@ func removeConfigurationChildObject(doc *etree.Document, metadataName string) bo
 
 	changed := false
 	for _, child := range append([]*etree.Element(nil), childObjects.ChildElements()...) {
-		if strings.EqualFold(localName(child.Tag), tag) && strings.TrimSpace(child.Text()) == name {
-			childObjects.RemoveChild(child)
-			changed = true
+		tag := localName(child.Tag)
+		namesForTag, ok := namesByTag[tag]
+		if !ok {
+			continue
 		}
+		if _, ok := namesForTag[strings.TrimSpace(child.Text())]; !ok {
+			continue
+		}
+		childObjects.RemoveChild(child)
+		changed = true
 	}
 	return changed
 }
@@ -2664,19 +2721,40 @@ func findConfigDumpMetadataEntry(configVersions *etree.Element, metadataName str
 }
 
 func removeConfigDumpInfoMetadataEntries(doc *etree.Document, metadataName string) bool {
+	if metadataName == "" {
+		return false
+	}
+	names := map[string]struct{}{metadataName: {}}
+	return removeConfigDumpInfoMetadataEntriesBatch(doc, names)
+}
+
+func removeConfigDumpInfoMetadataEntriesBatch(doc *etree.Document, metadataNames map[string]struct{}) bool {
+	if len(metadataNames) == 0 {
+		return false
+	}
 	configVersions := findConfigVersionsElement(doc)
 	if configVersions == nil {
 		return false
 	}
 
-	prefix := metadataName + "."
+	prefixes := make([]string, 0, len(metadataNames))
+	for metadataName := range metadataNames {
+		if metadataName == "" {
+			continue
+		}
+		prefixes = append(prefixes, metadataName+".")
+	}
+	if len(prefixes) == 0 {
+		return false
+	}
+
 	changed := false
 	for _, child := range append([]*etree.Element(nil), configVersions.ChildElements()...) {
 		if !strings.EqualFold(localName(child.Tag), "Metadata") {
 			continue
 		}
 		name := strings.TrimSpace(child.SelectAttrValue("name", ""))
-		if name != metadataName && !strings.HasPrefix(name, prefix) {
+		if _, ok := metadataNames[name]; !ok && !hasAnyStringPrefix(name, prefixes) {
 			continue
 		}
 		configVersions.RemoveChild(child)
@@ -2684,6 +2762,15 @@ func removeConfigDumpInfoMetadataEntries(doc *etree.Document, metadataName strin
 	}
 
 	return changed
+}
+
+func hasAnyStringPrefix(value string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(value, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func topLevelMetadataRelPathForKey(key string) (string, bool) {
