@@ -11,13 +11,6 @@
 
 ## Обязательный контекст
 
-Перед запуском прочитай:
-- `README.md`
-- `AGENTS.md`
-- `.codex/context.md`
-- `.codex/handoff.md`
-- `docs/debugging.md`
-
 Активный конфиг по умолчанию:
 
 `configs/config.json`

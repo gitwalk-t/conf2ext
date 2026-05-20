@@ -33,6 +33,18 @@
     "Catalog.СтатьиДвиженияДенежныхСредств": {
       "base_object_id": "c18aed98-9a38-4a4f-bee4-1b6977344491"
     },
+    "EventSubscription.ПроверитьДатуЗапретаИзмененияПередЗаписьюДокумента": {
+      "base_object_id": "f02b93b8-84bc-4cf0-9a42-e06d2b32caf8"
+    },
+    "EventSubscription.ПроверитьДатуЗапретаИзмененияПередУдалением": {
+      "base_object_id": "dfb9772e-fdea-4ff7-b77d-244d0d5759a8"
+    },
+    "EventSubscription.УстановитьПометкуУдаленияПрисоединенныхФайлов": {
+      "base_object_id": "1d7cbf68-f29d-4c22-abda-b1874e4a6c29"
+    },
+    "EventSubscription.УстановитьПрефиксИнформационнойБазыКодуСправочника": {
+      "base_object_id": "6b30e842-f4a1-41b0-ae0e-28fdf28fc41c"
+    },
     "FunctionalOption.ИспользоватьДатыЗапретаИзменения": {
       "base_object_id": "d7dcd391-3a0e-4aa9-9b53-467a1de67593"
     },
@@ -47,6 +59,9 @@
     },
     "StyleItem.ТекстИнформационнойНадписи": {
       "base_object_id": "2f371ed4-ea68-4329-9107-e6ae2fff85e4"
+    },
+    "StyleItem.ФонУправляющегоПоля": {
+      "base_object_id": "da164c9a-4836-4c07-ace9-1c2e2382eceb"
     },
     "StyleItem.ЦветТекстаНевыбраннойКартинки": {
       "base_object_id": "bcf1a1a2-5826-4ef2-beac-2b0fdb9c3a2c"
