@@ -251,6 +251,11 @@ func buildBlock(root, path string) (Block, bool, error) {
 	}
 
 	content := normalizeContent(string(contentBytes))
+	if strings.TrimSpace(content) == "" {
+		log.Printf("warning: code overlay: пропущен пустой модуль %s", normalizedRelPath)
+		return Block{}, false, nil
+	}
+
 	return Block{
 		ID:      makeBlockID(objectKey, kind),
 		Object:  objectKey,

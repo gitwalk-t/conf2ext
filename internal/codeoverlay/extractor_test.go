@@ -161,6 +161,7 @@ func TestExtractFiltersByTopLevelObjects(t *testing.T) {
 	writeFile(t, root, "Catalogs/ТестКаталог/Ext/ObjectModule.bsl", "Процедура Объект()\nКонецПроцедуры\n")
 	writeFile(t, root, "Catalogs/ТестКаталог/Forms/ФормаСписка/Ext/Form/Module.bsl", "Процедура Форма()\nКонецПроцедуры\n")
 	writeFile(t, root, "CommonModules/ЛишнийМодуль/Ext/Module.bsl", "Процедура Лишний()\nКонецПроцедуры\n")
+	writeFile(t, root, "Catalogs/ТестКаталог/Ext/ManagerModule.bsl", " \r\n\t\r\n")
 
 	artifact, err := Extract(root, map[string]struct{}{
 		"Catalog.ТестКаталог": {},
@@ -180,6 +181,22 @@ func TestExtractFiltersByTopLevelObjects(t *testing.T) {
 	}
 	if !reflect.DeepEqual(gotIDs, wantIDs) {
 		t.Fatalf("unexpected filtered block ids:\n got %#v\nwant %#v", gotIDs, wantIDs)
+	}
+}
+
+func TestExtractSkipsEmptyModuleContent(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "Catalogs/ПустойКаталог/Ext/ObjectModule.bsl", "\r\n \t \r\n")
+
+	artifact, err := Extract(root, map[string]struct{}{
+		"Catalog.ПустойКаталог": {},
+	})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+
+	if len(artifact.Blocks) != 0 {
+		t.Fatalf("expected empty module to be skipped, got %#v", artifact.Blocks)
 	}
 }
 
