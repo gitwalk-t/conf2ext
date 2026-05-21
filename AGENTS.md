@@ -1,42 +1,72 @@
 # AGENTS.md
 
-Сначала прочитай: [README.md](D:\Codex\conf2ext_main_merge\README.md), [.codex/context.md](D:\Codex\conf2ext_main_merge\.codex\context.md), [.codex/handoff.md](D:\Codex\conf2ext_main_merge\.codex\handoff.md), [docs/debugging.md](D:\Codex\conf2ext_main_merge\docs\debugging.md).
+## Стартовый маршрут
 
-`docs/technical-spec.md` — дополнительная пользовательская спецификация; читай ее при задачах на архитектуру, требования или синхронизацию документации.
+Всегда сначала читать:
 
-## Правила работы с кодом и XML
+1. `.codex/index.md`
+2. `.codex/agent-start.md`
 
-- Предпочитай минимальный дифф. Если поведение неоднозначно, выбирай наименьшее изменение, совместимое с текущим кодом.
-- Не делай широкий рефакторинг при работе с [internal/utils/xmlutil/change.go](D:\Codex\conf2ext_main_merge\internal\utils\xmlutil\change.go); это главный рискованный участок.
-- Не добавляй зависимости без явной необходимости.
-- Не меняй бизнес-правила в config/XML-логике ради “красоты кода”.
-- Считай `configs/config.json` активной локальной точкой входа, если пользователь не сказал иначе.
-- Считай `excluded_*` мягким исключением, а `forbidden_*` жестким; не смешивай эти семантики в тексте и комментариях.
-- Считай `D:\Codex\conf2ext_main_merge\Artif` папкой примеров для агента; если пользователь пишет "пример в артефактах", сначала ищи файл именно там.
-- Если в `Artif/` лежит файл `.cfe`, сначала извлеки из него XML-файлы и только потом сравнивай его с текущим дампом или рабочей выгрузкой.
-- Если пользователь просит "дамп", по умолчанию это дамп расширения после `ChangeFiles`, а не исходная XML-выгрузка конфигурации. Перед тем как назвать путь, проверь в `Configuration.xml`, что у корня стоят свойства расширения (`ObjectBelonging=Adopted`, имя/префикс из `extension`/`prefix`), а не свойства исходной конфигурации.
+Дальше читать только документы, относящиеся к текущей задаче.
 
-## Правила запуска и контроля прогонов
+## Быстрый routing
 
-- Детальный сценарий запуска прогона описан в [.codex/skills/run-conversion.md](D:\Codex\conf2ext_main_merge\.codex\skills\run-conversion.md); при прямой просьбе запустить прогон используй его как основной чек-лист.
-- Считай логи в `output/_log` и временные данные в `output/_tmp` расходными артефактами.
-- Перед новым запуском сборки сначала останови текущие `go` и относящиеся к этому прогону `1cv8.exe`, чтобы не смешивать новый запуск со старым хвостом.
-- При старте нового прогона сразу пиши в чат таймштамп начала запуска.
-- При запуске долгого прогона сразу вешай автоматизацию проверки состояния раз в 10 минут, по образцу текущей `Files-converter run check (silent go, 10m)` / `check-run`: проверять `output/_log/last_run.txt`, связанные stdout/stderr, свежие пути `output/_tmp` и `output/_log/xml_dumps`, не перезапускать прогон и не трогать чужие `1cv8.exe`.
-- При долгом прогоне различай текущий `1cv8.exe` по более позднему `StartTime`, совпадению `CommandLine` с текущим запуском и связке с новым `go run`; старые окна 1С не считай текущим прогоном.
-- Если `go.exe` запускается фоном через PowerShell, стартуй его с `-WindowStyle Hidden`, чтобы окна консоли не всплывали пользователю.
-- Если прогон уже успешно завершен, есть свежий дамп, а процесс висит на паузе с сообщением вроде `Press any key to exit...`, заверши этот процесс сам, не дожидаясь отдельной команды пользователя.
+- XML/classification logic:
+  - `.codex/context/xml-rules.md`
+  - `.codex/context/terms.md`
+  - `docs/architecture.md`
+
+- Debugging и ошибки загрузки:
+  - `docs/debugging.md`
+
+- Запуск и monitoring:
+  - `.codex/skills/run-conversion.md`
+  - `.codex/skills/check-run-status.md`
+  - `.codex/skills/cleanup-run-tails.md`
+
+- Временный operational context:
+  - `.codex/context/current-state.md`
+  - `.codex/handoff.md`
+
+## Основные правила
+
+- Предпочитай минимальный diff.
+- Не делать широкий рефакторинг `internal/utils/xmlutil/change.go` без прямой необходимости.
+- Не добавлять зависимости без необходимости.
+- Не менять XML/business rules ради “красоты”.
+- `excluded_*` — soft exclude.
+- `forbidden_*` — hard exclude.
+- BSL не является источником classification rules.
+- `configs/config.json` считать активным локальным конфигом по умолчанию.
+
+## Прогоны
+
+- Перед новым запуском использовать:
+
+```text
+.codex/skills/cleanup-run-tails.md
+```
+
+- Для проверки статуса использовать:
+
+```text
+.codex/skills/check-run-status.md
+```
+
+- Для orchestration использовать:
+
+```text
+.codex/skills/run-conversion.md
+```
 
 ## Что проверять перед завершением
 
-- `go build ./...`
-- `go test ./...`
-- если изменилось поведение, обнови соответствующие документы в `README.md`, `docs/` и `.codex/`
-- если изменилось долгоживущее архитектурное правило, допиши запись в [.codex/decisions.md](D:\Codex\conf2ext_main_merge\.codex\decisions.md)
-- если в тексте встречается BSL как анализируемый слой, это ошибка и ее нужно убрать
+```powershell
+go build ./...
+go test ./...
+```
 
-## Ограничения
-
-- Избегай массовых переименований, перестройки пакетов и дробления файлов без прямого запроса.
-- Сохраняй совместимость конфига: в коде еще есть устаревшие алиасы вроде `included_objects` и `additional_adopted_objects`.
-- Осторожно работай с удалением каталогов и временных директорий.
+Если изменились долгоживущие XML/classification rules:
+- обновить `.codex/context/xml-rules.md`
+- при необходимости обновить `docs/architecture.md`
+- при необходимости обновить `.codex/decisions.md`
