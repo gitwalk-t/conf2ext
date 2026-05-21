@@ -24,6 +24,9 @@
   - `.codex/skills/check-run-status.md`
   - `.codex/skills/cleanup-run-tails.md`
 
+- Обновление локального репозитория из git:
+  - `.codex/skills/update-repo-from-git.md`
+
 - Временный operational context:
   - `.codex/context/current-state.md`
   - `.codex/handoff.md`
@@ -58,6 +61,16 @@
 ```text
 .codex/skills/run-conversion.md
 ```
+
+## Git update
+
+Для любого обновления локального worktree из git использовать:
+
+```text
+.codex/skills/update-repo-from-git.md
+```
+
+Не дублировать git update orchestration в других skills.
 
 ## Что проверять перед завершением
 
