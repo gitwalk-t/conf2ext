@@ -147,6 +147,7 @@ Responsibilities:
 - read `CommonTemplates/упо_SearchResult/Ext/Template.txt` under configured `input_path`;
 - export code only for exact blocks requested by that SearchResult template;
 - require at least one tag from `configs/searchingTemplateText.json` with counter `> 0` for the corresponding template place;
+- extend the allowlist with extractor config `included` entries for blocks that must be handled even when they are absent in `упо_SearchResult`;
 - skip blocks explicitly listed in extractor `forbidden`;
 - skip blocks with empty BSL content;
 - extract supported code blocks;

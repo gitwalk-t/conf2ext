@@ -128,22 +128,24 @@ func Run(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("не удалось определить объекты из упо_SearchResult: %w", err)
 	}
-	forbiddenBlockIDs, err := loadForbiddenBlockIDs(extractorConfigPath)
+	extractorBlockSets, err := loadExtractorBlockSets(extractorConfigPath)
 	if err != nil {
 		return Result{}, fmt.Errorf("не удалось загрузить конфиг extractor %s: %w", extractorConfigPath, err)
 	}
+	mergeAllowedBlockIDs(allowedBlockIDs, extractorBlockSets.Included)
 
 	log.Printf(
-		"code overlay: start extraction extension_path=%s output=%s config=%s extractor_config=%s allowed_blocks=%d forbidden_blocks=%d",
+		"code overlay: start extraction extension_path=%s output=%s config=%s extractor_config=%s allowed_blocks=%d included_blocks=%d forbidden_blocks=%d",
 		extensionPath,
 		outputPath,
 		configPath,
 		extractorConfigPath,
 		len(allowedBlockIDs),
-		len(forbiddenBlockIDs),
+		len(extractorBlockSets.Included),
+		len(extractorBlockSets.Forbidden),
 	)
 
-	artifact, err := Extract(extensionPath, allowedBlockIDs, forbiddenBlockIDs)
+	artifact, err := Extract(extensionPath, allowedBlockIDs, extractorBlockSets.Forbidden)
 	if err != nil {
 		return Result{}, err
 	}
@@ -224,6 +226,12 @@ func Extract(extensionPath string, allowedBlockIDs, forbiddenBlockIDs map[string
 		Version: SchemaVersion,
 		Blocks:  blocks,
 	}, nil
+}
+
+func mergeAllowedBlockIDs(dst, src map[string]struct{}) {
+	for id := range src {
+		dst[id] = struct{}{}
+	}
 }
 
 func Write(outputPath string, artifact Artifact) error {

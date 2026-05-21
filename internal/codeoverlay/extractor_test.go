@@ -116,11 +116,13 @@ func TestRunUsesDefaultPathsAndWritesOutput(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "configs/config.json", "{\n  \"input_path\": \"/input/source\",\n  \"output_path\": \"/output/demo.cfe\",\n  \"conversion_type\": \"srcConvert\"\n}")
 	writeFile(t, root, "configs/searchingTemplateText.json", "{\n  \"PM\": [\"//{PM}\"]\n}")
-	writeFile(t, root, DefaultExtractorConfigPath, "{\n  \"forbidden\": [\"CommonModule.Запрещенный:CommonModule\"]\n}")
+	writeFile(t, root, DefaultExtractorConfigPath, "{\n  \"included\": [\"SessionModule\", \"CommonModule.ВключенныйПринудительно\"],\n  \"forbidden\": [\"CommonModule.Запрещенный:CommonModule\"]\n}")
 	writeFile(t, root, "input/source/CommonTemplates/упо_SearchResult/Ext/Template.txt", "{\n  \"ОбщиеМодули\": {\n    \"ОбщийМодуль\": {\n      \"ОбщийМодуль\": {\n        \"PM\": 1\n      }\n    },\n    \"НулевойМодуль\": {\n      \"ОбщийМодуль\": {\n        \"PM\": 0\n      }\n    }\n  }\n}")
 	writeFile(t, root, filepath.ToSlash(filepath.Join(DefaultExtensionPath, "CommonModules", "ОбщийМодуль", "Ext", "Module.bsl")), "Процедура Тест()\nКонецПроцедуры\n")
 	writeFile(t, root, filepath.ToSlash(filepath.Join(DefaultExtensionPath, "CommonModules", "ЛишнийМодуль", "Ext", "Module.bsl")), "Процедура Лишний()\nКонецПроцедуры\n")
 	writeFile(t, root, filepath.ToSlash(filepath.Join(DefaultExtensionPath, "CommonModules", "НулевойМодуль", "Ext", "Module.bsl")), "Процедура Ноль()\nКонецПроцедуры\n")
+	writeFile(t, root, filepath.ToSlash(filepath.Join(DefaultExtensionPath, "CommonModules", "ВключенныйПринудительно", "Ext", "Module.bsl")), "Процедура Included()\nКонецПроцедуры\n")
+	writeFile(t, root, filepath.ToSlash(filepath.Join(DefaultExtensionPath, "Ext", "SessionModule.bsl")), "Процедура Сеанс()\nКонецПроцедуры\n")
 
 	oldWD, err := os.Getwd()
 	if err != nil {
@@ -165,6 +167,12 @@ func TestRunUsesDefaultPathsAndWritesOutput(t *testing.T) {
 	}
 	if strings.Contains(string(outputBytes), "\"CommonModule.НулевойМодуль:CommonModule\"") {
 		t.Fatalf("did not expect zero-counter object to be exported, got %s", outputBytes)
+	}
+	if !strings.Contains(string(outputBytes), "\"CommonModule.ВключенныйПринудительно:CommonModule\"") {
+		t.Fatalf("expected forcibly included common module to be exported, got %s", outputBytes)
+	}
+	if !strings.Contains(string(outputBytes), "\"Session:SessionModule\"") {
+		t.Fatalf("expected forcibly included session module to be exported, got %s", outputBytes)
 	}
 }
 
@@ -234,6 +242,25 @@ func TestExtractSkipsForbiddenBlocks(t *testing.T) {
 	}
 	if artifact.Blocks[0].ID != "CommonModule.РазрешенныйМодуль:CommonModule" {
 		t.Fatalf("unexpected remaining block id: %q", artifact.Blocks[0].ID)
+	}
+}
+
+func TestNormalizeConfiguredBlockIDSupportsIncludedShorthands(t *testing.T) {
+	tests := map[string]string{
+		"SessionModule": "Session:SessionModule",
+		"CommonModule.ОбновлениеИнформационнойБазыУНФ":     "CommonModule.ОбновлениеИнформационнойБазыУНФ:CommonModule",
+		"CommonModule.Тест:CommonModule":                   "CommonModule.Тест:CommonModule",
+		"  CommonModule.ОбновлениеИнформационнойБазыУНФ  ": "CommonModule.ОбновлениеИнформационнойБазыУНФ:CommonModule",
+	}
+
+	for input, want := range tests {
+		got, ok := normalizeConfiguredBlockID(input)
+		if !ok {
+			t.Fatalf("normalizeConfiguredBlockID(%q) unexpectedly returned ok=false", input)
+		}
+		if got != want {
+			t.Fatalf("normalizeConfiguredBlockID(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
 
