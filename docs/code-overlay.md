@@ -34,7 +34,7 @@ input/etalonCode
 Output:
 
 ```text
-config/code_overlay.json
+configs/code_overlay.json
 ```
 
 The `input/etalonCode` directory contains a full XML dump of the reference extension.
@@ -46,7 +46,7 @@ Generation pipeline:
 
 1. Generate extension using current pipeline.
 2. Build generated code blocks.
-3. Load overlay artifact from `config/code_overlay.json`.
+3. Load overlay artifact from `configs/code_overlay.json`.
 4. Match overlay blocks against generated blocks.
 5. Apply override content.
 6. Save resulting extension.
@@ -80,7 +80,7 @@ This path belongs to the standalone extraction tool, not to the main runtime gen
 The extraction tool may accept this path as a CLI argument, for example:
 
 ```bash
-extract_code_overlay --extension-path input/etalonCode --output config/code_overlay.json
+extract_code_overlay --extension-path input/etalonCode --output configs/code_overlay.json
 ```
 
 If omitted, the extraction tool should use `input/etalonCode` as the default convention.
@@ -92,14 +92,14 @@ If omitted, the extraction tool should use `input/etalonCode` as the default con
 Overlay data is stored in a standalone service file:
 
 ```text
-config/code_overlay.json
+configs/code_overlay.json
 ```
 
 The file is generated from the reference extension XML dump using the dedicated extraction tool.
 
 The overlay artifact must be committed into Git and reviewed like regular source code.
 
-`config/code_overlay.json` should be placed near other stable configuration artifacts, such as bindings.
+`configs/code_overlay.json` should be placed near other stable configuration artifacts, such as bindings.
 
 ---
 
@@ -113,7 +113,7 @@ MVP configuration:
 {
   "code_overlay": {
     "enabled": true,
-    "overlay_file": "config/code_overlay.json"
+    "overlay_file": "configs/code_overlay.json"
   }
 }
 ```
@@ -136,12 +136,15 @@ A strict/fail-on-missing mode may be added later as a separate task if needed.
 Example CLI:
 
 ```bash
-extract_code_overlay --extension-path input/etalonCode --output config/code_overlay.json
+extract_code_overlay --extension-path input/etalonCode --output configs/code_overlay.json
 ```
 
 Responsibilities:
 
 - traverse reference extension XML dump;
+- load active project config from `configs/config.json`;
+- read `CommonTemplates/упо_SearchResult/Ext/Template.txt` under configured `input_path`;
+- export code only for objects requested by that SearchResult template;
 - extract supported code blocks;
 - generate stable identifiers;
 - serialize overlay data;
@@ -240,7 +243,7 @@ code_overlay_report.json
 - preserve generated structure;
 - support forward regeneration;
 - support Git diff/review workflow;
-- use `config/code_overlay.json` as the prepared runtime artifact;
+- use `configs/code_overlay.json` as the prepared runtime artifact;
 - fallback to generated code for unresolved overlay blocks in MVP.
 
 ---
@@ -260,8 +263,8 @@ code_overlay_report.json
 Minimum regression scenarios:
 
 - extraction from default `input/etalonCode` dump path;
-- overlay artifact written to `config/code_overlay.json`;
-- main pipeline reads `config/code_overlay.json`;
+- overlay artifact written to `configs/code_overlay.json`;
+- main pipeline reads `configs/code_overlay.json`;
 - main pipeline does not read `input/etalonCode` directly;
 - modified form module transfer;
 - generated fallback when overlay block is missing;

@@ -22,7 +22,13 @@ func TestExtractBuildsExpectedBlocks(t *testing.T) {
 	writeFile(t, root, "Ext/SessionModule.bsl", "Процедура ПриНачалеРаботыСистемы()\nКонецПроцедуры\n")
 	writeFile(t, root, "Catalogs/ТестКаталог/Ext/ValueManagerModule.bsl", "ignored")
 
-	artifact, err := Extract(root)
+	artifact, err := Extract(root, map[string]struct{}{
+		"Catalog.ТестКаталог":        {},
+		"CommonCommand.ОбщаяКоманда": {},
+		"CommonForm.ОбщаяФорма":      {},
+		"CommonModule.ОбщийМодуль":   {},
+		"Session":                    {},
+	})
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -75,11 +81,15 @@ func TestExtractIsDeterministic(t *testing.T) {
 	writeFile(t, root, "Catalogs/Альфа/Forms/ФормаСписка/Ext/Form/Module.bsl", "Процедура Форма()\nКонецПроцедуры\n")
 	writeFile(t, root, "Catalogs/Альфа/Ext/ObjectModule.bsl", "Процедура Альфа()\nКонецПроцедуры\n")
 
-	first, err := Extract(root)
+	allowedObjects := map[string]struct{}{
+		"Catalog.Альфа":     {},
+		"CommonModule.Бета": {},
+	}
+	first, err := Extract(root, allowedObjects)
 	if err != nil {
 		t.Fatalf("first Extract: %v", err)
 	}
-	second, err := Extract(root)
+	second, err := Extract(root, allowedObjects)
 	if err != nil {
 		t.Fatalf("second Extract: %v", err)
 	}
@@ -100,7 +110,11 @@ func TestExtractIsDeterministic(t *testing.T) {
 
 func TestRunUsesDefaultPathsAndWritesOutput(t *testing.T) {
 	root := t.TempDir()
+	writeFile(t, root, "configs/config.json", "{\n  \"input_path\": \"/input/source\",\n  \"output_path\": \"/output/demo.cfe\",\n  \"conversion_type\": \"srcConvert\"\n}")
+	writeFile(t, root, "configs/searchingTemplateText.json", "{\n  \"PM\": [\"//{PM}\"]\n}")
+	writeFile(t, root, "input/source/CommonTemplates/упо_SearchResult/Ext/Template.txt", "{\n  \"ОбщиеМодули\": {\n    \"ОбщийМодуль\": {\n      \"ОбщийМодуль\": {\n        \"PM\": 1\n      }\n    }\n  }\n}")
 	writeFile(t, root, filepath.ToSlash(filepath.Join(DefaultExtensionPath, "CommonModules", "ОбщийМодуль", "Ext", "Module.bsl")), "Процедура Тест()\nКонецПроцедуры\n")
+	writeFile(t, root, filepath.ToSlash(filepath.Join(DefaultExtensionPath, "CommonModules", "ЛишнийМодуль", "Ext", "Module.bsl")), "Процедура Лишний()\nКонецПроцедуры\n")
 
 	oldWD, err := os.Getwd()
 	if err != nil {
@@ -126,6 +140,9 @@ func TestRunUsesDefaultPathsAndWritesOutput(t *testing.T) {
 	if !strings.HasSuffix(filepath.ToSlash(result.OutputPath), filepath.ToSlash(DefaultOutputPath)) {
 		t.Fatalf("unexpected default output path: %q", result.OutputPath)
 	}
+	if !strings.HasSuffix(filepath.ToSlash(result.ConfigPath), filepath.ToSlash(DefaultConfigPath)) {
+		t.Fatalf("unexpected default config path: %q", result.ConfigPath)
+	}
 
 	outputBytes, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(DefaultOutputPath)))
 	if err != nil {
@@ -133,6 +150,36 @@ func TestRunUsesDefaultPathsAndWritesOutput(t *testing.T) {
 	}
 	if !strings.Contains(string(outputBytes), "\"CommonModule.ОбщийМодуль:CommonModule\"") {
 		t.Fatalf("expected generated overlay artifact to contain common module block, got %s", outputBytes)
+	}
+	if strings.Contains(string(outputBytes), "\"CommonModule.ЛишнийМодуль:CommonModule\"") {
+		t.Fatalf("did not expect non-template object to be exported, got %s", outputBytes)
+	}
+}
+
+func TestExtractFiltersByTopLevelObjects(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "Catalogs/ТестКаталог/Ext/ObjectModule.bsl", "Процедура Объект()\nКонецПроцедуры\n")
+	writeFile(t, root, "Catalogs/ТестКаталог/Forms/ФормаСписка/Ext/Form/Module.bsl", "Процедура Форма()\nКонецПроцедуры\n")
+	writeFile(t, root, "CommonModules/ЛишнийМодуль/Ext/Module.bsl", "Процедура Лишний()\nКонецПроцедуры\n")
+
+	artifact, err := Extract(root, map[string]struct{}{
+		"Catalog.ТестКаталог": {},
+	})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+
+	gotIDs := make([]string, 0, len(artifact.Blocks))
+	for _, block := range artifact.Blocks {
+		gotIDs = append(gotIDs, block.ID)
+	}
+
+	wantIDs := []string{
+		"Catalog.ТестКаталог.Form.ФормаСписка:FormModule",
+		"Catalog.ТестКаталог:ObjectModule",
+	}
+	if !reflect.DeepEqual(gotIDs, wantIDs) {
+		t.Fatalf("unexpected filtered block ids:\n got %#v\nwant %#v", gotIDs, wantIDs)
 	}
 }
 

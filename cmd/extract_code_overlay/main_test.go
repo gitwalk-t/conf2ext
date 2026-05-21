@@ -20,6 +20,9 @@ func TestParseOptionsUsesDefaults(t *testing.T) {
 	if opts.outputPath != codeoverlay.DefaultOutputPath {
 		t.Fatalf("unexpected default output path: got %q want %q", opts.outputPath, codeoverlay.DefaultOutputPath)
 	}
+	if opts.configPath != codeoverlay.DefaultConfigPath {
+		t.Fatalf("unexpected default config path: got %q want %q", opts.configPath, codeoverlay.DefaultConfigPath)
+	}
 }
 
 func TestRunPassesStandaloneOptionsToExtractor(t *testing.T) {
@@ -38,14 +41,15 @@ func TestRunPassesStandaloneOptionsToExtractor(t *testing.T) {
 					{ID: "CommonModule.Тест:CommonModule"},
 				},
 			},
+			ConfigPath:    "resolved/configs/config.json",
 			ExtensionPath: "resolved/input/etalonCode",
-			OutputPath:    "resolved/config/code_overlay.json",
+			OutputPath:    "resolved/configs/code_overlay.json",
 		}, nil
 	}
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := run([]string{"--extension-path", "custom/input", "--output", "custom/output.json"}, &stdout, &stderr)
+	exitCode := run([]string{"--extension-path", "custom/input", "--output", "custom/output.json", "--config", "custom/config.json"}, &stdout, &stderr)
 	if exitCode != 0 {
 		t.Fatalf("run exit code = %d, stderr=%s", exitCode, stderr.String())
 	}
@@ -56,11 +60,15 @@ func TestRunPassesStandaloneOptionsToExtractor(t *testing.T) {
 	if gotOpts.OutputPath != "custom/output.json" {
 		t.Fatalf("unexpected output path passed to extractor: %q", gotOpts.OutputPath)
 	}
+	if gotOpts.ConfigPath != "custom/config.json" {
+		t.Fatalf("unexpected config path passed to extractor: %q", gotOpts.ConfigPath)
+	}
 
 	expected := "" +
 		"overlay blocks extracted: 1\n" +
+		"config path: resolved/configs/config.json\n" +
 		"extension path: resolved/input/etalonCode\n" +
-		"output: resolved/config/code_overlay.json\n"
+		"output: resolved/configs/code_overlay.json\n"
 	if stdout.String() != expected {
 		t.Fatalf("unexpected stdout:\n got %q\nwant %q", stdout.String(), expected)
 	}

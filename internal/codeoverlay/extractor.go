@@ -14,12 +14,14 @@ import (
 	"strings"
 
 	"github.com/gitwalk-m/conf2ext/internal/config"
+	xmlutils "github.com/gitwalk-m/conf2ext/internal/utils/xmlutil"
 )
 
 const (
 	SchemaVersion        = 1
 	DefaultExtensionPath = "input/etalonCode"
-	DefaultOutputPath    = "config/code_overlay.json"
+	DefaultOutputPath    = "configs/code_overlay.json"
+	DefaultConfigPath    = "configs/config.json"
 )
 
 var metadataKinds = map[string]string{
@@ -87,12 +89,14 @@ type Block struct {
 type Options struct {
 	ExtensionPath string
 	OutputPath    string
+	ConfigPath    string
 }
 
 type Result struct {
 	Artifact      Artifact
 	ExtensionPath string
 	OutputPath    string
+	ConfigPath    string
 }
 
 func Run(opts Options) (Result, error) {
@@ -104,10 +108,23 @@ func Run(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("не удалось нормализовать путь к overlay artifact: %w", err)
 	}
+	configPath, err := resolvePath(opts.ConfigPath, DefaultConfigPath)
+	if err != nil {
+		return Result{}, fmt.Errorf("не удалось нормализовать путь к конфигу проекта: %w", err)
+	}
 
-	log.Printf("code overlay: start extraction extension_path=%s output=%s", extensionPath, outputPath)
+	cfg, err := config.LoadConfigE(configPath)
+	if err != nil {
+		return Result{}, fmt.Errorf("не удалось загрузить конфиг проекта %s: %w", configPath, err)
+	}
+	allowedObjects, err := xmlutils.CollectSearchResultTemplateObjectKeys(cfg)
+	if err != nil {
+		return Result{}, fmt.Errorf("не удалось определить объекты из упо_SearchResult: %w", err)
+	}
 
-	artifact, err := Extract(extensionPath)
+	log.Printf("code overlay: start extraction extension_path=%s output=%s config=%s allowed_objects=%d", extensionPath, outputPath, configPath, len(allowedObjects))
+
+	artifact, err := Extract(extensionPath, allowedObjects)
 	if err != nil {
 		return Result{}, err
 	}
@@ -120,10 +137,11 @@ func Run(opts Options) (Result, error) {
 		Artifact:      artifact,
 		ExtensionPath: extensionPath,
 		OutputPath:    outputPath,
+		ConfigPath:    configPath,
 	}, nil
 }
 
-func Extract(extensionPath string) (Artifact, error) {
+func Extract(extensionPath string, allowedObjects map[string]struct{}) (Artifact, error) {
 	resolvedExtensionPath, err := resolvePath(extensionPath, DefaultExtensionPath)
 	if err != nil {
 		return Artifact{}, fmt.Errorf("не удалось нормализовать путь к эталонному расширению: %w", err)
@@ -153,6 +171,9 @@ func Extract(extensionPath string) (Artifact, error) {
 			return err
 		}
 		if !ok {
+			return nil
+		}
+		if !shouldKeepBlock(block, allowedObjects) {
 			return nil
 		}
 
@@ -311,4 +332,20 @@ func isSupportedModuleFilename(name string) bool {
 	default:
 		return false
 	}
+}
+
+func shouldKeepBlock(block Block, allowedObjects map[string]struct{}) bool {
+	if len(allowedObjects) == 0 {
+		return false
+	}
+	_, ok := allowedObjects[topLevelObjectKey(block.Object)]
+	return ok
+}
+
+func topLevelObjectKey(object string) string {
+	parts := strings.Split(strings.TrimSpace(object), ".")
+	if len(parts) < 2 {
+		return strings.TrimSpace(object)
+	}
+	return parts[0] + "." + parts[1]
 }
