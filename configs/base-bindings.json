@@ -3,6 +3,9 @@
     "CommonPicture.ЗаполнитьПоОснованию": {
       "base_object_id": "99a6db22-6624-4c63-9d80-367db783df3f"
     },
+    "CommonPicture.УдалитьИнформация": {
+      "base_object_id": "5b1a185d-c89a-4803-ad17-fa589e774405"
+    },
     "Catalog.Валюты": {
       "base_object_id": "dd096f26-1cbd-44c2-a139-9c8c10b07fb9"
     },
@@ -30,8 +33,26 @@
     "Catalog.Пользователи": {
       "base_object_id": "fa1ef4b3-fc76-4b08-bb66-d89a7a1b66b1"
     },
+    "Catalog.СтраныМира": {
+      "base_object_id": "cf7d59dd-e3e0-4a45-bfd4-14c104bd264b"
+    },
+    "Catalog.ФизическиеЛица": {
+      "base_object_id": "e362a3ee-cbd4-427e-ba1c-135d2ac64280"
+    },
+    "Catalog.ШаблоныСообщений": {
+      "base_object_id": "71824d07-25c6-4519-bcf6-e55dbd4f5744"
+    },
     "Catalog.СтатьиДвиженияДенежныхСредств": {
       "base_object_id": "c18aed98-9a38-4a4f-bee4-1b6977344491"
+    },
+    "Document.АктВыполненныхРабот": {
+      "base_object_id": "10817a05-c443-4ea7-bffd-9e1ea6b93a60"
+    },
+    "Document.ЗаказНаПроизводство": {
+      "base_object_id": "bc4ed9b8-b3d8-43e3-a294-43d62bfd6949"
+    },
+    "Document.ЗаказПоставщику": {
+      "base_object_id": "17c81574-ebf5-4789-b027-c111587907d1"
     },
     "EventSubscription.ПроверитьДатуЗапретаИзмененияПередЗаписьюДокумента": {
       "base_object_id": "f02b93b8-84bc-4cf0-9a42-e06d2b32caf8"
@@ -56,6 +77,15 @@
     },
     "FunctionalOption.ИспользоватьИнтеграциюС1СДокументооборот3": {
       "base_object_id": "11fc309e-7351-4f07-8ed6-0c852e5d1d4c"
+    },
+    "InformationRegister.КурсыВалют": {
+      "base_object_id": "e6d21b35-d6ea-4685-8cda-9088020e0cda"
+    },
+    "InformationRegister.УдалитьСводныеПриложенияСостояниеВыгрузки": {
+      "base_object_id": "cebeef8d-ffc4-4850-af6e-d94c80089452"
+    },
+    "InformationRegister.УдалитьБезопасноеХранилищеДанныхОбластейДанных": {
+      "base_object_id": "8842c0e3-2e20-4f37-ae7c-f5449004994b"
     },
     "StyleItem.ТекстИнформационнойНадписи": {
       "base_object_id": "2f371ed4-ea68-4329-9107-e6ae2fff85e4"

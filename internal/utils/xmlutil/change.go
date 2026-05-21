@@ -2430,7 +2430,13 @@ func mergeDefinedTypeTargetComposition(
 		extendEntries = append(extendEntries, entry)
 	}
 
-	rebuildDefinedTypeAsExtendedProperty(currentContainer, checkEntries, extendEntries)
+	definedType := properties.Parent()
+	var targetDefinedType *etree.Element
+	if targetProperties := targetContainer.Parent(); targetProperties != nil {
+		targetDefinedType = targetProperties.Parent()
+	}
+	ensureDefinedTypeExtendedPropertyInternalInfo(definedType, targetDefinedType)
+	rebuildDefinedTypeAsSplitTypeDescription(currentContainer, checkEntries, extendEntries)
 	return true, nil
 }
 
@@ -2564,7 +2570,7 @@ func shouldKeepDefinedTypeExtendValue(value string, decisions map[string]objectD
 	return true
 }
 
-func rebuildDefinedTypeAsExtendedProperty(container *etree.Element, checkEntries []*etree.Element, extendEntries []metadataValueEntry) {
+func rebuildDefinedTypeAsSplitTypeDescription(container *etree.Element, checkEntries []*etree.Element, extendEntries []metadataValueEntry) {
 	if container == nil {
 		return
 	}
@@ -2591,6 +2597,184 @@ func rebuildDefinedTypeAsExtendedProperty(container *etree.Element, checkEntries
 			extendValue.AddChild(entry.Element.Copy())
 		}
 	}
+}
+
+func ensureDefinedTypeExtendedPropertyInternalInfo(definedType *etree.Element, targetDefinedType *etree.Element) bool {
+	if definedType == nil || localName(definedType.Tag) != "DefinedType" {
+		return false
+	}
+
+	properties := definedType.FindElement("./*[local-name()='Properties']")
+	if properties == nil {
+		return false
+	}
+
+	changed := false
+	internalInfo := definedType.FindElement("./*[local-name()='InternalInfo']")
+	if internalInfo == nil {
+		internalInfo = etree.NewElement("InternalInfo")
+		definedType.InsertChild(properties, internalInfo)
+		changed = true
+	} else if !comesBeforeSibling(definedType, internalInfo, properties) {
+		definedType.RemoveChild(internalInfo)
+		definedType.InsertChild(properties, internalInfo)
+		changed = true
+	}
+
+	name := strings.TrimSpace(textOf(properties, "Name"))
+	if name == "" {
+		var targetProperties *etree.Element
+		if targetDefinedType != nil {
+			targetProperties = targetDefinedType.FindElement("./*[local-name()='Properties']")
+		}
+		name = strings.TrimSpace(textOf(targetProperties, "Name"))
+	}
+
+	typeID, valueID := collectDefinedTypeGeneratedTypeIDs(definedType, targetDefinedType)
+	changed = ensureDefinedTypeGeneratedType(internalInfo, name, typeID, valueID) || changed
+	changed = ensureDefinedTypeTypePropertyState(internalInfo) || changed
+	return changed
+}
+
+func comesBeforeSibling(parent *etree.Element, left *etree.Element, right *etree.Element) bool {
+	if parent == nil || left == nil || right == nil || left == right {
+		return false
+	}
+
+	leftIndex := -1
+	rightIndex := -1
+	for i, child := range parent.ChildElements() {
+		switch child {
+		case left:
+			leftIndex = i
+		case right:
+			rightIndex = i
+		}
+	}
+
+	return leftIndex >= 0 && rightIndex >= 0 && leftIndex < rightIndex
+}
+
+func collectDefinedTypeGeneratedTypeIDs(currentDefinedType *etree.Element, targetDefinedType *etree.Element) (string, string) {
+	typeID, valueID := findDefinedTypeGeneratedTypeIDs(currentDefinedType)
+	if typeID != "" || valueID != "" {
+		return typeID, valueID
+	}
+	return findDefinedTypeGeneratedTypeIDs(targetDefinedType)
+}
+
+func findDefinedTypeGeneratedTypeIDs(definedType *etree.Element) (string, string) {
+	if definedType == nil {
+		return "", ""
+	}
+
+	generated := definedType.FindElement("./*[local-name()='InternalInfo']/*[local-name()='GeneratedType']")
+	if generated == nil {
+		return "", ""
+	}
+
+	return strings.TrimSpace(textOfFirst(generated, "./*[local-name()='TypeId']")),
+		strings.TrimSpace(textOfFirst(generated, "./*[local-name()='ValueId']"))
+}
+
+func ensureDefinedTypeGeneratedType(internalInfo *etree.Element, name string, typeID string, valueID string) bool {
+	if internalInfo == nil {
+		return false
+	}
+
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+
+	if strings.TrimSpace(typeID) == "" {
+		typeID = newGUID()
+	}
+	if strings.TrimSpace(valueID) == "" {
+		valueID = newGUID()
+	}
+
+	changed := false
+	generated := internalInfo.FindElement("./*[local-name()='GeneratedType']")
+	if generated == nil {
+		generated = etree.NewElement("xr:GeneratedType")
+		internalInfo.AddChild(generated)
+		changed = true
+	}
+
+	if current := generated.SelectAttrValue("name", ""); current != "DefinedType."+name {
+		setOrCreateAttr(generated, "name", "DefinedType."+name)
+		changed = true
+	}
+	if current := generated.SelectAttrValue("category", ""); current != "DefinedType" {
+		setOrCreateAttr(generated, "category", "DefinedType")
+		changed = true
+	}
+
+	changed = ensureSimpleChildText(generated, "xr:TypeId", typeID) || changed
+	changed = ensureSimpleChildText(generated, "xr:ValueId", valueID) || changed
+	return changed
+}
+
+func ensureDefinedTypeTypePropertyState(internalInfo *etree.Element) bool {
+	if internalInfo == nil {
+		return false
+	}
+
+	for _, child := range internalInfo.ChildElements() {
+		if !strings.EqualFold(localName(child.Tag), "PropertyState") {
+			continue
+		}
+		propertyEl := child.FindElement("./*[local-name()='Property']")
+		if propertyEl == nil || !strings.EqualFold(strings.TrimSpace(propertyEl.Text()), "Type") {
+			continue
+		}
+		stateEl := child.FindElement("./*[local-name()='State']")
+		if stateEl == nil {
+			child.CreateElement("xr:State").SetText("MultiState")
+			return true
+		}
+		if strings.TrimSpace(stateEl.Text()) != "MultiState" {
+			stateEl.SetText("MultiState")
+			return true
+		}
+		return false
+	}
+
+	propertyState := internalInfo.CreateElement("xr:PropertyState")
+	propertyState.CreateElement("xr:Property").SetText("Type")
+	propertyState.CreateElement("xr:State").SetText("MultiState")
+	return true
+}
+
+func setOrCreateAttr(el *etree.Element, key, value string) {
+	if el == nil || key == "" {
+		return
+	}
+	for i := range el.Attr {
+		if el.Attr[i].Key == key {
+			el.Attr[i].Value = value
+			return
+		}
+	}
+	el.CreateAttr(key, value)
+}
+
+func ensureSimpleChildText(parent *etree.Element, tag, value string) bool {
+	if parent == nil || tag == "" {
+		return false
+	}
+
+	child := parent.FindElement("./*[local-name()='" + localName(tag) + "']")
+	if child == nil {
+		parent.CreateElement(tag).SetText(value)
+		return true
+	}
+	if strings.TrimSpace(child.Text()) == value {
+		return false
+	}
+	child.SetText(value)
+	return true
 }
 
 func mergeExchangePlanContent(
