@@ -6445,7 +6445,6 @@ func cleanupFormDocumentIndexed(ctx *FileProcessingContext, decision objectDecis
 	if decision.Belonging == "Native" {
 		changed = cleanupNativeFormNonNativeReferences(ctx.Doc, nonNativeKeys) || changed
 		changed = cleanupMissingFormConstantsSetReferencesIndexed(ctx.Doc, contexts, indexes, decisions) || changed
-		changed = cleanupMissingFormCommonAttributeDynamicListFieldsIndexed(ctx.Doc, contexts, indexes, decisions) || changed
 		changed = cleanupMissingFormCommandReferences(ctx.Doc, contexts) || changed
 		return changed
 	}
@@ -6632,6 +6631,10 @@ func collectMissingFormCommonAttributeDynamicListFields(root *etree.Element, con
 
 		targetCtx := findTopLevelMetadataContextByOwnerKeyIndexed(indexes, contexts, refs[0])
 		available := collectAvailableDynamicListFields(targetCtx)
+		ownerKind := ""
+		if targetCtx != nil {
+			ownerKind = targetCtx.OwnerKind
+		}
 		requiredFields := collectDynamicListDeclaredFields(attr)
 		for field := range collectDynamicListAttributeFields(root, attrName) {
 			requiredFields[field] = struct{}{}
@@ -6640,7 +6643,7 @@ func collectMissingFormCommonAttributeDynamicListFields(root *etree.Element, con
 			if _, ok := available[field]; ok {
 				continue
 			}
-			if isKnownDynamicListVirtualField(targetCtx.OwnerKind, field) {
+			if isKnownDynamicListVirtualField(ownerKind, field) {
 				continue
 			}
 			if topLevelMetadataIncludedIndexed("CommonAttribute."+field, contexts, indexes, decisions) {

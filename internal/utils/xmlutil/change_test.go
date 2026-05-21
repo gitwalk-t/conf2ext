@@ -874,6 +874,75 @@ func TestCleanupFormDocumentIndexedKeepsNativeManualQueryDynamicListStructure(t 
 	}
 }
 
+func TestCleanupFormDocumentIndexedKeepsNativeDynamicListCustomField(t *testing.T) {
+	t.Parallel()
+
+	formDoc := etree.NewDocument()
+	if err := formDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform" xmlns:v8="http://v8.1c.ru/8.1/data/core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ChildItems>
+    <Table name="Список">
+      <DataPath>Список</DataPath>
+      <ChildItems>
+        <LabelField name="КастомноеПоле"><DataPath>Список.КастомноеПоле</DataPath></LabelField>
+      </ChildItems>
+    </Table>
+  </ChildItems>
+  <Attributes>
+    <Attribute name="Список">
+      <Type><v8:Type>cfg:DynamicList</v8:Type></Type>
+      <Settings xsi:type="DynamicList">
+        <ManualQuery>true</ManualQuery>
+        <MainTable>Catalog.Номенклатура</MainTable>
+        <Field><dataPath>КастомноеПоле</dataPath><field>КастомноеПоле</field></Field>
+      </Settings>
+    </Attribute>
+  </Attributes>
+</Form>`); err != nil {
+		t.Fatalf("read form xml: %v", err)
+	}
+
+	ownerDoc := etree.NewDocument()
+	if err := ownerDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog>
+    <Properties><Name>Номенклатура</Name></Properties>
+    <ChildObjects/>
+  </Catalog>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read owner xml: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{{
+		Doc:       ownerDoc,
+		Metadata:  true,
+		OwnerKey:  "Catalog.Номенклатура",
+		OwnerKind: "Catalog",
+		RelPath:   "Catalogs/Номенклатура.xml",
+	}}
+	decisions := map[string]objectDecision{
+		"Catalog.Номенклатура": {Belonging: "Native"},
+	}
+	formCtx := &FileProcessingContext{
+		Doc:       formDoc,
+		OwnerKey:  "Catalog.Номенклатура",
+		OwnerKind: "Catalog",
+		RelPath:   "Catalogs/Номенклатура/Forms/ФормаСписка/Ext/Form.xml",
+		FileName:  "Form.xml",
+	}
+
+	if cleanupFormDocumentIndexed(formCtx, decisions[formCtx.OwnerKey], contexts, nil, decisions, collectNonNativeKeys(decisions)) {
+		t.Fatalf("expected native cleanup to preserve custom dynamic list fields")
+	}
+
+	if got := textOfFirst(formDoc.Root(), ".//Attribute[@name='Список']//Field/dataPath"); got != "КастомноеПоле" {
+		t.Fatalf("expected custom declared field to remain, got %q", got)
+	}
+	if got := textOfFirst(formDoc.Root(), ".//LabelField[@name='КастомноеПоле']/DataPath"); got != "Список.КастомноеПоле" {
+		t.Fatalf("expected custom data path to remain, got %q", got)
+	}
+}
+
 func TestCleanupFormDocumentIndexedNativeRemovesNonNativeDynamicListDanglingReferences(t *testing.T) {
 	t.Parallel()
 
@@ -954,6 +1023,122 @@ func TestCleanupFormDocumentIndexedNativeRemovesNonNativeDynamicListDanglingRefe
 	}
 	if got := textOfFirst(formDoc.Root(), ".//Table[@name='Список']/DataPath"); got != "Список" {
 		t.Fatalf("expected native table to remain, got %q", got)
+	}
+}
+
+func TestCleanupMissingFormCommonAttributeDynamicListFieldsMissingTargetDoesNotPanic(t *testing.T) {
+	t.Parallel()
+
+	formDoc := etree.NewDocument()
+	if err := formDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform" xmlns:v8="http://v8.1c.ru/8.1/data/core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ChildItems>
+    <Table name="Список">
+      <DataPath>Список</DataPath>
+      <ChildItems>
+        <LabelField name="Ссылка"><DataPath>Список.Ссылка</DataPath></LabelField>
+      </ChildItems>
+    </Table>
+  </ChildItems>
+  <Attributes>
+    <Attribute name="Список">
+      <Type><v8:Type>cfg:DynamicList</v8:Type></Type>
+      <Settings xsi:type="DynamicList">
+        <MainTable>Catalog.ОтсутствующийОбъект</MainTable>
+        <Field><dataPath>Ссылка</dataPath><field>Ссылка</field></Field>
+      </Settings>
+    </Attribute>
+  </Attributes>
+</Form>`); err != nil {
+		t.Fatalf("read form xml: %v", err)
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("expected missing target cleanup to avoid panic, got %v", r)
+		}
+	}()
+
+	if cleanupMissingFormCommonAttributeDynamicListFields(formDoc, nil, nil) {
+		t.Fatalf("expected standard field on missing target to remain untouched")
+	}
+	if got := textOfFirst(formDoc.Root(), ".//LabelField[@name='Ссылка']/DataPath"); got != "Список.Ссылка" {
+		t.Fatalf("expected standard ref field to remain, got %q", got)
+	}
+}
+
+func TestCleanupFormDocumentIndexedNonNativeStillRemovesMissingDynamicListField(t *testing.T) {
+	t.Parallel()
+
+	formDoc := etree.NewDocument()
+	if err := formDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform" xmlns:v8="http://v8.1c.ru/8.1/data/core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ChildItems>
+    <Table name="Список">
+      <DataPath>Список</DataPath>
+      <ChildItems>
+        <LabelField name="УдаляемоеПоле"><DataPath>Список.УдаляемоеПоле</DataPath></LabelField>
+        <LabelField name="Ссылка"><DataPath>Список.Ссылка</DataPath></LabelField>
+      </ChildItems>
+    </Table>
+  </ChildItems>
+  <Attributes>
+    <Attribute name="Список">
+      <Type><v8:Type>cfg:DynamicList</v8:Type></Type>
+      <Settings xsi:type="DynamicList">
+        <MainTable>Catalog.Номенклатура</MainTable>
+        <Field><dataPath>УдаляемоеПоле</dataPath><field>УдаляемоеПоле</field></Field>
+        <Field><dataPath>Ссылка</dataPath><field>Ссылка</field></Field>
+      </Settings>
+    </Attribute>
+  </Attributes>
+</Form>`); err != nil {
+		t.Fatalf("read form xml: %v", err)
+	}
+
+	ownerDoc := etree.NewDocument()
+	if err := ownerDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog>
+    <Properties>
+      <Name>Номенклатура</Name>
+      <StandardAttributes>
+        <StandardAttribute name="Ref"/>
+      </StandardAttributes>
+    </Properties>
+    <ChildObjects/>
+  </Catalog>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read owner xml: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{{
+		Doc:       ownerDoc,
+		Metadata:  true,
+		OwnerKey:  "Catalog.Номенклатура",
+		OwnerKind: "Catalog",
+		RelPath:   "Catalogs/Номенклатура.xml",
+	}}
+	decisions := map[string]objectDecision{
+		"Catalog.Номенклатура": {Belonging: "AdoptedStub"},
+	}
+	formCtx := &FileProcessingContext{
+		Doc:       formDoc,
+		OwnerKey:  "Catalog.Номенклатура",
+		OwnerKind: "Catalog",
+		RelPath:   "Catalogs/Номенклатура/Forms/ФормаСписка/Ext/Form.xml",
+		FileName:  "Form.xml",
+	}
+
+	if !cleanupFormDocumentIndexed(formCtx, decisions[formCtx.OwnerKey], contexts, nil, decisions, collectNonNativeKeys(decisions)) {
+		t.Fatalf("expected non-native cleanup to remove missing dynamic list field")
+	}
+
+	if hasFormElementWithName(formDoc, "LabelField", "УдаляемоеПоле") {
+		t.Fatalf("expected missing non-native field binding to be removed")
+	}
+	if hasFormElementWithName(formDoc, "LabelField", "Ссылка") == false {
+		t.Fatalf("expected unrelated standard field to remain")
 	}
 }
 
