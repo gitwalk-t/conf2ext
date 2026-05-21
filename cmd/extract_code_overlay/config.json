@@ -1,0 +1,16 @@
+{
+  "included": [
+    "SessionModule",
+    "CommonModule.ОбновлениеИнформационнойБазыУНФ",
+    "CommonModule.ОбновлениеИнформационнойБазыСлужебныйПовтИсп"
+  ],
+  "forbidden": [
+    "DataProcessor.слкМенеджерЛицензий.Form.МенеджерЛицензийСЛК:FormModule",
+    "DataProcessor.слкМенеджерЛицензий.Command.слкМенеджерЛицензийСЛК:CommandModule",
+    "CommonModule.слкМенеджерЗащитыПовтИсп:CommonModule",
+    "CommonModule.слкМенеджерЗащитыСервер:CommonModule",
+    "CommonModule.слкМенеджерЗащиты:CommonModule",
+    "CommonModule.слкМенеджерЗащитыПереопределяемый:CommonModule",
+    "CommonModule.ВызовОнлайнПоддержки:CommonModule"
+  ]
+}
