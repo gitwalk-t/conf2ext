@@ -14,21 +14,45 @@ This mechanism must preserve:
 - generated object structure;
 - compatibility with future source configuration updates.
 
-The reference extension must NOT become a second configuration source.
-It must act only as an overlay source for adapted code blocks.
+The reference extension XML dump must NOT become a runtime source for the main generation pipeline.
+It is used only by a standalone extraction tool to build a reusable overlay artifact.
 
 ---
 
 # High-Level Architecture
 
+Two separate stages are required.
+
+## Stage 1: Extract overlay artifact
+
+Input:
+
+```text
+input/etalonCode
+```
+
+Output:
+
+```text
+config/code_overlay.json
+```
+
+The `input/etalonCode` directory contains a full XML dump of the reference extension.
+It is consumed only by the overlay extraction tool.
+
+## Stage 2: Apply overlay artifact during generation
+
 Generation pipeline:
 
 1. Generate extension using current pipeline.
 2. Build generated code blocks.
-3. Load overlay file.
+3. Load overlay artifact from `config/code_overlay.json`.
 4. Match overlay blocks against generated blocks.
 5. Apply override content.
 6. Save resulting extension.
+
+The main generation pipeline must not read `input/etalonCode` directly.
+It must read only the prepared overlay artifact.
 
 The overlay layer must be applied AFTER:
 
@@ -43,65 +67,67 @@ The overlay layer must be applied BEFORE:
 
 ---
 
-# Reference Extension Location
+# Reference Extension XML Dump Location
 
-The reference extension XML dump path must be configurable.
-
-Default value:
+Default extraction input:
 
 ```text
 input/etalonCode
 ```
 
-Configuration example:
+This path belongs to the standalone extraction tool, not to the main runtime generation config.
 
-```json
-{
-  "code_source": "overlay",
-  "code_overlay": {
-    "reference_extension_path": "input/etalonCode",
-    "overlay_file": "code_overlay.json"
-  }
-}
+The extraction tool may accept this path as a CLI argument, for example:
+
+```bash
+extract_code_overlay --extension-path input/etalonCode --output config/code_overlay.json
 ```
 
-`input/etalonCode` is only the default convention. Implementations must not hard-code this path as the only allowed source.
-
-The extraction tool and generation pipeline must use the configured path when it is provided and fall back to `input/etalonCode` only when the parameter is absent.
+If omitted, the extraction tool should use `input/etalonCode` as the default convention.
 
 ---
 
-# Overlay Source
+# Overlay Artifact Location
 
 Overlay data is stored in a standalone service file:
 
 ```text
-code_overlay.json
+config/code_overlay.json
 ```
 
-The file is generated from a reference extension using a dedicated extraction tool.
+The file is generated from the reference extension XML dump using the dedicated extraction tool.
 
-The overlay file must be committed into Git and reviewed like regular source code.
+The overlay artifact must be committed into Git and reviewed like regular source code.
+
+`config/code_overlay.json` should be placed near other stable configuration artifacts, such as bindings.
 
 ---
 
-# Overlay Modes
+# Overlay Configuration MVP
 
-Configuration:
+The main generation config should reference the prepared overlay artifact, not the reference XML dump.
+
+MVP configuration:
 
 ```json
 {
-  "code_source": "generated"
+  "code_overlay": {
+    "enabled": true,
+    "overlay_file": "config/code_overlay.json"
+  }
 }
 ```
 
-Supported values:
+If `code_overlay.enabled` is absent or false, current generated behavior must be preserved.
 
-| Value | Behavior |
-|---|---|
-| generated | Current behavior. Ignore overlay. |
-| overlay | Apply overlay when matching blocks are found. |
-| overlay_strict | Same as overlay, but missing blocks are treated as errors. |
+For MVP there is no strict mode. Overlay application is relaxed by default:
+
+- apply overlay when matching blocks are found;
+- fallback to generated code when overlay block is missing;
+- write warnings/diagnostics for unresolved overlay blocks;
+- do not fail generation only because an overlay block was not applied.
+
+A strict/fail-on-missing mode may be added later as a separate task if needed.
 
 ---
 
@@ -110,14 +136,12 @@ Supported values:
 Example CLI:
 
 ```bash
-extract_code_overlay --extension-path input/etalonCode --output code_overlay.json
+extract_code_overlay --extension-path input/etalonCode --output config/code_overlay.json
 ```
-
-If `--extension-path` is omitted, the tool should use `code_overlay.reference_extension_path` from config and then fall back to `input/etalonCode`.
 
 Responsibilities:
 
-- traverse extension objects;
+- traverse reference extension XML dump;
 - extract supported code blocks;
 - generate stable identifiers;
 - serialize overlay data;
@@ -205,14 +229,18 @@ code_overlay_report.json
 - create new metadata objects;
 - affect object inclusion rules;
 - modify merge priority logic;
-- change Native/Adopted selection.
+- change Native/Adopted selection;
+- read the full reference XML dump during main generation;
+- fail generation only because an overlay block was not applied in MVP.
 
 ## Overlay must:
 
 - override only code content;
 - preserve generated structure;
 - support forward regeneration;
-- support Git diff/review workflow.
+- support Git diff/review workflow;
+- use `config/code_overlay.json` as the prepared runtime artifact;
+- fallback to generated code for unresolved overlay blocks in MVP.
 
 ---
 
@@ -230,11 +258,14 @@ code_overlay_report.json
 
 Minimum regression scenarios:
 
+- extraction from default `input/etalonCode` dump path;
+- overlay artifact written to `config/code_overlay.json`;
+- main pipeline reads `config/code_overlay.json`;
+- main pipeline does not read `input/etalonCode` directly;
 - modified form module transfer;
 - generated fallback when overlay block is missing;
-- strict mode failure;
+- warning/diagnostic when overlay block is unresolved;
+- generation does not fail only because an overlay block is unresolved;
 - renamed object behavior;
 - removed form behavior;
 - merge target object support.
-- configured reference extension path is used;
-- default `input/etalonCode` path is used when config parameter is absent.
