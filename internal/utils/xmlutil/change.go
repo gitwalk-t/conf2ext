@@ -2411,7 +2411,7 @@ func mergeDefinedTypeTargetComposition(
 			}
 			targetValues[value] = struct{}{}
 		}
-		checkEntries = append(checkEntries, child.Copy())
+		checkEntries = append(checkEntries, child)
 	}
 
 	extendEntries := make([]metadataValueEntry, 0)
@@ -2445,29 +2445,35 @@ func collectDefinedTypeTypeEntries(container *etree.Element) []metadataValueEntr
 		return nil
 	}
 
-	appendTypeEntry := func(result []metadataValueEntry, child *etree.Element) []metadataValueEntry {
-		if child == nil || localName(child.Tag) != "Type" {
-			return result
-		}
-		value := strings.TrimSpace(child.Text())
-		if value == "" {
-			return result
-		}
-		return append(result, metadataValueEntry{
-			Value:   value,
-			Element: child.Copy(),
-		})
-	}
-
-	result := make([]metadataValueEntry, 0)
+	result := make([]metadataValueEntry, 0, len(container.ChildElements()))
 	for _, child := range container.ChildElements() {
 		switch localName(child.Tag) {
 		case "CheckValue", "ExtendValue":
 			for _, nested := range child.ChildElements() {
-				result = appendTypeEntry(result, nested)
+				if localName(nested.Tag) != "Type" {
+					continue
+				}
+				value := strings.TrimSpace(nested.Text())
+				if value == "" {
+					continue
+				}
+				result = append(result, metadataValueEntry{
+					Value:   value,
+					Element: nested,
+				})
 			}
 		default:
-			result = appendTypeEntry(result, child)
+			if localName(child.Tag) != "Type" {
+				continue
+			}
+			value := strings.TrimSpace(child.Text())
+			if value == "" {
+				continue
+			}
+			result = append(result, metadataValueEntry{
+				Value:   value,
+				Element: child,
+			})
 		}
 	}
 	return result
@@ -2604,55 +2610,48 @@ func ensureDefinedTypeExtendedPropertyInternalInfo(definedType *etree.Element, t
 		return false
 	}
 
-	properties := definedType.FindElement("./*[local-name()='Properties']")
+	var properties *etree.Element
+	var internalInfo *etree.Element
+	propertiesIndex := -1
+	internalInfoIndex := -1
+	for i, child := range definedType.ChildElements() {
+		switch localName(child.Tag) {
+		case "Properties":
+			if properties == nil {
+				properties = child
+				propertiesIndex = i
+			}
+		case "InternalInfo":
+			if internalInfo == nil {
+				internalInfo = child
+				internalInfoIndex = i
+			}
+		}
+	}
 	if properties == nil {
 		return false
 	}
 
 	changed := false
-	internalInfo := definedType.FindElement("./*[local-name()='InternalInfo']")
 	if internalInfo == nil {
 		internalInfo = etree.NewElement("InternalInfo")
 		definedType.InsertChild(properties, internalInfo)
 		changed = true
-	} else if !comesBeforeSibling(definedType, internalInfo, properties) {
+	} else if propertiesIndex >= 0 && internalInfoIndex > propertiesIndex {
 		definedType.RemoveChild(internalInfo)
 		definedType.InsertChild(properties, internalInfo)
 		changed = true
 	}
 
-	name := strings.TrimSpace(textOf(properties, "Name"))
+	name := strings.TrimSpace(elementText(findDirectChildByLocalName(properties, "Name")))
 	if name == "" {
-		var targetProperties *etree.Element
-		if targetDefinedType != nil {
-			targetProperties = targetDefinedType.FindElement("./*[local-name()='Properties']")
-		}
-		name = strings.TrimSpace(textOf(targetProperties, "Name"))
+		name = strings.TrimSpace(elementText(findDirectChildByLocalName(findDirectChildByLocalName(targetDefinedType, "Properties"), "Name")))
 	}
 
 	typeID, valueID := collectDefinedTypeGeneratedTypeIDs(definedType, targetDefinedType)
 	changed = ensureDefinedTypeGeneratedType(internalInfo, name, typeID, valueID) || changed
 	changed = ensureDefinedTypeTypePropertyState(internalInfo) || changed
 	return changed
-}
-
-func comesBeforeSibling(parent *etree.Element, left *etree.Element, right *etree.Element) bool {
-	if parent == nil || left == nil || right == nil || left == right {
-		return false
-	}
-
-	leftIndex := -1
-	rightIndex := -1
-	for i, child := range parent.ChildElements() {
-		switch child {
-		case left:
-			leftIndex = i
-		case right:
-			rightIndex = i
-		}
-	}
-
-	return leftIndex >= 0 && rightIndex >= 0 && leftIndex < rightIndex
 }
 
 func collectDefinedTypeGeneratedTypeIDs(currentDefinedType *etree.Element, targetDefinedType *etree.Element) (string, string) {
@@ -2668,13 +2667,13 @@ func findDefinedTypeGeneratedTypeIDs(definedType *etree.Element) (string, string
 		return "", ""
 	}
 
-	generated := definedType.FindElement("./*[local-name()='InternalInfo']/*[local-name()='GeneratedType']")
+	generated := findDirectChildByLocalName(findDirectChildByLocalName(definedType, "InternalInfo"), "GeneratedType")
 	if generated == nil {
 		return "", ""
 	}
 
-	return strings.TrimSpace(textOfFirst(generated, "./*[local-name()='TypeId']")),
-		strings.TrimSpace(textOfFirst(generated, "./*[local-name()='ValueId']"))
+	return strings.TrimSpace(elementText(findDirectChildByLocalName(generated, "TypeId"))),
+		strings.TrimSpace(elementText(findDirectChildByLocalName(generated, "ValueId")))
 }
 
 func ensureDefinedTypeGeneratedType(internalInfo *etree.Element, name string, typeID string, valueID string) bool {
@@ -2695,7 +2694,7 @@ func ensureDefinedTypeGeneratedType(internalInfo *etree.Element, name string, ty
 	}
 
 	changed := false
-	generated := internalInfo.FindElement("./*[local-name()='GeneratedType']")
+	generated := findDirectChildByLocalName(internalInfo, "GeneratedType")
 	if generated == nil {
 		generated = etree.NewElement("xr:GeneratedType")
 		internalInfo.AddChild(generated)
@@ -2721,24 +2720,36 @@ func ensureDefinedTypeTypePropertyState(internalInfo *etree.Element) bool {
 		return false
 	}
 
-	for _, child := range internalInfo.ChildElements() {
-		if !strings.EqualFold(localName(child.Tag), "PropertyState") {
+	changed := false
+	var typePropertyState *etree.Element
+	for _, child := range append([]*etree.Element(nil), internalInfo.ChildElements()...) {
+		if localName(child.Tag) != "PropertyState" {
 			continue
 		}
-		propertyEl := child.FindElement("./*[local-name()='Property']")
-		if propertyEl == nil || !strings.EqualFold(strings.TrimSpace(propertyEl.Text()), "Type") {
+		propertyEl := findDirectChildByLocalName(child, "Property")
+		if propertyEl == nil || strings.TrimSpace(propertyEl.Text()) != "Type" {
 			continue
 		}
-		stateEl := child.FindElement("./*[local-name()='State']")
+		if typePropertyState != nil {
+			internalInfo.RemoveChild(child)
+			changed = true
+			continue
+		}
+		typePropertyState = child
+		stateEl := findDirectChildByLocalName(child, "State")
 		if stateEl == nil {
 			child.CreateElement("xr:State").SetText("MultiState")
-			return true
+			changed = true
+			continue
 		}
 		if strings.TrimSpace(stateEl.Text()) != "MultiState" {
 			stateEl.SetText("MultiState")
-			return true
+			changed = true
 		}
-		return false
+	}
+
+	if typePropertyState != nil {
+		return changed
 	}
 
 	propertyState := internalInfo.CreateElement("xr:PropertyState")
@@ -2765,7 +2776,7 @@ func ensureSimpleChildText(parent *etree.Element, tag, value string) bool {
 		return false
 	}
 
-	child := parent.FindElement("./*[local-name()='" + localName(tag) + "']")
+	child := findDirectChildByLocalName(parent, localName(tag))
 	if child == nil {
 		parent.CreateElement(tag).SetText(value)
 		return true
@@ -2775,6 +2786,25 @@ func ensureSimpleChildText(parent *etree.Element, tag, value string) bool {
 	}
 	child.SetText(value)
 	return true
+}
+
+func findDirectChildByLocalName(parent *etree.Element, name string) *etree.Element {
+	if parent == nil || name == "" {
+		return nil
+	}
+	for _, child := range parent.ChildElements() {
+		if localName(child.Tag) == name {
+			return child
+		}
+	}
+	return nil
+}
+
+func elementText(el *etree.Element) string {
+	if el == nil {
+		return ""
+	}
+	return el.Text()
 }
 
 func mergeExchangePlanContent(

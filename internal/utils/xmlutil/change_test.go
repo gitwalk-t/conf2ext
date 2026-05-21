@@ -3426,6 +3426,59 @@ func TestMergeDefinedTypeTargetCompositionUsesTargetGeneratedTypeIDsWhenCurrentM
 	}
 }
 
+func TestEnsureDefinedTypeTypePropertyStateDeduplicatesTypeEntries(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<InternalInfo xmlns:xr="http://v8.1c.ru/8.3/xcf/readable">
+  <xr:PropertyState>
+    <xr:Property>Type</xr:Property>
+    <xr:State>Extended</xr:State>
+  </xr:PropertyState>
+  <xr:PropertyState>
+    <xr:Property>Name</xr:Property>
+    <xr:State>Keep</xr:State>
+  </xr:PropertyState>
+  <xr:PropertyState>
+    <xr:Property>Type</xr:Property>
+    <xr:State>Another</xr:State>
+  </xr:PropertyState>
+</InternalInfo>`); err != nil {
+		t.Fatalf("read internal info xml: %v", err)
+	}
+
+	internalInfo := doc.Root()
+	if !ensureDefinedTypeTypePropertyState(internalInfo) {
+		t.Fatalf("expected duplicate Type property state to be normalized")
+	}
+
+	typeStateCount := 0
+	nameStateCount := 0
+	for _, propertyState := range internalInfo.ChildElements() {
+		property := strings.TrimSpace(textOfFirst(propertyState, "./*[local-name()='Property']"))
+		switch property {
+		case "Type":
+			typeStateCount++
+			if got := strings.TrimSpace(textOfFirst(propertyState, "./*[local-name()='State']")); got != "MultiState" {
+				t.Fatalf("expected deduplicated Type state to be MultiState, got %q", got)
+			}
+		case "Name":
+			nameStateCount++
+			if got := strings.TrimSpace(textOfFirst(propertyState, "./*[local-name()='State']")); got != "Keep" {
+				t.Fatalf("expected non-Type PropertyState to stay untouched, got %q", got)
+			}
+		}
+	}
+
+	if typeStateCount != 1 {
+		t.Fatalf("expected exactly one Type PropertyState after dedupe, got %d", typeStateCount)
+	}
+	if nameStateCount != 1 {
+		t.Fatalf("expected Name PropertyState to remain, got %d", nameStateCount)
+	}
+}
+
 func TestMergeDefinedTypeTargetCompositionLeavesOtherContainersUntouched(t *testing.T) {
 	t.Parallel()
 
