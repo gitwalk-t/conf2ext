@@ -158,6 +158,7 @@ Initial scope:
 - FormModule
 - CommandModule
 - CommonModule
+- SessionModule
 
 Future extensions are allowed.
 
@@ -173,6 +174,7 @@ Examples:
 Catalog.Номенклатура:ObjectModule
 Catalog.Номенклатура.Form.ФормаЭлемента:FormModule
 CommonModule.упо_Utils:CommonModule
+Session:SessionModule
 ```
 
 Matching rules must be centralized and covered by tests.
@@ -186,7 +188,6 @@ Example:
 ```json
 {
   "version": 1,
-  "source": "reference_extension",
   "blocks": [
     {
       "id": "Catalog.Номенклатура:ObjectModule",
