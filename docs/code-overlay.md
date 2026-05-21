@@ -43,6 +43,34 @@ The overlay layer must be applied BEFORE:
 
 ---
 
+# Reference Extension Location
+
+The reference extension XML dump path must be configurable.
+
+Default value:
+
+```text
+input/etalonCode
+```
+
+Configuration example:
+
+```json
+{
+  "code_source": "overlay",
+  "code_overlay": {
+    "reference_extension_path": "input/etalonCode",
+    "overlay_file": "code_overlay.json"
+  }
+}
+```
+
+`input/etalonCode` is only the default convention. Implementations must not hard-code this path as the only allowed source.
+
+The extraction tool and generation pipeline must use the configured path when it is provided and fall back to `input/etalonCode` only when the parameter is absent.
+
+---
+
 # Overlay Source
 
 Overlay data is stored in a standalone service file:
@@ -82,8 +110,10 @@ Supported values:
 Example CLI:
 
 ```bash
-extract_code_overlay --extension-path path/to/ext --output code_overlay.json
+extract_code_overlay --extension-path input/etalonCode --output code_overlay.json
 ```
+
+If `--extension-path` is omitted, the tool should use `code_overlay.reference_extension_path` from config and then fall back to `input/etalonCode`.
 
 Responsibilities:
 
@@ -206,3 +236,5 @@ Minimum regression scenarios:
 - renamed object behavior;
 - removed form behavior;
 - merge target object support.
+- configured reference extension path is used;
+- default `input/etalonCode` path is used when config parameter is absent.
