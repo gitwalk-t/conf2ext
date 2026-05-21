@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Codex workflow documentation
+    url: https://github.com/gitwalk-t/conf2ext/blob/main/.codex/skills/use-github-issue-task.md
+    about: Правила работы Codex через GitHub Issue
