@@ -1,33 +1,77 @@
 # Индекс контекста агента
 
-Цель файла — не расширять обязательный контекст, а сократить его. Перед началом задачи выбери минимальный набор документов ниже.
+Цель — минимизировать startup-context и направлять агента только к нужным semantic layers.
 
-## Всегда читать первым
+## Читать первым
 
 1. `.codex/agent-start.md`
 2. Этот индекс
 
-## Маршруты по типам задач
+## Machine-readable task routes
 
-| Задача | Читать | Не читать без необходимости |
-|---|---|---|
-| Быстро понять проект | `.codex/agent-start.md` | `docs/debugging.md`, полный `.codex/context.md`, handoff |
-| Ревью коммита или архитектурная оценка | `.codex/agent-start.md`, `docs/architecture.md`, при необходимости `.codex/context/terms.md` | run skills, debugging |
-| Правка XML/classification-логики | `.codex/agent-start.md`, `.codex/context/xml-rules.md`, `.codex/context/terms.md`, релевантный фрагмент `docs/architecture.md` | handoff целиком, debugging целиком |
-| Ошибка загрузки расширения | `.codex/agent-start.md`, `docs/debugging.md`, затем точечно `.codex/context/xml-rules.md` | architecture целиком |
-| Запуск или проверка прогона | `.codex/skills/run-conversion.md` или `.codex/skills/check-run-status.md` | общий context, architecture |
-| Продолжение незавершенной отладки | `.codex/context/current-state.md`, `.codex/handoff.md`, затем релевантный skill/debugging | README целиком |
-| Обновление терминологии | `.codex/context/terms.md` | debugging, run skills |
-| Обновление пользовательской документации | `README.md`, `docs/technical-spec.md`, релевантные `docs/*` | `.codex/handoff.md` |
+### Form debugging
 
-## Правило добавления новой информации
+```text
+.codex/tasks/form-debugging.md
+```
 
-- Долгоживущее правило XML/classification — в `.codex/context/xml-rules.md`.
-- Термин или словарь — в `.codex/context/terms.md`.
-- Текущий временный статус расследования — в `.codex/context/current-state.md` или `.codex/handoff.md`.
-- Порядок запуска/мониторинга — в `.codex/skills/*`.
-- Человеко-читаемое описание проекта — в `README.md` или `docs/*`.
+### Classification bug
 
-## Правило экономии токенов
+```text
+.codex/tasks/classification-bug.md
+```
 
-Не читай все документы подряд. Если задача не требует исторического статуса, не открывай `.codex/handoff.md`. Если задача не связана с запуском 1С, не открывай run skills. Если задача не связана с XML/classification, не открывай полный набор XML-правил.
+### Loading/XDTO error
+
+```text
+.codex/tasks/loading-error.md
+```
+
+## Stable knowledge
+
+### XML subdomains
+
+- `.codex/context/classification.md`
+- `.codex/context/forms.md`
+- `.codex/context/target-merge.md`
+- `.codex/context/cleanup.md`
+- `.codex/context/terms.md`
+
+### Architecture
+
+- `docs/architecture.md`
+
+### Debugging cookbook
+
+- `docs/debugging.md`
+
+## Execution layer
+
+- `.codex/skills/run-conversion.md`
+- `.codex/skills/check-run-status.md`
+- `.codex/skills/cleanup-run-tails.md`
+
+## Operational state
+
+- `.codex/context/current-state.md`
+- `.codex/handoff.md`
+
+## Anti-patterns
+
+- `.codex/patterns/dangerous-refactors.md`
+
+## Правила маршрутизации
+
+- Использовать task-route файл вместо ручного выбора контекста.
+- Не читать весь XML-domain подряд.
+- Не читать operational state для обычной задачи.
+- Не читать debugging cookbook без debugging-задачи.
+- Не читать orchestration skills без run/monitoring-задачи.
+
+## Куда класть новую информацию
+
+- XML/classification rules → `.codex/context/*`
+- Task workflow → `.codex/tasks/*`
+- Operational state → `.codex/context/current-state.md` или `.codex/handoff.md`
+- Anti-patterns/regressions → `.codex/patterns/*`
+- Human-facing docs → `README.md` или `docs/*`
