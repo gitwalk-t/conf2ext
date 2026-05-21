@@ -6,6 +6,16 @@
 - Non-native формы не являются источником `RefDrivenInclusion`.
 - Если форма не должна переноситься — удаляется целиком.
 
+## Report / DataProcessor adopted transfer
+
+Для `Report` / `DataProcessor` при non-Native / adopted-переносе очищаются:
+- `MainForm`
+- `MainSettingsForm`
+- `MainVariantForm`
+- `MainDataCompositionSchema`
+
+Child-команды таких объектов не сохраняются сами по себе; они могут остаться только если `упо_SearchResult` собрал переносимый код из `CommandModule`.
+
 ## AdoptedStubExt(Form)
 
 Используется для form-driven target objects.

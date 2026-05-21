@@ -6477,6 +6477,114 @@ func TestAddSearchResultCommandOverlaySkipsCommandWithoutTransferredCode(t *test
 	}
 }
 
+func TestNormalizeAdoptedObjectCompositionKeepsOnlySearchResultTransferredChildCommandsForReportsAndProcessors(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		ownerKind string
+		ownerDir  string
+		ownerName string
+		rootTag   string
+	}{
+		{
+			name:      "report",
+			ownerKind: "Report",
+			ownerDir:  "Reports",
+			ownerName: "ТестОтчет",
+			rootTag:   "Report",
+		},
+		{
+			name:      "data processor",
+			ownerKind: "DataProcessor",
+			ownerDir:  "DataProcessors",
+			ownerName: "ТестОбработка",
+			rootTag:   "DataProcessor",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			doc := etree.NewDocument()
+			if err := doc.ReadFromString(fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <%s>
+    <Properties>
+      <Name>%s</Name>
+    </Properties>
+    <ChildObjects>
+      <Command>
+        <Properties><Name>КомандаСПереносом</Name></Properties>
+      </Command>
+      <Command>
+        <Properties><Name>КомандаБезПереноса</Name></Properties>
+      </Command>
+    </ChildObjects>
+  </%s>
+</MetaDataObject>`, tc.rootTag, tc.ownerName, tc.rootTag)); err != nil {
+				t.Fatalf("read xml: %v", err)
+			}
+
+			root := t.TempDir()
+			objectDir := filepath.Join(root, tc.ownerDir, tc.ownerName)
+			transferModuleDir := filepath.Join(objectDir, "Commands", "КомандаСПереносом", "Ext")
+			if err := os.MkdirAll(transferModuleDir, 0o755); err != nil {
+				t.Fatalf("mkdir transfer module dir: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(transferModuleDir, "CommandModule.bsl"), []byte(strings.Join([]string{
+				"//{EPM}",
+				"Процедура Выполнить()",
+				"\t//{EPM}",
+				"КонецПроцедуры",
+				"",
+			}, "\n")), 0o644); err != nil {
+				t.Fatalf("write transfer module: %v", err)
+			}
+
+			plainModuleDir := filepath.Join(objectDir, "Commands", "КомандаБезПереноса", "Ext")
+			if err := os.MkdirAll(plainModuleDir, 0o755); err != nil {
+				t.Fatalf("mkdir plain module dir: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(plainModuleDir, "CommandModule.bsl"), []byte("Процедура БезМаркеров()\nКонецПроцедуры\n"), 0o644); err != nil {
+				t.Fatalf("write plain module: %v", err)
+			}
+
+			state := newSearchResultState()
+			topCtx := &FileProcessingContext{
+				OwnerKey:  tc.ownerKind + "." + tc.ownerName,
+				OwnerKind: tc.ownerKind,
+			}
+
+			if err := addSearchResultCommandOverlay(state, objectDir, topCtx, "КомандаСПереносом", []string{"EPM"}, map[string][]string{"EPM": {"//{EPM}"}}, "упо_", true, ""); err != nil {
+				t.Fatalf("add transferred command overlay: %v", err)
+			}
+			if err := addSearchResultCommandOverlay(state, objectDir, topCtx, "КомандаБезПереноса", []string{"EPM"}, map[string][]string{"EPM": {"//{EPM}"}}, "упо_", true, ""); err != nil {
+				t.Fatalf("add plain command overlay: %v", err)
+			}
+
+			overlay := searchResultObjectOverlayForKey(state, topCtx.OwnerKey)
+			if !normalizeAdoptedObjectComposition(doc, tc.ownerKind, overlay) {
+				t.Fatalf("expected adopted composition to change")
+			}
+
+			childObjects := doc.FindElement("//*[local-name()='ChildObjects']")
+			if childObjects == nil {
+				t.Fatalf("expected ChildObjects")
+			}
+			commands := childObjects.FindElements("./*[local-name()='Command']")
+			if len(commands) != 1 {
+				t.Fatalf("expected exactly one retained command after normalize, got %d", len(commands))
+			}
+			if got := strings.TrimSpace(textOf(commands[0].FindElement("./Properties"), "Name")); got != "КомандаСПереносом" {
+				t.Fatalf("expected only SearchResult-transferred command to remain, got %q", got)
+			}
+		})
+	}
+}
+
 func TestCollectSearchResultStatePromotesExcludedObjectAndPreservesFormPaths(t *testing.T) {
 	t.Parallel()
 

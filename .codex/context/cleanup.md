@@ -5,6 +5,7 @@
 Для `AdoptedStub` не переносить:
 - `ManagerModule`
 - `ObjectModule`
+- `RecordSetModule`
 - `ValueManagerModule`
 - `Module`
 - `CommandModule`
@@ -40,6 +41,10 @@
 - `Form.xml`
 
 удалять ссылки на отсутствующие metadata commands.
+
+Для `Report` / `DataProcessor` в non-Native / adopted-переносе:
+- child-команды не сохраняются обычным retained-command flow;
+- child-команда может остаться только через `упо_SearchResult`, если из `CommandModule` реально собрался переносимый код.
 
 ## Type-bearing cleanup
 
