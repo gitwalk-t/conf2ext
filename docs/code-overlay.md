@@ -19,6 +19,25 @@ It is used only by a standalone extraction tool to build a reusable overlay arti
 
 ---
 
+# Architecture Decision: SearchResult-Aware Overlay Compiler
+
+The extraction tool is intentionally not a raw dump exporter.
+
+It is a SearchResult-aware overlay compiler:
+
+- reads the reference extension XML dump from `input/etalonCode`;
+- reads the active project config from `configs/config.json`;
+- reads extractor policy from `cmd/extract_code_overlay/config.json`;
+- reads the generated `упо_SearchResult` template under the configured input path;
+- exports only code blocks that are relevant for the generated extension template;
+- extends that set with explicit extractor `included` entries;
+- removes explicit extractor `forbidden` entries;
+- writes the prepared runtime artifact to `configs/code_overlay.json`.
+
+This keeps the overlay small, reviewable, and aligned with the generated extension structure.
+
+---
+
 # High-Level Architecture
 
 Two separate stages are required.
@@ -136,7 +155,16 @@ A strict/fail-on-missing mode may be added later as a separate task if needed.
 Example CLI:
 
 ```bash
-extract_code_overlay --extension-path input/etalonCode --output configs/code_overlay.json --extractor-config cmd/extract_code_overlay/config.json
+extract_code_overlay --extension-path input/etalonCode --output configs/code_overlay.json --config configs/config.json --extractor-config cmd/extract_code_overlay/config.json
+```
+
+Default paths:
+
+```text
+extension path:   input/etalonCode
+output artifact:  configs/code_overlay.json
+project config:   configs/config.json
+extractor config: cmd/extract_code_overlay/config.json
 ```
 
 Responsibilities:
@@ -154,6 +182,31 @@ Responsibilities:
 - generate stable identifiers;
 - serialize overlay data;
 - store metadata and hashes.
+
+---
+
+# Extractor Policy File
+
+Extractor-specific policy is stored separately from the main project config:
+
+```text
+cmd/extract_code_overlay/config.json
+```
+
+Current structure:
+
+```json
+{
+  "included": [],
+  "forbidden": []
+}
+```
+
+`included` extends the SearchResult-derived allowlist for blocks that must be exported even if they are absent from `упо_SearchResult`.
+
+`forbidden` excludes blocks even if they are present in the SearchResult-derived allowlist or explicit includes.
+
+Entries should use canonical overlay block identifiers unless a documented symbolic alias is supported by the implementation.
 
 ---
 
@@ -208,6 +261,14 @@ Example:
   ]
 }
 ```
+
+The artifact should be deterministic:
+
+- stable block identifiers;
+- normalized relative paths with `/` separators;
+- normalized line endings;
+- stable block ordering;
+- stable hash computed from normalized content.
 
 ---
 
@@ -269,6 +330,13 @@ Minimum regression scenarios:
 
 - extraction from default `input/etalonCode` dump path;
 - overlay artifact written to `configs/code_overlay.json`;
+- project config loaded from `configs/config.json`;
+- extractor policy loaded from `cmd/extract_code_overlay/config.json`;
+- SearchResult-derived allowlist is respected;
+- extractor `included` entries are exported;
+- extractor `forbidden` entries are skipped;
+- SessionModule extraction;
+- empty modules are skipped;
 - main pipeline reads `configs/code_overlay.json`;
 - main pipeline does not read `input/etalonCode` directly;
 - modified form module transfer;
