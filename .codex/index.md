@@ -50,6 +50,7 @@
 - `.codex/skills/run-conversion.md`
 - `.codex/skills/check-run-status.md`
 - `.codex/skills/cleanup-run-tails.md`
+- `.codex/skills/use-github-issue-task.md`
 
 ## Operational state
 
@@ -63,6 +64,7 @@
 ## Правила маршрутизации
 
 - Использовать task-route файл вместо ручного выбора контекста.
+- Использовать GitHub Issue как основной контейнер задачи для Codex.
 - Не читать весь XML-domain подряд.
 - Не читать operational state для обычной задачи.
 - Не читать debugging cookbook без debugging-задачи.
