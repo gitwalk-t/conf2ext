@@ -2,52 +2,39 @@
 
 ## Когда использовать
 
-Используй этот skill, когда пользователь просит:
+Используй этот orchestrator, когда пользователь просит:
 - запустить прогон
-- проверить сборку расширения
 - выполнить `go run`
-- получить свежий дамп
-- проверить ошибку загрузки после изменений
+- проверить сборку расширения
+- получить свежий dump
+- проверить загрузку после изменений
 
-## Обязательный контекст
+## Назначение
 
-Активный конфиг по умолчанию:
+Этот skill только оркестрирует запуск и мониторинг.
 
-`configs/config.json`
-
-Рабочий каталог для запуска:
-
-- запуск выполняется из текущего worktree / текущего `cwd`, если пользователь явно не указал другой путь
-- при наличии нескольких worktree нельзя молча запускать “похожую” копию репозитория; сначала зафиксируй, в каком каталоге запускается прогон
-- все пути к логам, `output/_tmp`, `output/_log/xml_dumps`, `configs/config.json` и `configs/base-bindings.json` трактуются относительно этого текущего worktree
-
-Локальные настройки:
-
-- перед запуском используй фактическое текущее содержимое `configs/config.json`
-- если в worktree локально изменен `configs/base-bindings.json`, прогон тоже должен использовать именно его текущее содержимое
-- не подменяй локальный конфиг “ожидаемым checked-in baseline”, если пользователь сам изменил настройки в этом worktree
-
-## Используемые helper skills
-
-Перед запуском обязательно используй:
+Детали cleanup и status-check вынесены в helper skills:
 - `.codex/skills/cleanup-run-tails.md`
 - `.codex/skills/check-run-status.md`
 
-`cleanup-run-tails.md` отвечает за:
-- безопасное завершение старых project-процессов
-- cleanup зависших wrapper-процессов
-- запрет завершения чужих `1cv8.exe`
+## Обязательный контекст
 
-`check-run-status.md` отвечает за:
-- определение состояния текущего прогона
-- проверку stdout/stderr
-- проверку dump snapshot
-- проверку `Configuration.xml`
-- вывод status summary
+По умолчанию использовать:
 
-## Порядок работы orchestrator
+```text
+configs/config.json
+```
 
-1. Выполнить `.codex/skills/cleanup-run-tails.md`
+Все пути трактуются относительно текущего worktree / текущего `cwd`.
+
+## Порядок работы
+
+1. Выполнить:
+
+```text
+.codex/skills/cleanup-run-tails.md
+```
+
 2. Выполнить:
 
 ```powershell
@@ -55,13 +42,7 @@ go build ./...
 go test ./...
 ```
 
-### PowerShell gotchas
-
-Если orchestrator пишет вспомогательные PowerShell-скрипты (cleanup/status wrapper), избегай имен переменных, которые конфликтуют со встроенными переменными PowerShell. Минимально важное:
-- не используй `$PID` как имя переменной: это встроенная read-only переменная
-- для чтения PID из файла используй `$pidVal` / `$wrapperPid` / `$runPid`
-
-3. Запустить новый прогон только hidden wrapper-процессом:
+3. Запустить hidden wrapper:
 
 ```powershell
 $runTimestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -85,95 +66,58 @@ $process = Start-Process powershell `
     )
 
 $process.Id | Set-Content -Encoding UTF8 $pidFile
-"run timestamp: $runTimestamp"
-"wrapper pid: $($process.Id)"
-"stdout: $stdoutLog"
-"stderr: $stderrLog"
 ```
 
 Не запускать `go run` напрямую в активной консоли.
 
-Перед стартом wrapper:
+## Heartbeat monitoring
 
-- проверь, не остался ли stale `output/_log/last_run.txt` от предыдущего запуска
-- `last_run.txt` можно использовать только как вспомогательный артефакт; он не должен считаться источником истины раньше, чем появятся pid/log-файлы нового `runTimestamp`
-- текущий запуск всегда определяется по новому `run-<timestamp>.pid` и связанным stdout/stderr, а не по старому `last_run.txt`
-
-4. В ответе пользователю указать:
-- `runTimestamp`
-- PID wrapper-процесса
-- stdout log
-- stderr log
-
-4.5. Сразу после старта wrapper завести heartbeat-monitoring раз в 10 минут:
-
-- Heartbeat должен быть создан в этом же треде
-- Для проверки статуса использовать `.codex/skills/check-run-status.md`
-- Не перезапускать прогон и не завершать процессы
-- В ответе пользователю явно указать, что heartbeat создан, и его период (10 минут)
-
-4.6. Перед тем как “отпустить” запуск, убедиться, что heartbeat действительно заведен:
-
-- если heartbeat отсутствует, создать его сразу, не дожидаясь отдельного напоминания
-
-5. Для heartbeat/monitoring всегда использовать:
-
-`.codex/skills/check-run-status.md`
-
-6. Если status helper показывает:
+Сразу после запуска:
+- создать heartbeat-monitoring раз в 10 минут
+- heartbeat должен использовать только:
 
 ```text
-PAUSED_AFTER_SUCCESS
+.codex/skills/check-run-status.md
 ```
 
-то вызвать:
+- heartbeat не должен:
+  - перезапускать прогон
+  - завершать процессы
+  - запускать cleanup
 
-`.codex/skills/cleanup-run-tails.md`
+## Resume-from-validation
 
-## Правило остановки heartbeat
-
-Если прогон завершился (не `RUNNING`), heartbeat-мониторинг не должен продолжать работать. Сразу останови heartbeat (удали или поставь на паузу) и сообщи об этом пользователю.
-
-## Resume после validate dynamic list contracts
-
-Если status helper показывает, что прогон упал после:
+Если прогон упал после:
 
 ```text
 xml step: validate dynamic list contracts
 ```
 
-можно продолжить:
+использовать:
 
 ```powershell
-go run .\\cmd\\changefiles\\main.go .\\configs\\config.json <path-to-output\\_tmp\\v8_src*> --resume-from-validation
+go run .\\cmd\\changefiles\\main.go .\\configs\\config.json <path-to-v8_src*> --resume-from-validation
 ```
 
-Перед resume обязательно использовать:
+Перед resume обязательно выполнить:
 
-`.codex/skills/check-run-status.md`
+```text
+.codex/skills/check-run-status.md
+```
 
-чтобы подтвердить:
-- что temp dump относится к текущему запуску
-- что dump является dump расширения
-- что dump не является старым `v8_src*`
+## PowerShell gotchas
 
-## Финальный ответ пользователю
+Не использовать `$PID` как имя переменной.
 
-После завершения прогона укажи:
-- результат `go build ./...`
-- результат `go test ./...`
-- результат `go run`
-- путь к свежему dump snapshot
-- путь к `.cfe`, если он создан
-- ключевую ошибку и файл, если прогон упал
+Использовать нейминг:
+- `$pidVal`
+- `$wrapperPid`
+- `$runPid`
 
 ## Запреты
 
-- Не завершай процессы напрямую из orchestrator.
-- Любое завершение процессов выполняется только через:
-  `.codex/skills/cleanup-run-tails.md`
-- Не делай широкий рефакторинг во время прогона.
-- Не удаляй временные каталоги без необходимости.
-- Не называй старый dump свежим.
-- Не анализируй BSL как источник правил классификации.
-- Не меняй бизнес-логику ради прохождения прогона без отдельной задачи.
+- Не завершать процессы напрямую из orchestrator.
+- Любой cleanup — только через `cleanup-run-tails.md`.
+- Не делать широкий рефакторинг во время расследования.
+- Не считать старый dump свежим без проверки `Configuration.xml`.
+- Не анализировать BSL как источник XML/classification правил.
