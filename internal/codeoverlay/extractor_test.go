@@ -28,7 +28,7 @@ func TestExtractBuildsExpectedBlocks(t *testing.T) {
 		"CommonForm.ОбщаяФорма":      {},
 		"CommonModule.ОбщийМодуль":   {},
 		"Session":                    {},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -85,11 +85,11 @@ func TestExtractIsDeterministic(t *testing.T) {
 		"Catalog.Альфа":     {},
 		"CommonModule.Бета": {},
 	}
-	first, err := Extract(root, allowedObjects)
+	first, err := Extract(root, allowedObjects, nil)
 	if err != nil {
 		t.Fatalf("first Extract: %v", err)
 	}
-	second, err := Extract(root, allowedObjects)
+	second, err := Extract(root, allowedObjects, nil)
 	if err != nil {
 		t.Fatalf("second Extract: %v", err)
 	}
@@ -112,6 +112,7 @@ func TestRunUsesDefaultPathsAndWritesOutput(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "configs/config.json", "{\n  \"input_path\": \"/input/source\",\n  \"output_path\": \"/output/demo.cfe\",\n  \"conversion_type\": \"srcConvert\"\n}")
 	writeFile(t, root, "configs/searchingTemplateText.json", "{\n  \"PM\": [\"//{PM}\"]\n}")
+	writeFile(t, root, DefaultExtractorConfigPath, "{\n  \"forbidden\": [\"CommonModule.Запрещенный:CommonModule\"]\n}")
 	writeFile(t, root, "input/source/CommonTemplates/упо_SearchResult/Ext/Template.txt", "{\n  \"ОбщиеМодули\": {\n    \"ОбщийМодуль\": {\n      \"ОбщийМодуль\": {\n        \"PM\": 1\n      }\n    }\n  }\n}")
 	writeFile(t, root, filepath.ToSlash(filepath.Join(DefaultExtensionPath, "CommonModules", "ОбщийМодуль", "Ext", "Module.bsl")), "Процедура Тест()\nКонецПроцедуры\n")
 	writeFile(t, root, filepath.ToSlash(filepath.Join(DefaultExtensionPath, "CommonModules", "ЛишнийМодуль", "Ext", "Module.bsl")), "Процедура Лишний()\nКонецПроцедуры\n")
@@ -143,6 +144,9 @@ func TestRunUsesDefaultPathsAndWritesOutput(t *testing.T) {
 	if !strings.HasSuffix(filepath.ToSlash(result.ConfigPath), filepath.ToSlash(DefaultConfigPath)) {
 		t.Fatalf("unexpected default config path: %q", result.ConfigPath)
 	}
+	if !strings.HasSuffix(filepath.ToSlash(result.ExtractorConfigPath), filepath.ToSlash(DefaultExtractorConfigPath)) {
+		t.Fatalf("unexpected default extractor config path: %q", result.ExtractorConfigPath)
+	}
 
 	outputBytes, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(DefaultOutputPath)))
 	if err != nil {
@@ -165,7 +169,7 @@ func TestExtractFiltersByTopLevelObjects(t *testing.T) {
 
 	artifact, err := Extract(root, map[string]struct{}{
 		"Catalog.ТестКаталог": {},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -190,13 +194,36 @@ func TestExtractSkipsEmptyModuleContent(t *testing.T) {
 
 	artifact, err := Extract(root, map[string]struct{}{
 		"Catalog.ПустойКаталог": {},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
 
 	if len(artifact.Blocks) != 0 {
 		t.Fatalf("expected empty module to be skipped, got %#v", artifact.Blocks)
+	}
+}
+
+func TestExtractSkipsForbiddenBlocks(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "CommonModules/РазрешенныйМодуль/Ext/Module.bsl", "Процедура Разрешенный()\nКонецПроцедуры\n")
+	writeFile(t, root, "CommonModules/ЗапрещенныйМодуль/Ext/Module.bsl", "Процедура Запрещенный()\nКонецПроцедуры\n")
+
+	artifact, err := Extract(root, map[string]struct{}{
+		"CommonModule.РазрешенныйМодуль": {},
+		"CommonModule.ЗапрещенныйМодуль": {},
+	}, map[string]struct{}{
+		"CommonModule.ЗапрещенныйМодуль:CommonModule": {},
+	})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+
+	if len(artifact.Blocks) != 1 {
+		t.Fatalf("expected one allowed block, got %#v", artifact.Blocks)
+	}
+	if artifact.Blocks[0].ID != "CommonModule.РазрешенныйМодуль:CommonModule" {
+		t.Fatalf("unexpected remaining block id: %q", artifact.Blocks[0].ID)
 	}
 }
 

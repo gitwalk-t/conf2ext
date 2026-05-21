@@ -136,15 +136,18 @@ A strict/fail-on-missing mode may be added later as a separate task if needed.
 Example CLI:
 
 ```bash
-extract_code_overlay --extension-path input/etalonCode --output configs/code_overlay.json
+extract_code_overlay --extension-path input/etalonCode --output configs/code_overlay.json --extractor-config cmd/extract_code_overlay/config.json
 ```
 
 Responsibilities:
 
 - traverse reference extension XML dump;
 - load active project config from `configs/config.json`;
+- load extractor config from `cmd/extract_code_overlay/config.json`;
 - read `CommonTemplates/упо_SearchResult/Ext/Template.txt` under configured `input_path`;
-- export code only for objects requested by that SearchResult template;
+- export code only for blocks whose top-level object is requested by that SearchResult template;
+- skip blocks explicitly listed in extractor `forbidden`;
+- skip blocks with empty BSL content;
 - extract supported code blocks;
 - generate stable identifiers;
 - serialize overlay data;

@@ -23,6 +23,9 @@ func TestParseOptionsUsesDefaults(t *testing.T) {
 	if opts.configPath != codeoverlay.DefaultConfigPath {
 		t.Fatalf("unexpected default config path: got %q want %q", opts.configPath, codeoverlay.DefaultConfigPath)
 	}
+	if opts.extractorConfigPath != codeoverlay.DefaultExtractorConfigPath {
+		t.Fatalf("unexpected default extractor config path: got %q want %q", opts.extractorConfigPath, codeoverlay.DefaultExtractorConfigPath)
+	}
 }
 
 func TestRunPassesStandaloneOptionsToExtractor(t *testing.T) {
@@ -41,15 +44,16 @@ func TestRunPassesStandaloneOptionsToExtractor(t *testing.T) {
 					{ID: "CommonModule.Тест:CommonModule"},
 				},
 			},
-			ConfigPath:    "resolved/configs/config.json",
-			ExtensionPath: "resolved/input/etalonCode",
-			OutputPath:    "resolved/configs/code_overlay.json",
+			ConfigPath:          "resolved/configs/config.json",
+			ExtractorConfigPath: "resolved/cmd/extract_code_overlay/config.json",
+			ExtensionPath:       "resolved/input/etalonCode",
+			OutputPath:          "resolved/configs/code_overlay.json",
 		}, nil
 	}
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := run([]string{"--extension-path", "custom/input", "--output", "custom/output.json", "--config", "custom/config.json"}, &stdout, &stderr)
+	exitCode := run([]string{"--extension-path", "custom/input", "--output", "custom/output.json", "--config", "custom/config.json", "--extractor-config", "custom/extractor.json"}, &stdout, &stderr)
 	if exitCode != 0 {
 		t.Fatalf("run exit code = %d, stderr=%s", exitCode, stderr.String())
 	}
@@ -63,10 +67,14 @@ func TestRunPassesStandaloneOptionsToExtractor(t *testing.T) {
 	if gotOpts.ConfigPath != "custom/config.json" {
 		t.Fatalf("unexpected config path passed to extractor: %q", gotOpts.ConfigPath)
 	}
+	if gotOpts.ExtractorConfigPath != "custom/extractor.json" {
+		t.Fatalf("unexpected extractor config path passed to extractor: %q", gotOpts.ExtractorConfigPath)
+	}
 
 	expected := "" +
 		"overlay blocks extracted: 1\n" +
 		"config path: resolved/configs/config.json\n" +
+		"extractor config: resolved/cmd/extract_code_overlay/config.json\n" +
 		"extension path: resolved/input/etalonCode\n" +
 		"output: resolved/configs/code_overlay.json\n"
 	if stdout.String() != expected {

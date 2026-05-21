@@ -18,10 +18,11 @@ import (
 )
 
 const (
-	SchemaVersion        = 1
-	DefaultExtensionPath = "input/etalonCode"
-	DefaultOutputPath    = "configs/code_overlay.json"
-	DefaultConfigPath    = "configs/config.json"
+	SchemaVersion              = 1
+	DefaultExtensionPath       = "input/etalonCode"
+	DefaultOutputPath          = "configs/code_overlay.json"
+	DefaultConfigPath          = "configs/config.json"
+	DefaultExtractorConfigPath = "cmd/extract_code_overlay/config.json"
 )
 
 var metadataKinds = map[string]string{
@@ -87,16 +88,18 @@ type Block struct {
 }
 
 type Options struct {
-	ExtensionPath string
-	OutputPath    string
-	ConfigPath    string
+	ExtensionPath       string
+	OutputPath          string
+	ConfigPath          string
+	ExtractorConfigPath string
 }
 
 type Result struct {
-	Artifact      Artifact
-	ExtensionPath string
-	OutputPath    string
-	ConfigPath    string
+	Artifact            Artifact
+	ExtensionPath       string
+	OutputPath          string
+	ConfigPath          string
+	ExtractorConfigPath string
 }
 
 func Run(opts Options) (Result, error) {
@@ -112,6 +115,10 @@ func Run(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("не удалось нормализовать путь к конфигу проекта: %w", err)
 	}
+	extractorConfigPath, err := resolvePath(opts.ExtractorConfigPath, DefaultExtractorConfigPath)
+	if err != nil {
+		return Result{}, fmt.Errorf("не удалось нормализовать путь к конфигу extractor: %w", err)
+	}
 
 	cfg, err := config.LoadConfigE(configPath)
 	if err != nil {
@@ -121,10 +128,22 @@ func Run(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("не удалось определить объекты из упо_SearchResult: %w", err)
 	}
+	forbiddenBlockIDs, err := loadForbiddenBlockIDs(extractorConfigPath)
+	if err != nil {
+		return Result{}, fmt.Errorf("не удалось загрузить конфиг extractor %s: %w", extractorConfigPath, err)
+	}
 
-	log.Printf("code overlay: start extraction extension_path=%s output=%s config=%s allowed_objects=%d", extensionPath, outputPath, configPath, len(allowedObjects))
+	log.Printf(
+		"code overlay: start extraction extension_path=%s output=%s config=%s extractor_config=%s allowed_objects=%d forbidden_blocks=%d",
+		extensionPath,
+		outputPath,
+		configPath,
+		extractorConfigPath,
+		len(allowedObjects),
+		len(forbiddenBlockIDs),
+	)
 
-	artifact, err := Extract(extensionPath, allowedObjects)
+	artifact, err := Extract(extensionPath, allowedObjects, forbiddenBlockIDs)
 	if err != nil {
 		return Result{}, err
 	}
@@ -134,14 +153,15 @@ func Run(opts Options) (Result, error) {
 
 	log.Printf("code overlay: extraction completed blocks=%d output=%s", len(artifact.Blocks), outputPath)
 	return Result{
-		Artifact:      artifact,
-		ExtensionPath: extensionPath,
-		OutputPath:    outputPath,
-		ConfigPath:    configPath,
+		Artifact:            artifact,
+		ExtensionPath:       extensionPath,
+		OutputPath:          outputPath,
+		ConfigPath:          configPath,
+		ExtractorConfigPath: extractorConfigPath,
 	}, nil
 }
 
-func Extract(extensionPath string, allowedObjects map[string]struct{}) (Artifact, error) {
+func Extract(extensionPath string, allowedObjects, forbiddenBlockIDs map[string]struct{}) (Artifact, error) {
 	resolvedExtensionPath, err := resolvePath(extensionPath, DefaultExtensionPath)
 	if err != nil {
 		return Artifact{}, fmt.Errorf("не удалось нормализовать путь к эталонному расширению: %w", err)
@@ -173,7 +193,7 @@ func Extract(extensionPath string, allowedObjects map[string]struct{}) (Artifact
 		if !ok {
 			return nil
 		}
-		if !shouldKeepBlock(block, allowedObjects) {
+		if !shouldKeepBlock(block, allowedObjects, forbiddenBlockIDs) {
 			return nil
 		}
 
@@ -339,12 +359,18 @@ func isSupportedModuleFilename(name string) bool {
 	}
 }
 
-func shouldKeepBlock(block Block, allowedObjects map[string]struct{}) bool {
+func shouldKeepBlock(block Block, allowedObjects, forbiddenBlockIDs map[string]struct{}) bool {
 	if len(allowedObjects) == 0 {
 		return false
 	}
-	_, ok := allowedObjects[topLevelObjectKey(block.Object)]
-	return ok
+	if _, ok := allowedObjects[topLevelObjectKey(block.Object)]; !ok {
+		return false
+	}
+	if _, forbidden := forbiddenBlockIDs[block.ID]; forbidden {
+		log.Printf("warning: code overlay: блок %s исключен extractor config forbidden", block.ID)
+		return false
+	}
+	return true
 }
 
 func topLevelObjectKey(object string) string {

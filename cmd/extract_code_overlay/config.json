@@ -1,0 +1,8 @@
+{
+  "forbidden": [
+    "DataProcessor.слкМенеджерЛицензий.Form.МенеджерЛицензийСЛК:FormModule",
+    "DataProcessor.слкМенеджерЛицензий.Command.слкМенеджерЛицензийСЛК:CommandModule",
+    "CommonModule.слкМенеджерЗащитыПовтИсп:CommonModule",
+    "CommonModule.ВызовОнлайнПоддержки:CommonModule"
+  ]
+}
