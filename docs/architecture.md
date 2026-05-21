@@ -1,134 +1,84 @@
 # Архитектура
 
+Документ описывает границы модулей и верхнеуровневый поток. Детальные XML/classification rules живут в `.codex/context/xml-rules.md`, терминология — в `.codex/context/terms.md`.
+
 ## Верхнеуровневый поток
 
-1. CLI или пример приложения загружает конфиг через `pkg/config`
-2. `internal/config` объединяет встроенные значения по умолчанию с пользовательским JSON и нормализует пути
-3. `internal/converter.RunConversion` выбирает `cfConvert` или `srcConvert`
-4. Конвертер подготавливает временные каталоги и временную 1С ИБ
-5. Метаданные выгружаются в файлы
-6. `internal/utils/xmlutil.ChangeFiles` загружает persisted identity map для `Adopted-*`, применяет optional base bindings и переписывает выгрузку в XML, пригодный для загрузки как расширение
-7. При `stop_after_xml_dump=true` конвейер останавливается после переписывания XML
-8. Переписанные файлы загружаются как расширение и выгружаются в `.cfe`
+1. CLI или пример приложения загружает конфиг через `pkg/config`.
+2. `internal/config` объединяет defaults с пользовательским JSON и нормализует пути.
+3. `internal/converter.RunConversion` выбирает `cfConvert` или `srcConvert`.
+4. Конвертер подготавливает временные каталоги и временную 1С ИБ.
+5. Метаданные выгружаются в XML-файлы.
+6. `internal/utils/xmlutil.ChangeFiles` переписывает XML-выгрузку в extension-compatible dump.
+7. При `stop_after_xml_dump=true` pipeline останавливается после XML rewrite.
+8. Переписанные файлы загружаются как extension и выгружаются в `.cfe`.
 
 ## Границы модулей
 
-- `cmd/`: CLI-оболочка вокруг загрузки конфига и запуска конвертации
-- `pkg/`: стабильные публичные обертки
-- `internal/config/`: схема конфига и логика объединения настроек
-- `internal/converter/`: оркестрация, временный ввод-вывод, интеграция с 1С runner
-- `internal/utils/xmlutil/`: классификация метаданных, нормализация XML, очистка, замена GUID
-- `internal/export_format/`: встроенная карта версий для выгрузки исходников
+- `cmd/` — CLI-оболочка вокруг загрузки конфига и запуска конвертации.
+- `pkg/` — стабильные публичные wrappers.
+- `internal/config/` — схема конфига, defaults, merge, path normalization, backward compatibility.
+- `internal/converter/` — orchestration, temp I/O, интеграция с 1С runner.
+- `internal/utils/xmlutil/` — XML loading, metadata owner detection, classification, cleanup, GUID rewrite.
+- `internal/export_format/` — встроенная карта export format -> platform version.
+- `internal/utils/fileutil/` — копирование дерева файлов для `srcConvert`.
 
-## XML rewrite pipeline
+## XML rewrite boundary
 
-`ChangeFiles` сейчас отвечает за:
-- загрузку XML-контекстов
-- определение владельца по пути/документу
-- специальные случаи для корня и языка
-- классификацию объектов с разделением на мягко исключенные и жестко исключенные
-- сбор единого soft-excluded набора: ссылки из `excluded_subsystems` плюс единичные объекты из `excluded_objects`
-- приоритеты классификации top-level объектов: `forbidden_*` сильнее всего; затем идет явный `Native` override из `included_Native_objects`; затем общий soft-exclude из `excluded_subsystems` / `excluded_objects`; затем обычный `Native` по native-prefix
-- `RefDrivenInclusion` по XML-ссылкам из оставленных `Native`-объектов
-- для восстановления soft-excluded объектов источниками `RefDrivenInclusion` считаем только `Native`-объекты и их формы; `Native`-подсистемы сами по себе для такого восстановления источником не являются
-- ненативная `Subsystem` переносится только как предок реально вложенной native-подсистемы; отдельного hardcoded special-root правила для `СтандартныеПодсистемы` / `ПодключаемыеОтчетыИОбработки` больше нет
-- особый случай для ненативных `DefinedType`, перенесенных как `AdoptedStubExt`: их состав тоже остается источником `RefDrivenInclusion`
-- если задан `target.xml_dump`, для `DefinedType`, `EventSubscription`, `ExchangePlan` сначала собираем `targetCompatibilitySet`: lightweight-коллектор читает только `DefinedTypes/*.xml`, `EventSubscriptions/*.xml`, `ExchangePlans/*.xml`, а затем этот набор применяется до promotion, в promotion guard и после promotion; `Native`-объекты этих типов допустимы всегда, adopted-объекты допустимы только при наличии top-level XML в target
-- возврат мягко исключенных объектов в `Native`, если на них есть ссылка из допустимого `Native`
-- добавление новых зависимостей как `AdoptedStub` или `AdoptedStubExt`
-- post-promotion merge `target.xml_dump` только для объектов из `CommonTemplate.упо_MetaDataFile`: `DefinedType` объединяется по `Properties/Type`, `ExchangePlan` — по `Ext/Content.xml`, `EventSubscription` — по `Properties/Source`; такие объекты идут как `AdoptedStubExtMetaData`, а не как обычный минимальный `AdoptedStub`, и сам merge не должен переигрывать `targetCompatibilitySet`
-- для target-merged `DefinedType` merge пишется не как flattened union: `Properties/Type` сериализуется как `xr:ExtendedProperty`, где `xr:CheckValue` хранит полный `TypeDescription` из `target.xml_dump`, а `xr:ExtendValue` — только добавленные `Native`-типы расширения без дублей target-состава
-- такой `xr:ExtendedProperty` у `DefinedType` требует согласованного `InternalInfo` самого объекта: `xr:GeneratedType` с `TypeId` / `ValueId` и ровно один `xr:PropertyState` для `Type` со `State=MultiState`; без этого XDTO-загрузка metadata XML ломается еще до проверки состава типов
-- target-ссылки из этого merge могут физически подтягивать отсутствующий top-level metadata-объект из `target.xml_dump` как `AdoptedStub`, но не превращают `target.xml_dump` в глобальный source graph
-- target-merge работает как lazy cached batch: сначала собирает target-ссылки, затем дедуплицированно импортирует недостающие target-объекты и один раз записывает измененные merge XML, `Configuration.xml` и `ConfigDumpInfo.xml`
-- очистку ссылок на жестко исключенные объекты из `forbidden_*`
-- нормализацию adopted stub
-- замену GUID
-- отдельный binding-pass для `base_object_id`: он переписывает ссылки на связанные Adopted-объекты по итоговым XML-документам, но не подменяет их собственные `uuid`
-- очистку forbidden movements
-- запись файлов и проверку отсутствия old GUID
+`ChangeFiles` — самый плотный и рискованный слой системы.
 
-## Этап валидации
+Он отвечает за:
+- загрузку XML-контекстов;
+- определение owner metadata;
+- special cases для root/language;
+- top-level classification;
+- `RefDrivenInclusion`;
+- adopted normalization;
+- target-sensitive merge cases;
+- cleanup служебных XML-ссылок;
+- GUID/base binding rewrite;
+- запись файлов и проверки.
 
-После записи переписанных XML `ChangeFiles` может выполнять отдельный этап `validate dynamic list contracts`, если он включен конфигом.
+Детальные правила этого слоя не дублируются здесь. Читать:
 
-Этот этап проверяет только form-driven contract dynamic list:
-- target-объект не исключен итоговым `decision`
-- target-объект не остался урезанным, если форма требует `AdoptedStubExt(Form)`
-- для non-Native target-объекта в top-level metadata XML реально сохранены все поля, которые требует dynamic list
+```text
+.codex/context/xml-rules.md
+```
 
-Для `Native` объектов field-level проверка не выполняется: валидатор здесь нужен для контроля `AdoptedStubExt`, а не для полного native-состава.
+## Validation boundary
 
-Источники полей для этой проверки:
-- `StandardAttributes`
-- `Attribute`
-- `Dimension`
-- `Resource`
-- `Measure`
+`validate dynamic list contracts` — отдельный этап после записи XML и до финального cleanup/verification.
 
-Для standard attributes используются alias-имена, если form-contract приходит по русскому имени поля, например:
-- `Recorder -> Регистратор`
-- `Period -> Период`
-- `LineNumber -> НомерСтроки`
-- `Active -> Активность`
+Назначение:
+- поймать ошибки form-driven dynamic list до загрузки в 1С;
+- проверить, что non-Native target object не остался слишком урезанным;
+- не выполнять полный platform-level validation.
 
-Эта валидация не проверяет весь XML целиком и не заменяет загрузку в 1С. Если `enable_form_validation=false`, этап пропускается целиком.
+Детали field contract и aliases описаны в `.codex/context/xml-rules.md`.
 
-Это самый плотный и рискованный слой системы.
+## Публичная поверхность
 
-## Терминология слоя XML
+Внешний код должен использовать только:
 
-- `Native` — объект, оставляемый как нативный по правилам классификации
-- в XML обычный `Native` не должен получать явный `<ObjectBelonging>Native</ObjectBelonging>`; отсутствие свойства означает дефолтный native-режим, а adopted-режимы записываются явно
-- `AdoptedStub` — заимствованный объект в урезанном виде
-- `AdoptedStubMetaData` — частный случай `AdoptedStub`, который включается через `AdditionalProcessing.Use_MetaDataFile`: top-level объект переносится как adopted, а child metadata с префиксом `упо_`, перечисленные в `CommonTemplate.упо_MetaDataFile` в множествах `Реквизиты` / `ТабличныеЧасти`, сохраняются как retained-состав
-- У `AdoptedStubMetaData` retained child metadata остается в режиме `Native`: top-level объект остается `Adopted`, но сохраненные по макету `Attribute` / `TabularSection` и их child metadata не должны сохранять ни `ObjectBelonging=Adopted`, ни `ExtendedConfigurationObject`
-- `AdoptedStubMetaData` не должен переигрывать явный soft-exclude: если top-level объект попал в единый `excluded`-набор из `excluded_subsystems` / `excluded_objects`, правило `упо_MetaDataFile` не возвращает его обратно в состав
-- `AdoptedStubExt` — заимствованный объект без форм и кода, но с сохраненным реквизитным составом; бывает как `AdoptedStubExt(Form)` и как `AdoptedStubExt(DefinedType)`
-- `AdoptedStubExtMetaData` — отдельный частный режим adopted-объекта для merge-объектов из `CommonTemplate.упо_MetaDataFile`: только `DefinedType`, `ExchangePlan`, `EventSubscription`; top-level объект остается `Adopted`, не минимизируется до пустого stub и сохраняет metadata composition/source, нужный для target-merge и target-ref-driven ссылок (`Properties/Type`, `Ext/Content.xml`, `Properties/Source`), но без форм и BSL
-- `targetCompatibilitySet` — compatibility filter для `DefinedType`, `EventSubscription`, `ExchangePlan`, когда задан `target.xml_dump`: `Native`-объекты этих типов допустимы всегда, adopted-объекты допустимы только если соответствующий top-level XML реально существует в target; этот набор не превращает `target.xml_dump` в глобальный source graph
-- Для `AdoptedStub` не переносим тексты `ManagerModule` и `ObjectModule`; для adopted-констант по тому же правилу не переносим `ValueManagerModule`; для adopted общих модулей не переносим `Module`; для adopted команд не переносим `CommandModule`. Если top-level объект остается adopted, child-записи этих модулей нужно убирать и из `ConfigDumpInfo.xml`, а у `CommonModule` и команд еще и удалять соответствующие `Ext/*.bsl`
-- у `AdoptedStubExt` не сериализуем `Properties/StandardAttributes`; стандартные поля остаются доступными платформенно и не должны считаться заимствованным составом
-- `AdoptedStubExt(EventSubscription)` — ненативная подписка на событие в полном составе; она тоже остается источником `RefDrivenInclusion`
-- формы не режутся частично: если форма осталась в составе, она должна оставаться целой; если форма не должна переноситься, ее не оставляем фрагментами
-- `excluded` — он же мягко исключенный объект; объект, снятый с первичного включения и допускающий возврат по ссылкам, если не входит в `forbidden_*`
-- единый `excluded`-набор сначала собирается из объектов, найденных по `excluded_subsystems`, и затем дополняется объектами из `excluded_objects`; дальше для всего этого набора используется одна и та же логика soft-exclude и `RefDrivenInclusion`
-- мягко исключенный объект не должен возвращаться в `AdoptedStub`, если все его допустимые входящие ref-driven ссылки идут только из `Native`-подсистем; одна лишь подсистемная группировка не считается достаточным основанием возвращать такой объект в состав расширения
-- `Native`-подсистема вообще не должна сама по себе восстанавливать excluded-объект по `RefDrivenInclusion`; для такого возврата нужен хотя бы один другой `Native`-источник, то есть реальный объект или его форма
-- ссылки из `Role/Ext/Rights.xml` на excluded-объекты тоже не считаются источником `RefDrivenInclusion`; такие rights-записи должны очищаться из роли, а не возвращать объект в итоговый состав
-- top-level объект, который связан с веткой из `excluded_subsystems` или явно указан в `excluded_objects`, должен исключаться до проверки primary `Native` по native-prefix; одна принадлежность имени к `упо_` не должна удерживать такой объект в составе
-- `forbidden_*` — он же жестко исключенный объект; запрещает включение объекта в любом виде
-- `RefDrivenInclusion` / `рефдривен` — включение по XML-ссылкам из уже оставленных `Native`-объектов; ненативные `DefinedType` и `EventSubscription` в статусе `AdoptedStubExt` тоже могут быть источником; BSL не участвует
-- если `AccumulationRegister`/`InformationRegister`/другой регистр остается `Native`, его документы-registrators тоже дотягиваются в `Native`, чтобы в `RegisterRecords` не исчезала регистрация документа
-- для `DefinedType` и `EventSubscription` общий cleanup мягко исключенных ссылок не применяется, их состав сохраняется целиком
-- для `AdoptedStubExt(Form)` источником решения служит не только `MainTable`, но и field contract dynamic list: `DataPath`, `Field`, `RowPictureDataPath` и родственные поля. Этот контракт должен проверяться конвертером до загрузки в 1С.
-- `extension_properties.name` / `extension_properties.prefix` — основной источник имени и префикса корня; старые `extension` / `prefix` поддерживаются как алиасы совместимости и тоже должны сходиться с `Configuration.xml` и `ConfigDumpInfo.xml`
-- `extension_properties.identifier` — стабильный `uuid` корня `Configuration.xml`; он не должен генерироваться заново между прогонами
-- если задан `target.xml_dump`, `targetCompatibilitySet` сначала ограничивает совместимый adopted-состав для `DefinedType` / `EventSubscription` / `ExchangePlan`, а уже после обычного `RefDrivenInclusion` для merge-объектов из `CommonTemplate.упо_MetaDataFile` выполняется target-merge; сами merge-объекты переходят в режим `AdoptedStubExtMetaData`, а target-ссылки из этого шага могут дотягивать отсутствующий top-level metadata-объект как обычный `AdoptedStub`, но не возвращают adopted target-sensitive объект вне `targetCompatibilitySet`
-- если adopted top-level объект совпадает с объектом в `target.xml_dump` по top-level `id/uuid`, но имя в target уже изменено, canonical именем для extension считается имя из target; stale source-name не должен оставаться вторым adopted-объектом с тем же identity bundle
-- у корня `Configuration.xml` обязаны быть `InternalInfo/xr:PropertyState`, `Caption`, `ShortCaption`, `Language.Русский`
-- `ChildObjects` корня должны совпадать с итоговым top-level составом: top-level `Native` и `AdoptedStub`, не помеченные как excluded/forbidden
-- при `normalizeAdoptedObjectComposition` сохраняем каркас формата: если у исходного top-level metadata был `ChildObjects`, после очистки он должен остаться хотя бы пустым
-- у корневого `Ext` не должно быть `ParentConfigurations*`
-- `Ext/CommandInterface.xml` должен быть командным зеркалом `Ext/MainSectionCommandInterface.xml`; подсистемные секции пишутся в `MainSectionCommandInterface`, а не в `CommandInterface`
-- для `Subsystem` нельзя вырезать `Content`, если подсистема переносится в расширение
-- для `Subsystem` сам контейнер `Content` сохраняется, но `xr:MDObjectRef` внутри него должны совпадать с реально оставленным top-level составом; ссылки на отсутствующие metadata нужно удалять
-- для `Subsystem` в adopted-режиме нельзя терять верхний `ChildObjects`: он нужен для состава подсистем и должен доживать до записи
-- для `Subsystem` содержимое `ChildObjects` тоже должно нормализоваться по итоговому составу: контейнер остается, но ссылки на дочерние подсистемы без итогового XML должны удаляться, включая ветки из `excluded_subsystems`
-- `Role/Ext/Rights.xml` должен очищаться от `object/name = Configuration.<oldConfigName>`; права на исходную конфигурацию не являются частью состава расширения
-- `Role/Ext/Rights.xml` также должен очищаться от ссылок на дочерние metadata, которых уже нет в итоговом XML top-level объекта; иначе Конфигуратор падает на `Неизвестный объект метаданных`
-- `CommandInterface.xml` и `MainSectionCommandInterface.xml` должны очищаться от `Command name=...`, если соответствующий metadata-path команды уже не существует в итоговом XML; иначе загрузка падает на `Неизвестная команда`
-- `Form.xml` должен очищаться от элементов интерфейса формы, если их `<Command>` ссылается на metadata-command, которого уже нет в итоговом XML; иначе загрузка падает на `Неверное имя команды элемента формы`
-- `ConfigDumpInfo.xml` должен очищаться не только от вложенных `Metadata`, но и от плоских top-level child-записей вида `Catalog.X.Command.Y.*`, если top-level объект уже non-`Native` и этот child-path не сохранен в итоговом составе
+- `pkg/config`
+- `pkg/converter`
 
-В документации стоит сохранять именно эти термины, потому что они совпадают с текущей моделью в коде и обсуждениях.
+`internal/*` не является публичным API.
 
-## Инварианты
+## Инварианты архитектуры
 
-- Финальный результат всегда `.cfe`
-- `cfConvert` на практике требует явную версию платформы
-- Временная работа идет под `output/_tmp`, если output указывает на `.cfe`
-- Основное место для отладочных и исследовательских логов — `output/_log`, но в корне репозитория еще есть старые `run-*.log`
-- `--config` имеет приоритет над `CONFIG_PATH`
-- Внешний код не должен импортировать `internal/*`
-- HTTP/service слоя в проекте нет
+- Финальный результат — `.cfe`.
+- `srcConvert` работает с готовым деревом XML-исходников.
+- `cfConvert` требует платформу 1С и практическую версию платформы.
+- Временная работа идет под `output/_tmp`, если output указывает на `.cfe`.
+- Основное место логов — `output/_log`.
+- `--config` имеет приоритет над `CONFIG_PATH`.
+- HTTP/service слоя в проекте нет.
+- Полноценного CI пока нет; базовые проверки — `go build ./...` и `go test ./...`.
+
+## Что читать дальше
+
+- XML/classification details: `.codex/context/xml-rules.md`
+- Термины: `.codex/context/terms.md`
+- Debugging cookbook: `docs/debugging.md`
+- Run orchestration: `.codex/skills/run-conversion.md`
