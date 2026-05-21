@@ -1165,6 +1165,119 @@ func TestCollectAdoptedCommandModulePaths(t *testing.T) {
 	}
 }
 
+func TestCollectAdoptedCodeModulePathsMarksAdoptedRegisterRecordSetModule(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	adoptedDir := filepath.Join(root, "InformationRegisters", "ИсполнителиЗадач", "Ext")
+	if err := os.MkdirAll(adoptedDir, 0o755); err != nil {
+		t.Fatalf("mkdir adopted register dir: %v", err)
+	}
+	adoptedModulePath := filepath.Join(adoptedDir, "RecordSetModule.bsl")
+	if err := os.WriteFile(adoptedModulePath, []byte("// adopted record set"), 0o644); err != nil {
+		t.Fatalf("write adopted record set module: %v", err)
+	}
+
+	nativeDir := filepath.Join(root, "InformationRegisters", "НативныйРегистр", "Ext")
+	if err := os.MkdirAll(nativeDir, 0o755); err != nil {
+		t.Fatalf("mkdir native register dir: %v", err)
+	}
+	nativeModulePath := filepath.Join(nativeDir, "RecordSetModule.bsl")
+	if err := os.WriteFile(nativeModulePath, []byte("// native record set"), 0o644); err != nil {
+		t.Fatalf("write native record set module: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{
+		{
+			Path:      filepath.Join(root, "InformationRegisters", "ИсполнителиЗадач.xml"),
+			RelPath:   "InformationRegisters/ИсполнителиЗадач.xml",
+			FileName:  "ИсполнителиЗадач.xml",
+			Metadata:  true,
+			OwnerKey:  "InformationRegister.ИсполнителиЗадач",
+			OwnerKind: "InformationRegister",
+			OwnerName: "ИсполнителиЗадач",
+		},
+		{
+			Path:      filepath.Join(root, "InformationRegisters", "НативныйРегистр.xml"),
+			RelPath:   "InformationRegisters/НативныйРегистр.xml",
+			FileName:  "НативныйРегистр.xml",
+			Metadata:  true,
+			OwnerKey:  "InformationRegister.НативныйРегистр",
+			OwnerKind: "InformationRegister",
+			OwnerName: "НативныйРегистр",
+		},
+	}
+
+	excludedPaths := make(map[string]struct{})
+	collectAdoptedCodeModulePaths(contexts, map[string]objectDecision{
+		"InformationRegister.ИсполнителиЗадач": {Belonging: "AdoptedStub"},
+		"InformationRegister.НативныйРегистр":  {Belonging: "Native"},
+	}, excludedPaths)
+
+	if _, ok := excludedPaths[adoptedModulePath]; !ok {
+		t.Fatalf("expected adopted register RecordSetModule to be added to excluded paths")
+	}
+	if _, ok := excludedPaths[nativeModulePath]; ok {
+		t.Fatalf("did not expect native register RecordSetModule to be added to excluded paths")
+	}
+}
+
+func TestBuildChangeFilesStateTargetAdoptedRegisterExcludesRecordSetModule(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	targetRoot := t.TempDir()
+	writeFile := func(base, relPath, content string) {
+		t.Helper()
+		path := filepath.Join(base, relPath)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	registerXML := `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <InformationRegister>
+    <Properties>
+      <Name>КурсыВалют</Name>
+    </Properties>
+  </InformationRegister>
+</MetaDataObject>`
+
+	writeFile(root, filepath.Join("InformationRegisters", "КурсыВалют.xml"), registerXML)
+	writeFile(root, filepath.Join("InformationRegisters", "КурсыВалют", "Ext", "RecordSetModule.bsl"), "// record set")
+	writeFile(targetRoot, filepath.Join("InformationRegisters", "КурсыВалют.xml"), registerXML)
+
+	state, err := buildChangeFilesState(&config.Configuration{
+		IncludedAdoptedStubObjects: []string{"InformationRegister.КурсыВалют"},
+		Target:                     config.Target{XMLDump: targetRoot},
+	}, root)
+	if err != nil {
+		t.Fatalf("build change files state: %v", err)
+	}
+
+	decision := state.decisions["InformationRegister.КурсыВалют"]
+	if decision.Belonging != "AdoptedStub" || decision.Excluded {
+		t.Fatalf("expected target-adopted register to stay AdoptedStub, got %#v", decision)
+	}
+
+	recordSetModulePath := filepath.Join(root, "InformationRegisters", "КурсыВалют", "Ext", "RecordSetModule.bsl")
+	if _, ok := state.excludedPaths[recordSetModulePath]; !ok {
+		t.Fatalf("expected RecordSetModule to be excluded for target-adopted register")
+	}
+
+	if _, err := removeExcludedFiles(root, state.excludedPaths); err != nil {
+		t.Fatalf("remove excluded files: %v", err)
+	}
+	if _, err := os.Stat(recordSetModulePath); !os.IsNotExist(err) {
+		t.Fatalf("expected RecordSetModule to be removed, stat err=%v", err)
+	}
+}
+
 func TestCollectExcludedPathsMatchesChangeFilesCleanupInputs(t *testing.T) {
 	t.Parallel()
 
@@ -5095,6 +5208,43 @@ func TestNormalizeAdoptedObjectCompositionKeepsReferencedCommands(t *testing.T) 
 	}
 }
 
+func TestCleanupAdoptedObjectFormReferencesRemovesReportMainProperties(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<Properties>
+  <Name>ОтчетТест</Name>
+  <DefaultObjectForm>Form.Default</DefaultObjectForm>
+  <MainForm>Form.Main</MainForm>
+  <MainSettingsForm>Form.Settings</MainSettingsForm>
+  <MainVariantForm>Form.Variant</MainVariantForm>
+  <MainDataCompositionSchema>DataCompositionSchema.Main</MainDataCompositionSchema>
+</Properties>`); err != nil {
+		t.Fatalf("read properties xml: %v", err)
+	}
+
+	properties := doc.Root()
+	if !cleanupAdoptedObjectFormReferences(properties, "Report") {
+		t.Fatalf("expected report property cleanup to change document")
+	}
+
+	for _, tag := range []string{
+		"DefaultObjectForm",
+		"MainForm",
+		"MainSettingsForm",
+		"MainVariantForm",
+		"MainDataCompositionSchema",
+	} {
+		if properties.FindElement("./"+tag) != nil {
+			t.Fatalf("expected %s to be removed for adopted report", tag)
+		}
+	}
+	if got := strings.TrimSpace(textOf(properties, "Name")); got != "ОтчетТест" {
+		t.Fatalf("expected unrelated property to remain, got %q", got)
+	}
+}
+
 func TestCollectOwnerCommandCandidatesFromFunctionalOption(t *testing.T) {
 	t.Parallel()
 
@@ -5265,6 +5415,48 @@ func TestCollectOwnerCommandCandidatesFromRetainedOwnerForm(t *testing.T) {
 	candidates := collectOwnerCommandCandidates(contexts, decisions)
 	if _, ok := candidates["Catalog.Пользователи"]["ПользователиИнформационнойБазы"]; !ok {
 		t.Fatalf("expected command candidate to be collected from owner form command reference")
+	}
+}
+
+func TestCollectOwnerCommandCandidatesSkipsReportAndDataProcessorCommands(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Form>
+    <ChildItems>
+      <Item><CommandName>Report.ТестОтчет.Command.Сформировать</CommandName></Item>
+      <Item><CommandName>DataProcessor.ТестОбработка.Command.Выполнить</CommandName></Item>
+      <Item><CommandName>Catalog.ТестКаталог.Command.Оставить</CommandName></Item>
+    </ChildItems>
+  </Form>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read xml: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{{
+		Doc:      doc,
+		RelPath:  "CommonForms/ТестоваяФорма/Ext/Form.xml",
+		Metadata: false,
+		OwnerKey: "CommonForm.ТестоваяФорма",
+	}}
+	decisions := map[string]objectDecision{
+		"Report.ТестОтчет":            {Belonging: "AdoptedStub"},
+		"DataProcessor.ТестОбработка": {Belonging: "AdoptedStub"},
+		"Catalog.ТестКаталог":         {Belonging: "AdoptedStub"},
+		"CommonForm.ТестоваяФорма":    {Belonging: "AdoptedStub"},
+	}
+
+	candidates := collectOwnerCommandCandidates(contexts, decisions)
+	if _, ok := candidates["Catalog.ТестКаталог"]["Оставить"]; !ok {
+		t.Fatalf("expected non-report command candidate to remain")
+	}
+	if _, ok := candidates["Report.ТестОтчет"]; ok {
+		t.Fatalf("did not expect report command candidates without SearchResult")
+	}
+	if _, ok := candidates["DataProcessor.ТестОбработка"]; ok {
+		t.Fatalf("did not expect data processor command candidates without SearchResult")
 	}
 }
 
@@ -6238,6 +6430,50 @@ func TestBuildSearchResultModuleContentTransfersPrefixedMethodsWithoutAfterDirec
 	}
 	if !strings.Contains(content, "Процедура упо_ПослеЗаписи()") || !strings.Contains(content, "Процедура Подключаемый_упо_ПослеЗаписи()") {
 		t.Fatalf("expected original prefixed method headers to be preserved, got:\n%s", content)
+	}
+}
+
+func TestAddSearchResultCommandOverlaySkipsCommandWithoutTransferredCode(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	commandModuleDir := filepath.Join(root, "DataProcessors", "ТестОбработка", "Commands", "КомандаБезДоработок", "Ext")
+	if err := os.MkdirAll(commandModuleDir, 0o755); err != nil {
+		t.Fatalf("mkdir command module dir: %v", err)
+	}
+	modulePath := filepath.Join(commandModuleDir, "CommandModule.bsl")
+	if err := os.WriteFile(modulePath, []byte("Процедура БезМаркеров()\nКонецПроцедуры\n"), 0o644); err != nil {
+		t.Fatalf("write command module: %v", err)
+	}
+
+	state := newSearchResultState()
+	topCtx := &FileProcessingContext{
+		OwnerKey:  "DataProcessor.ТестОбработка",
+		OwnerKind: "DataProcessor",
+	}
+
+	if err := addSearchResultCommandOverlay(
+		state,
+		filepath.Join(root, "DataProcessors", "ТестОбработка"),
+		topCtx,
+		"КомандаБезДоработок",
+		[]string{"EPM"},
+		map[string][]string{"EPM": {"//{EPM}"}},
+		"упо_",
+		true,
+		"",
+	); err != nil {
+		t.Fatalf("add search result command overlay: %v", err)
+	}
+
+	if _, ok := state.ModuleWrites[modulePath]; ok {
+		t.Fatalf("did not expect command module write without transferred code")
+	}
+	if _, ok := state.ObjectOverlays[topCtx.OwnerKey].PreserveCommands["КомандаБезДоработок"]; ok {
+		t.Fatalf("did not expect command without transferred code to be preserved")
+	}
+	if _, ok := state.PreservedConfigDumpInfo[topCtx.OwnerKey+".Command.КомандаБезДоработок"]; ok {
+		t.Fatalf("did not expect command metadata to be preserved without transferred code")
 	}
 }
 

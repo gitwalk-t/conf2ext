@@ -583,7 +583,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 
 		if decision.Belonging != "Native" && ctx.Metadata && isTopLevelMetadataFile(ctx) &&
 			ctx.OwnerKey != "Configuration" && ctx.OwnerKey != "Language.Русский" {
-			changed = cleanupAdoptedObjectFormReferences(ctx.Properties) || changed
+			changed = cleanupAdoptedObjectFormReferences(ctx.Properties, ctx.OwnerKind) || changed
 			contract, hasContract := formDynamicListContracts[ctx.OwnerKey]
 			overlay := searchResultObjectOverlayForKey(searchResultState, ctx.OwnerKey)
 			overlay = mergeSearchResultOverlayCommands(overlay, retainedOwnerCommandCandidates[ctx.OwnerKey])
@@ -5110,6 +5110,14 @@ func addSearchResultCommandOverlay(
 		return addSearchResultModuleWrite(state, filepath.Join(objectDir, "Ext", "CommandModule.bsl"), topCtx.OwnerKey+".CommandModule", topCtx.OwnerKey, groups, markerGroups, prefix, exactTemplates, diagnosticsPath)
 	}
 
+	modulePath := filepath.Join(objectDir, "Commands", commandName, "Ext", "CommandModule.bsl")
+	if err := addSearchResultModuleWrite(state, modulePath, "", topCtx.OwnerKey, groups, markerGroups, prefix, exactTemplates, diagnosticsPath); err != nil {
+		return err
+	}
+	if _, ok := state.ModuleWrites[modulePath]; !ok {
+		return nil
+	}
+
 	overlay := state.ObjectOverlays[topCtx.OwnerKey]
 	if overlay.PreserveCommands == nil {
 		overlay.PreserveCommands = make(map[string]struct{})
@@ -5120,7 +5128,7 @@ func addSearchResultCommandOverlay(
 	state.PreservedConfigDumpInfo[topCtx.OwnerKey+".Command."+commandName] = struct{}{}
 	state.PreservedConfigDumpInfo[topCtx.OwnerKey+".Command."+commandName+".CommandModule"] = struct{}{}
 
-	return addSearchResultModuleWrite(state, filepath.Join(objectDir, "Commands", commandName, "Ext", "CommandModule.bsl"), "", topCtx.OwnerKey, groups, markerGroups, prefix, exactTemplates, diagnosticsPath)
+	return nil
 }
 
 func addSearchResultModuleWrite(
@@ -8862,6 +8870,7 @@ func isDisallowedAdoptedModuleMetadata(name string) bool {
 	}
 	return strings.HasSuffix(name, ".ManagerModule") ||
 		strings.HasSuffix(name, ".ObjectModule") ||
+		strings.HasSuffix(name, ".RecordSetModule") ||
 		strings.HasSuffix(name, ".ValueManagerModule")
 }
 
@@ -8885,7 +8894,7 @@ func collectAdoptedCodeModulePaths(contexts []*FileProcessingContext, decisions 
 			continue
 		}
 
-		for _, name := range []string{"ManagerModule.bsl", "ObjectModule.bsl", "ValueManagerModule.bsl"} {
+		for _, name := range []string{"ManagerModule.bsl", "ObjectModule.bsl", "RecordSetModule.bsl", "ValueManagerModule.bsl"} {
 			modulePath := filepath.Join(objectDir, "Ext", name)
 			if _, err := os.Stat(modulePath); err == nil {
 				excludedPaths[modulePath] = struct{}{}
@@ -8960,6 +8969,8 @@ func collectForbiddenMetadataFilePaths(contexts []*FileProcessingContext, forbid
 				excludedPaths[filepath.Join(objectDir, "Ext", "ManagerModule.bsl")] = struct{}{}
 			case "ObjectModule":
 				excludedPaths[filepath.Join(objectDir, "Ext", "ObjectModule.bsl")] = struct{}{}
+			case "RecordSetModule":
+				excludedPaths[filepath.Join(objectDir, "Ext", "RecordSetModule.bsl")] = struct{}{}
 			case "ValueManagerModule":
 				excludedPaths[filepath.Join(objectDir, "Ext", "ValueManagerModule.bsl")] = struct{}{}
 			}
@@ -9144,20 +9155,24 @@ func shouldRemoveFunctionalOptionsParameterUseRef(
 	return true
 }
 
-func cleanupAdoptedObjectFormReferences(properties *etree.Element) bool {
+func cleanupAdoptedObjectFormReferences(properties *etree.Element, ownerKind string) bool {
 	if properties == nil {
 		return false
 	}
 
 	changed := false
-	for _, name := range []string{
+	names := []string{
 		"DefaultObjectForm",
 		"DefaultListForm",
 		"DefaultChoiceForm",
 		"AuxiliaryObjectForm",
 		"AuxiliaryListForm",
 		"AuxiliaryChoiceForm",
-	} {
+	}
+	if ownerKind == "Report" || ownerKind == "DataProcessor" {
+		names = append(names, "MainForm", "MainSettingsForm", "MainVariantForm", "MainDataCompositionSchema")
+	}
+	for _, name := range names {
 		if deleteElement(properties, name) {
 			changed = true
 		}
@@ -10474,6 +10489,10 @@ func collectOwnerCommandCandidates(contexts []*FileProcessingContext, decisions 
 			}
 			ownerDecision, exists := decisions[ownerKey]
 			if !exists || ownerDecision.Excluded || ownerDecision.Belonging == "Native" {
+				continue
+			}
+			ownerKind, _ := splitObjectKey(ownerKey)
+			if ownerKind == "Report" || ownerKind == "DataProcessor" {
 				continue
 			}
 			if result[ownerKey] == nil {
