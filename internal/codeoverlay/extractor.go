@@ -124,7 +124,7 @@ func Run(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("не удалось загрузить конфиг проекта %s: %w", configPath, err)
 	}
-	allowedObjects, err := xmlutils.CollectSearchResultTemplateObjectKeys(cfg)
+	allowedBlockIDs, err := xmlutils.CollectSearchResultTemplateBlockIDs(cfg)
 	if err != nil {
 		return Result{}, fmt.Errorf("не удалось определить объекты из упо_SearchResult: %w", err)
 	}
@@ -134,16 +134,16 @@ func Run(opts Options) (Result, error) {
 	}
 
 	log.Printf(
-		"code overlay: start extraction extension_path=%s output=%s config=%s extractor_config=%s allowed_objects=%d forbidden_blocks=%d",
+		"code overlay: start extraction extension_path=%s output=%s config=%s extractor_config=%s allowed_blocks=%d forbidden_blocks=%d",
 		extensionPath,
 		outputPath,
 		configPath,
 		extractorConfigPath,
-		len(allowedObjects),
+		len(allowedBlockIDs),
 		len(forbiddenBlockIDs),
 	)
 
-	artifact, err := Extract(extensionPath, allowedObjects, forbiddenBlockIDs)
+	artifact, err := Extract(extensionPath, allowedBlockIDs, forbiddenBlockIDs)
 	if err != nil {
 		return Result{}, err
 	}
@@ -161,7 +161,7 @@ func Run(opts Options) (Result, error) {
 	}, nil
 }
 
-func Extract(extensionPath string, allowedObjects, forbiddenBlockIDs map[string]struct{}) (Artifact, error) {
+func Extract(extensionPath string, allowedBlockIDs, forbiddenBlockIDs map[string]struct{}) (Artifact, error) {
 	resolvedExtensionPath, err := resolvePath(extensionPath, DefaultExtensionPath)
 	if err != nil {
 		return Artifact{}, fmt.Errorf("не удалось нормализовать путь к эталонному расширению: %w", err)
@@ -193,7 +193,7 @@ func Extract(extensionPath string, allowedObjects, forbiddenBlockIDs map[string]
 		if !ok {
 			return nil
 		}
-		if !shouldKeepBlock(block, allowedObjects, forbiddenBlockIDs) {
+		if !shouldKeepBlock(block, allowedBlockIDs, forbiddenBlockIDs) {
 			return nil
 		}
 
@@ -359,11 +359,11 @@ func isSupportedModuleFilename(name string) bool {
 	}
 }
 
-func shouldKeepBlock(block Block, allowedObjects, forbiddenBlockIDs map[string]struct{}) bool {
-	if len(allowedObjects) == 0 {
+func shouldKeepBlock(block Block, allowedBlockIDs, forbiddenBlockIDs map[string]struct{}) bool {
+	if len(allowedBlockIDs) == 0 {
 		return false
 	}
-	if _, ok := allowedObjects[topLevelObjectKey(block.Object)]; !ok {
+	if _, ok := allowedBlockIDs[block.ID]; !ok {
 		return false
 	}
 	if _, forbidden := forbiddenBlockIDs[block.ID]; forbidden {
@@ -371,12 +371,4 @@ func shouldKeepBlock(block Block, allowedObjects, forbiddenBlockIDs map[string]s
 		return false
 	}
 	return true
-}
-
-func topLevelObjectKey(object string) string {
-	parts := strings.Split(strings.TrimSpace(object), ".")
-	if len(parts) < 2 {
-		return strings.TrimSpace(object)
-	}
-	return parts[0] + "." + parts[1]
 }

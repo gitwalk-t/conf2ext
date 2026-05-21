@@ -145,7 +145,8 @@ Responsibilities:
 - load active project config from `configs/config.json`;
 - load extractor config from `cmd/extract_code_overlay/config.json`;
 - read `CommonTemplates/упо_SearchResult/Ext/Template.txt` under configured `input_path`;
-- export code only for blocks whose top-level object is requested by that SearchResult template;
+- export code only for exact blocks requested by that SearchResult template;
+- require at least one tag from `configs/searchingTemplateText.json` with counter `> 0` for the corresponding template place;
 - skip blocks explicitly listed in extractor `forbidden`;
 - skip blocks with empty BSL content;
 - extract supported code blocks;

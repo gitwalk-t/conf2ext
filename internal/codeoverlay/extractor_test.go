@@ -23,11 +23,14 @@ func TestExtractBuildsExpectedBlocks(t *testing.T) {
 	writeFile(t, root, "Catalogs/ТестКаталог/Ext/ValueManagerModule.bsl", "ignored")
 
 	artifact, err := Extract(root, map[string]struct{}{
-		"Catalog.ТестКаталог":        {},
-		"CommonCommand.ОбщаяКоманда": {},
-		"CommonForm.ОбщаяФорма":      {},
-		"CommonModule.ОбщийМодуль":   {},
-		"Session":                    {},
+		"Catalog.ТестКаталог:ManagerModule":                 {},
+		"Catalog.ТестКаталог:ObjectModule":                  {},
+		"Catalog.ТестКаталог.Command.Открыть:CommandModule": {},
+		"Catalog.ТестКаталог.Form.ФормаСписка:FormModule":   {},
+		"CommonCommand.ОбщаяКоманда:CommandModule":          {},
+		"CommonForm.ОбщаяФорма:FormModule":                  {},
+		"CommonModule.ОбщийМодуль:CommonModule":             {},
+		"Session:SessionModule":                             {},
 	}, nil)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
@@ -82,8 +85,9 @@ func TestExtractIsDeterministic(t *testing.T) {
 	writeFile(t, root, "Catalogs/Альфа/Ext/ObjectModule.bsl", "Процедура Альфа()\nКонецПроцедуры\n")
 
 	allowedObjects := map[string]struct{}{
-		"Catalog.Альфа":     {},
-		"CommonModule.Бета": {},
+		"Catalog.Альфа:ObjectModule":                {},
+		"Catalog.Альфа.Form.ФормаСписка:FormModule": {},
+		"CommonModule.Бета:CommonModule":            {},
 	}
 	first, err := Extract(root, allowedObjects, nil)
 	if err != nil {
@@ -113,9 +117,10 @@ func TestRunUsesDefaultPathsAndWritesOutput(t *testing.T) {
 	writeFile(t, root, "configs/config.json", "{\n  \"input_path\": \"/input/source\",\n  \"output_path\": \"/output/demo.cfe\",\n  \"conversion_type\": \"srcConvert\"\n}")
 	writeFile(t, root, "configs/searchingTemplateText.json", "{\n  \"PM\": [\"//{PM}\"]\n}")
 	writeFile(t, root, DefaultExtractorConfigPath, "{\n  \"forbidden\": [\"CommonModule.Запрещенный:CommonModule\"]\n}")
-	writeFile(t, root, "input/source/CommonTemplates/упо_SearchResult/Ext/Template.txt", "{\n  \"ОбщиеМодули\": {\n    \"ОбщийМодуль\": {\n      \"ОбщийМодуль\": {\n        \"PM\": 1\n      }\n    }\n  }\n}")
+	writeFile(t, root, "input/source/CommonTemplates/упо_SearchResult/Ext/Template.txt", "{\n  \"ОбщиеМодули\": {\n    \"ОбщийМодуль\": {\n      \"ОбщийМодуль\": {\n        \"PM\": 1\n      }\n    },\n    \"НулевойМодуль\": {\n      \"ОбщийМодуль\": {\n        \"PM\": 0\n      }\n    }\n  }\n}")
 	writeFile(t, root, filepath.ToSlash(filepath.Join(DefaultExtensionPath, "CommonModules", "ОбщийМодуль", "Ext", "Module.bsl")), "Процедура Тест()\nКонецПроцедуры\n")
 	writeFile(t, root, filepath.ToSlash(filepath.Join(DefaultExtensionPath, "CommonModules", "ЛишнийМодуль", "Ext", "Module.bsl")), "Процедура Лишний()\nКонецПроцедуры\n")
+	writeFile(t, root, filepath.ToSlash(filepath.Join(DefaultExtensionPath, "CommonModules", "НулевойМодуль", "Ext", "Module.bsl")), "Процедура Ноль()\nКонецПроцедуры\n")
 
 	oldWD, err := os.Getwd()
 	if err != nil {
@@ -158,17 +163,22 @@ func TestRunUsesDefaultPathsAndWritesOutput(t *testing.T) {
 	if strings.Contains(string(outputBytes), "\"CommonModule.ЛишнийМодуль:CommonModule\"") {
 		t.Fatalf("did not expect non-template object to be exported, got %s", outputBytes)
 	}
+	if strings.Contains(string(outputBytes), "\"CommonModule.НулевойМодуль:CommonModule\"") {
+		t.Fatalf("did not expect zero-counter object to be exported, got %s", outputBytes)
+	}
 }
 
 func TestExtractFiltersByTopLevelObjects(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "Catalogs/ТестКаталог/Ext/ObjectModule.bsl", "Процедура Объект()\nКонецПроцедуры\n")
 	writeFile(t, root, "Catalogs/ТестКаталог/Forms/ФормаСписка/Ext/Form/Module.bsl", "Процедура Форма()\nКонецПроцедуры\n")
+	writeFile(t, root, "Catalogs/ТестКаталог/Forms/ЛишняяФорма/Ext/Form/Module.bsl", "Процедура Лишняя()\nКонецПроцедуры\n")
 	writeFile(t, root, "CommonModules/ЛишнийМодуль/Ext/Module.bsl", "Процедура Лишний()\nКонецПроцедуры\n")
 	writeFile(t, root, "Catalogs/ТестКаталог/Ext/ManagerModule.bsl", " \r\n\t\r\n")
 
 	artifact, err := Extract(root, map[string]struct{}{
-		"Catalog.ТестКаталог": {},
+		"Catalog.ТестКаталог:ObjectModule":                {},
+		"Catalog.ТестКаталог.Form.ФормаСписка:FormModule": {},
 	}, nil)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
@@ -193,7 +203,7 @@ func TestExtractSkipsEmptyModuleContent(t *testing.T) {
 	writeFile(t, root, "Catalogs/ПустойКаталог/Ext/ObjectModule.bsl", "\r\n \t \r\n")
 
 	artifact, err := Extract(root, map[string]struct{}{
-		"Catalog.ПустойКаталог": {},
+		"Catalog.ПустойКаталог:ObjectModule": {},
 	}, nil)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
@@ -210,8 +220,8 @@ func TestExtractSkipsForbiddenBlocks(t *testing.T) {
 	writeFile(t, root, "CommonModules/ЗапрещенныйМодуль/Ext/Module.bsl", "Процедура Запрещенный()\nКонецПроцедуры\n")
 
 	artifact, err := Extract(root, map[string]struct{}{
-		"CommonModule.РазрешенныйМодуль": {},
-		"CommonModule.ЗапрещенныйМодуль": {},
+		"CommonModule.РазрешенныйМодуль:CommonModule": {},
+		"CommonModule.ЗапрещенныйМодуль:CommonModule": {},
 	}, map[string]struct{}{
 		"CommonModule.ЗапрещенныйМодуль:CommonModule": {},
 	})
