@@ -41,6 +41,11 @@
 
 удалять ссылки на отсутствующие metadata commands.
 
+## Form cleanup
+
+- aggressive dynamic-list cleanup (`MainTable` removal, manual-query normalization, orphan cleanup) применять только к non-native forms;
+- для `Native` forms сохранять стандартные dynamic-list fields и `DataPath`, очищая только реально dangling/non-native refs.
+
 ## Type-bearing cleanup
 
 Учитывать:

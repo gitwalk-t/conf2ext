@@ -3,6 +3,7 @@
 ## General form rules
 
 - Формы не режутся частично.
+- Для `Native` forms aggressive dynamic-list cleanup не применяется; используется только мягкая cleanup dangling/non-native refs.
 - Non-native формы не являются источником `RefDrivenInclusion`.
 - Если форма не должна переноситься — удаляется целиком.
 
@@ -41,6 +42,13 @@ Field считается доступным через:
 - `Period -> Период`
 - `LineNumber -> НомерСтроки`
 - `Active -> Активность`
+
+Standard/virtual list fields, которые не должны считаться missing:
+- `Ссылка/Ref`
+- `Наименование/Description`
+- `Код/Code`
+- `ПометкаУдаления/DeletionMark`
+- `Представление/Presentation`
 
 ## Common failure patterns
 

@@ -463,6 +463,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 	blockedForbiddenRefs := collectReferenceMapFromObjectKeys(blockedForbiddenObjectKeys)
 	excludedRefs = mergeReferenceMaps(excludedRefs, blockedForbiddenRefs)
 	excludedMetadataPrefixes := collectExcludedMetadataPrefixes(excludedRefs)
+	nonNativeKeys := collectNonNativeKeys(decisions)
 	truncatedKeys := collectTruncatedKeys(decisions)
 	truncatedChildPrefixes := collectTruncatedChildPrefixes(truncatedKeys)
 	guidReplacements := collectGUIDReplacements(contexts, decisions, identityMap, adoptedStubMetaDataRules)
@@ -559,18 +560,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 		}
 
 		if strings.Contains(filepath.ToSlash(ctx.RelPath), "/Forms/") {
-			changed = cleanupNonNativeDynamicListMainTables(ctx.Doc, decisions) || changed
-			changed = normalizeManualQueryWithoutMainTable(ctx.Doc) || changed
-			changed = cleanupMissingFormConstantsSetReferencesIndexed(ctx.Doc, contexts, indexes, decisions) || changed
-			changed = cleanupMissingFormCommonAttributeDynamicListFieldsIndexed(ctx.Doc, contexts, indexes, decisions) || changed
-			changed = cleanupMissingFormCommandReferences(ctx.Doc, contexts) || changed
-			if decision.Belonging != "Native" {
-				changed = cleanupNonNativeManualQueryOrphanReferences(ctx.Doc) || changed
-				ownerCtx := findTopLevelMetadataContextByOwnerKeyIndexed(indexes, contexts, ctx.OwnerKey)
-				changed = cleanupMissingFormOwnerObjectReferences(ctx.Doc, ownerCtx) || changed
-				changed = cleanupNonNativeFormLifecycleEvents(ctx.Doc) || changed
-				changed = cleanupNonNativeFormStandardCommands(ctx.Doc) || changed
-			}
+			changed = cleanupFormDocumentIndexed(ctx, decision, contexts, indexes, decisions, nonNativeKeys) || changed
 		}
 
 		if ctx.OwnerKind == "FunctionalOptionsParameter" && ctx.Properties != nil {
@@ -6446,6 +6436,34 @@ func cleanupMissingFormCommonAttributeDynamicListFields(doc *etree.Document, con
 	return cleanupMissingFormCommonAttributeDynamicListFieldsIndexed(doc, contexts, nil, decisions)
 }
 
+func cleanupFormDocumentIndexed(ctx *FileProcessingContext, decision objectDecision, contexts []*FileProcessingContext, indexes *contextIndexes, decisions map[string]objectDecision, nonNativeKeys map[string]struct{}) bool {
+	if ctx == nil || ctx.Doc == nil {
+		return false
+	}
+
+	changed := false
+	if decision.Belonging == "Native" {
+		changed = cleanupNativeFormNonNativeReferences(ctx.Doc, nonNativeKeys) || changed
+		changed = cleanupMissingFormConstantsSetReferencesIndexed(ctx.Doc, contexts, indexes, decisions) || changed
+		changed = cleanupMissingFormCommonAttributeDynamicListFieldsIndexed(ctx.Doc, contexts, indexes, decisions) || changed
+		changed = cleanupMissingFormCommandReferences(ctx.Doc, contexts) || changed
+		return changed
+	}
+
+	changed = cleanupNonNativeDynamicListMainTables(ctx.Doc, decisions) || changed
+	changed = normalizeManualQueryWithoutMainTable(ctx.Doc) || changed
+	changed = cleanupMissingFormConstantsSetReferencesIndexed(ctx.Doc, contexts, indexes, decisions) || changed
+	changed = cleanupMissingFormCommonAttributeDynamicListFieldsIndexed(ctx.Doc, contexts, indexes, decisions) || changed
+	changed = cleanupMissingFormCommandReferences(ctx.Doc, contexts) || changed
+
+	ownerCtx := findTopLevelMetadataContextByOwnerKeyIndexed(indexes, contexts, ctx.OwnerKey)
+	changed = cleanupNonNativeManualQueryOrphanReferences(ctx.Doc) || changed
+	changed = cleanupMissingFormOwnerObjectReferences(ctx.Doc, ownerCtx) || changed
+	changed = cleanupNonNativeFormLifecycleEvents(ctx.Doc) || changed
+	changed = cleanupNonNativeFormStandardCommands(ctx.Doc) || changed
+	return changed
+}
+
 func cleanupMissingFormCommonAttributeDynamicListFieldsIndexed(doc *etree.Document, contexts []*FileProcessingContext, indexes *contextIndexes, decisions map[string]objectDecision) bool {
 	root := doc.Root()
 	if root == nil {
@@ -6620,6 +6638,9 @@ func collectMissingFormCommonAttributeDynamicListFields(root *etree.Element, con
 		}
 		for field := range requiredFields {
 			if _, ok := available[field]; ok {
+				continue
+			}
+			if isKnownDynamicListVirtualField(targetCtx.OwnerKind, field) {
 				continue
 			}
 			if topLevelMetadataIncludedIndexed("CommonAttribute."+field, contexts, indexes, decisions) {
@@ -7142,6 +7163,8 @@ func dynamicListStandardMetadataNameAliases(field string) []string {
 		return []string{"Date"}
 	case "ПометкаУдаления":
 		return []string{"DeletionMark"}
+	case "Представление":
+		return []string{"Presentation"}
 	case "ЭтоГруппа":
 		return []string{"IsFolder"}
 	case "Владелец":
@@ -10970,16 +10993,12 @@ func isDynamicListFieldChildKind(tag string) bool {
 
 func isKnownDynamicListVirtualField(kind, field string) bool {
 	switch field {
-	case "Ref", "Description", "Code", "Number", "Date", "IsFolder", "Posted", "DeletionMark", "Presentation", "DefaultPicture",
-		"Ссылка", "Наименование", "Код", "Номер", "Дата", "ЭтоГруппа", "Проведен", "ПометкаУдаления", "Владелец":
+	case "Ref", "Description", "Code", "Number", "Date", "IsFolder", "Posted", "DeletionMark", "Presentation", "Owner", "Parent", "Recorder", "Period", "LineNumber", "Active", "DefaultPicture",
+		"Ссылка", "Наименование", "Код", "Номер", "Дата", "ЭтоГруппа", "Проведен", "ПометкаУдаления", "Представление", "Владелец", "Родитель", "Регистратор", "Период", "НомерСтроки", "Активность":
 		return true
 	}
 
 	if strings.HasPrefix(field, "НомерКартинки") {
-		return true
-	}
-
-	if strings.EqualFold(kind, "Catalog") && (field == "Parent" || field == "Родитель") {
 		return true
 	}
 
