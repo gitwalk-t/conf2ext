@@ -137,6 +137,8 @@ MVP configuration:
 }
 ```
 
+`overlay_file` in runtime config is resolved relative to the project root so the checked-in artifact path `configs/code_overlay.json` works with the active config file `configs/config.json`.
+
 If `code_overlay.enabled` is absent or false, current generated behavior must be preserved.
 
 For MVP there is no strict mode. Overlay application is relaxed by default:
@@ -281,8 +283,18 @@ loaded: N
 applied: N
 skipped: N
 missing: N
+fallback: N
 conflicted: N
 ```
+
+Recommended runtime semantics:
+
+- `loaded` = blocks read from the prepared overlay artifact;
+- `applied` = blocks successfully written over generated code files;
+- `missing` = overlay blocks whose deterministic target ID is absent in the generated extension;
+- `conflicted` = duplicate overlay IDs and/or duplicate generated targets for the same deterministic block ID;
+- `fallback` = generated code blocks intentionally kept because overlay application was unresolved;
+- `skipped` = overlay entries not applied because of missing/conflict conditions.
 
 Optional output:
 

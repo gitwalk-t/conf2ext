@@ -256,3 +256,37 @@ func TestConfigurationDefaultsExtensionIdentifier(t *testing.T) {
 		t.Fatalf("unexpected default extension identifier: got %q", got)
 	}
 }
+
+func TestLoadConfigELoadsCodeOverlayConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	configDir := filepath.Join(tempDir, "configs")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir configs: %v", err)
+	}
+
+	configPath := filepath.Join(configDir, "config.json")
+	configJSON := `{
+		"input_path": "/input",
+		"output_path": "/output/demo.cfe",
+		"conversion_type": "srcConvert",
+		"code_overlay": {
+			"enabled": true,
+			"overlay_file": "configs/code_overlay.json"
+		}
+	}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadConfigE(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfigE: %v", err)
+	}
+
+	if !cfg.IsCodeOverlayEnabled() {
+		t.Fatalf("expected code overlay to be enabled")
+	}
+	if cfg.CodeOverlayFile() != "configs/code_overlay.json" {
+		t.Fatalf("unexpected overlay file: got %q", cfg.CodeOverlayFile())
+	}
+}

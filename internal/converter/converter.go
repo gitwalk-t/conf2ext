@@ -156,6 +156,15 @@ func ConvertToCfe(cfg *config.Configuration) error {
 	}
 	logStepCompleted("change files", changeFilesStartedAt)
 
+	if cfg.IsCodeOverlayEnabled() {
+		log.Printf("step: apply code overlay")
+		applyOverlayStartedAt := time.Now()
+		if err = applyCodeOverlayIfEnabled(cfg, tmpDir); err != nil {
+			return err
+		}
+		logStepCompleted("apply code overlay", applyOverlayStartedAt)
+	}
+
 	if keepTemp {
 		saveDumpSnapshotStartedAt := time.Now()
 		if err = saveXMLDumpSnapshot(cfg.OutputPath, tmpDir); err != nil {
