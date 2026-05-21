@@ -219,6 +219,9 @@ func MergeConfigurations(defaultCfg, cfg *Configuration) {
 	defaultCfg.KeepXMLDump = cfg.KeepXMLDump
 	defaultCfg.StopAfterXMLDump = cfg.StopAfterXMLDump
 	defaultCfg.AdditionalProcessing = cfg.AdditionalProcessing
+	if cfg.CodeOverlay.Enabled || strings.TrimSpace(cfg.CodeOverlay.OverlayFile) != "" {
+		defaultCfg.CodeOverlay = cfg.CodeOverlay
+	}
 
 	if len(cfg.AdditionalAdoptedObjects) > 0 {
 		defaultCfg.IncludedAdoptedStubObjects = append(defaultCfg.IncludedAdoptedStubObjects, cfg.AdditionalAdoptedObjects...)

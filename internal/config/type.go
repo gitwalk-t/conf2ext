@@ -1,5 +1,10 @@
 package config
 
+import (
+	"path/filepath"
+	"strings"
+)
+
 const NamePrefixElement = "NamePrefix"
 
 type ConvertType string
@@ -53,6 +58,11 @@ type BaseBindingsFile struct {
 	Bindings map[string]BaseBinding `json:"bindings"`
 }
 
+type CodeOverlayConfig struct {
+	Enabled     bool   `json:"enabled,omitempty"`
+	OverlayFile string `json:"overlay_file,omitempty"`
+}
+
 type Configuration struct {
 	PlatformVersion             string               `json:"platform_version"`
 	Extension                   string               `json:"extension"`
@@ -74,6 +84,7 @@ type Configuration struct {
 	XMLFiles                    []*FileOperation     `json:"xml_file_changes"`
 	AdditionalProcessing        AdditionalProcessing `json:"AdditionalProcessing,omitempty"`
 	AdditionalAdoptedObjects    []string             `json:"additional_adopted_objects,omitempty"`
+	CodeOverlay                 CodeOverlayConfig    `json:"code_overlay,omitempty"`
 
 	// Deprecated aliases kept for backwards compatibility with old configs.
 	IncludedObjects []string `json:"included_objects,omitempty"`
@@ -133,4 +144,15 @@ func (cfg *Configuration) ExtensionIdentifier() string {
 		return ""
 	}
 	return cfg.ExtensionProperties.Identifier
+}
+
+func (cfg *Configuration) IsCodeOverlayEnabled() bool {
+	return cfg != nil && cfg.CodeOverlay.Enabled
+}
+
+func (cfg *Configuration) CodeOverlayFile() string {
+	if cfg == nil {
+		return ""
+	}
+	return strings.TrimSpace(filepath.ToSlash(cfg.CodeOverlay.OverlayFile))
 }
