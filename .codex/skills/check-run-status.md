@@ -31,26 +31,19 @@ Skill не делает cleanup.
 - свежие `output/_log/xml_dumps/v8_src*`
 - `Configuration.xml`
 
-Все эти пути проверяются внутри текущего worktree / текущего `cwd`, для которого был запущен прогон. Если в системе есть несколько worktree репозитория, нельзя смешивать их `output/_log`, `output/_tmp` и `configs`.
-
 ## Как определить текущий запуск
 
-Текущий запуск определяется только по совокупности:
-- timestamp запуска
-- PID wrapper-процесса
-- stdout/stderr log path
-- `CommandLine` с текущим `--config`
-- parent-child process chain
+Текущий запуск определяется по совокупности:
+- timestamp
+- PID
+- stdout/stderr
+- `CommandLine`
+- process chain
 - свежие temp/dump каталоги
 
-Дополнительно:
-- `output/_log/last_run.txt` не является достаточным доказательством текущего запуска
-- `last_run.txt` может остаться от старого wrapper-процесса и отставать от реального нового запуска
-- если `run-<timestamp>.pid`, stdout/stderr и process-chain указывают на новый запуск, а `last_run.txt` еще старый, источником истины считается новый `runTimestamp`, а не stale `last_run.txt`
+`last_run.txt` сам по себе не является источником истины.
 
 ## Как определить свежий dump
-
-Каталог `v8_src*` сам по себе не доказывает, что это dump расширения.
 
 Проверить `Configuration.xml`:
 - `ObjectBelonging=Adopted`
@@ -61,16 +54,11 @@ Skill не делает cleanup.
 
 ### RUNNING
 
-Прогон ещё выполняется.
+Прогон еще выполняется.
 
 ### FAILED
 
 Прогон завершился ошибкой.
-
-Вывести:
-- ключевую ошибку
-- файл
-- последнюю стадию
 
 ### SUCCESS
 
@@ -78,7 +66,7 @@ Skill не делает cleanup.
 
 ### PAUSED_AFTER_SUCCESS
 
-`ChangeFiles` завершился успешно, dump snapshot сохранён, но wrapper `powershell` ещё висит на:
+Wrapper завис только на:
 
 ```text
 Press any key to exit...
@@ -86,7 +74,9 @@ Press any key to exit...
 
 В этом случае orchestrator должен вызвать:
 
-`.codex/skills/cleanup-run-tails.md`
+```text
+.codex/skills/cleanup-run-tails.md
+```
 
 ## Формат status summary
 
@@ -103,8 +93,19 @@ Press any key to exit...
 - есть ли связанные `1cv8.exe`
 - next action
 
+## Финальный формат ответа пользователю
+
+Если проверка выполняется как часть полного прогона или финального отчета, дополнительно выводить:
+- результат `go build ./...`
+- результат `go test ./...`
+- результат `go run`
+- путь к свежему dump snapshot
+- путь к `.cfe`, если он создан
+- ключевую ошибку и файл, если прогон упал
+
 ## Правило остановки heartbeat
 
-Если мониторинг запущен как heartbeat и статус **не** `RUNNING` (например, `SUCCESS`, `FAILED`, `PAUSED_AFTER_SUCCESS`, или прогона нет), heartbeat нужно **остановить**:
-- удалить heartbeat (предпочтительно), либо поставить на `PAUSED`
-- в сообщении пользователю явно указать, что heartbeat остановлен, чтобы не было ощущения “фон продолжает что-то делать”
+Если статус не `RUNNING`:
+- heartbeat нужно остановить
+- удалить heartbeat или перевести его в paused
+- явно сообщить пользователю, что monitoring остановлен
