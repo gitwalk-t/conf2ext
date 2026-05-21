@@ -24,6 +24,9 @@
   - `.codex/skills/check-run-status.md`
   - `.codex/skills/cleanup-run-tails.md`
 
+- GitHub Issue workflow:
+  - `.codex/skills/use-github-issue-task.md`
+
 - Обновление локального репозитория из git:
   - `.codex/skills/update-repo-from-git.md`
 
