@@ -6333,6 +6333,11 @@ func removeInvalidFormLevelExcludedStandardCommands(doc *etree.Document) bool {
 		return false
 	}
 
+	commandSet := root.FindElement("./CommandSet")
+	if commandSet == nil {
+		return false
+	}
+
 	invalid := map[string]struct{}{
 		"Change":        {},
 		"Copy":          {},
@@ -6343,27 +6348,19 @@ func removeInvalidFormLevelExcludedStandardCommands(doc *etree.Document) bool {
 	}
 
 	changed := false
-	for _, commandSet := range append([]*etree.Element(nil), root.FindElements(".//*[local-name()='CommandSet']")...) {
-		for _, child := range append([]*etree.Element(nil), commandSet.ChildElements()...) {
-			if !strings.EqualFold(localName(child.Tag), "ExcludedCommand") {
-				continue
-			}
-			if _, bad := invalid[strings.TrimSpace(child.Text())]; !bad {
-				continue
-			}
-			commandSet.RemoveChild(child)
-			changed = true
-		}
-
-		if len(commandSet.ChildElements()) != 0 {
+	for _, child := range append([]*etree.Element(nil), commandSet.ChildElements()...) {
+		if !strings.EqualFold(localName(child.Tag), "ExcludedCommand") {
 			continue
 		}
-		parent := commandSet.Parent()
-		if parent == nil {
+		if _, bad := invalid[strings.TrimSpace(child.Text())]; !bad {
 			continue
 		}
-		parent.RemoveChild(commandSet)
+		commandSet.RemoveChild(child)
 		changed = true
+	}
+
+	if changed && len(commandSet.ChildElements()) == 0 {
+		root.RemoveChild(commandSet)
 	}
 
 	return changed
@@ -7364,6 +7361,7 @@ func shouldPreserveNativeFormFunctionalOptionElement(parentTag, tag string, el *
 	switch {
 	case tag == "command" && parentTag == "commands":
 		return subtreeContainsOnlyAllowedBlockedMetadataKinds(el, nonNativeKeys, map[string]struct{}{
+			"CommonPicture":              {},
 			"FunctionalOption":           {},
 			"FunctionalOptionsParameter": {},
 		})

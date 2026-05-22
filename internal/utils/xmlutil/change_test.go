@@ -1077,15 +1077,19 @@ func TestCleanupFormDocumentIndexedNativeStillRemovesBlockedNonNativeReferences(
 	}
 }
 
-func TestCleanupFormDocumentIndexedNativeKeepsFunctionalOptionCommands(t *testing.T) {
+func TestCleanupFormDocumentIndexedNativeKeepsPM5CommandsWithCommonPictureAndFunctionalOption(t *testing.T) {
 	t.Parallel()
 
 	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
 <Form xmlns="http://v8.1c.ru/8.3/xcf/logform">
   <ChildItems>
-    <Button name="НастройкаЭЦП">
-      <Type>Hyperlink</Type>
-      <CommandName>Form.Command.НастройкаЭЦП</CommandName>
+    <Button name="КомандаЗаполнитьАдресБазыПоТекущемуСоединению">
+      <Type>UsualButton</Type>
+      <CommandName>Form.Command.КомандаЗаполнитьАдресБазыПоТекущемуСоединению</CommandName>
+    </Button>
+    <Button name="КомандаПоказатьПодсказуАдресаБазы">
+      <Type>UsualButton</Type>
+      <CommandName>Form.Command.КомандаПоказатьПодсказуАдресаБазы</CommandName>
     </Button>
     <Button name="НенативнаяКоманда">
       <Type>Hyperlink</Type>
@@ -1093,10 +1097,22 @@ func TestCleanupFormDocumentIndexedNativeKeepsFunctionalOptionCommands(t *testin
     </Button>
   </ChildItems>
   <Commands>
-    <Command name="НастройкаЭЦП">
-      <Action>НастройкаЭЦП</Action>
+    <Command name="КомандаЗаполнитьАдресБазыПоТекущемуСоединению">
+      <Picture>
+        <xr:Ref xmlns:xr="http://v8.1c.ru/8.3/xcf/readable">CommonPicture.ЗаполнитьПоОснованию</xr:Ref>
+      </Picture>
+      <Action>КомандаЗаполнитьАдресБазыПоТекущемуСоединению</Action>
       <FunctionalOptions>
-        <Item>FunctionalOption.ИспользоватьЭлектронныеПодписи</Item>
+        <Item>FunctionalOption.упо_ИспользоватьОповещения</Item>
+      </FunctionalOptions>
+    </Command>
+    <Command name="КомандаПоказатьПодсказуАдресаБазы">
+      <Picture>
+        <xr:Ref xmlns:xr="http://v8.1c.ru/8.3/xcf/readable">CommonPicture.Информация16АнимированнаяБЗК</xr:Ref>
+      </Picture>
+      <Action>КомандаПоказатьПодсказуАдресаБазы</Action>
+      <FunctionalOptions>
+        <Item>FunctionalOption.упо_ИспользоватьОповещения</Item>
       </FunctionalOptions>
     </Command>
   </Commands>
@@ -1104,34 +1120,122 @@ func TestCleanupFormDocumentIndexedNativeKeepsFunctionalOptionCommands(t *testin
 
 	formCtx := &FileProcessingContext{
 		Doc:       formDoc,
-		OwnerKey:  "CommonForm.упо_ПерсональныеНастройки",
+		OwnerKey:  "CommonForm.упо_НастройкиPM5",
 		OwnerKind: "CommonForm",
 		FileName:  "Form.xml",
-		RelPath:   "CommonForms/упо_ПерсональныеНастройки/Ext/Form.xml",
+		RelPath:   "CommonForms/упо_НастройкиPM5/Ext/Form.xml",
 	}
 	contexts := []*FileProcessingContext{formCtx}
 	indexes := buildContextIndexes(contexts)
 	decisions := map[string]objectDecision{
-		"CommonForm.упо_ПерсональныеНастройки":            {Belonging: "Native"},
-		"FunctionalOption.ИспользоватьЭлектронныеПодписи": {Belonging: "AdoptedStub"},
-		"Catalog.НенативныйСправочник":                    {Belonging: "AdoptedStub"},
+		"CommonForm.упо_НастройкиPM5":                 {Belonging: "Native"},
+		"CommonPicture.ЗаполнитьПоОснованию":          {Belonging: "AdoptedStub"},
+		"CommonPicture.Информация16АнимированнаяБЗК":  {Belonging: "AdoptedStub"},
+		"FunctionalOption.упо_ИспользоватьОповещения": {Belonging: "AdoptedStub"},
+		"Catalog.НенативныйСправочник":                {Belonging: "AdoptedStub"},
 	}
 
 	if !cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
-		t.Fatalf("expected native form cleanup to remove blocked non-native refs while keeping FO-bound commands")
+		t.Fatalf("expected native form cleanup to keep PM5 commands while removing unrelated non-native refs")
 	}
 
-	if !formDocContainsText(formDoc, "Form.Command.НастройкаЭЦП") {
-		t.Fatalf("expected native form command binding guarded by functional option to remain")
+	for _, value := range []string{
+		"Form.Command.КомандаЗаполнитьАдресБазыПоТекущемуСоединению",
+		"Form.Command.КомандаПоказатьПодсказуАдресаБазы",
+		"CommonPicture.ЗаполнитьПоОснованию",
+		"CommonPicture.Информация16АнимированнаяБЗК",
+		"FunctionalOption.упо_ИспользоватьОповещения",
+		"КомандаЗаполнитьАдресБазыПоТекущемуСоединению",
+		"КомандаПоказатьПодсказуАдресаБазы",
+	} {
+		if !formDocContainsText(formDoc, value) {
+			t.Fatalf("expected PM5 command-related value %q to remain", value)
+		}
 	}
-	if !formDocContainsText(formDoc, "FunctionalOption.ИспользоватьЭлектронныеПодписи") {
-		t.Fatalf("expected functional option guard for native form command to remain")
+
+	if formDocContainsText(formDoc, "Catalog.НенативныйСправочник.Command.ОткрытьНенативнуюФорму") {
+		t.Fatalf("expected unrelated blocked metadata command reference to be removed")
 	}
-	if !formDocContainsText(formDoc, "НастройкаЭЦП") {
-		t.Fatalf("expected native form command definition to remain")
+}
+
+func TestCleanupFormDocumentIndexedNativeKeepsTelegramUserMappingCommandWithCommonPicture(t *testing.T) {
+	t.Parallel()
+
+	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ChildItems>
+    <Button name="НенативнаяКоманда">
+      <Type>CommandBarButton</Type>
+      <CommandName>Catalog.НенативныйСправочник.Command.ОткрытьНенативнуюФорму</CommandName>
+    </Button>
+    <Table name="СообщенияБоту">
+      <ContextMenu name="СообщенияБотуКонтекстноеМеню">
+        <ChildItems>
+          <Button name="СообщенияБотуКонтекстноеМенюКомандаУстановитьСоответствиеПользователя">
+            <Type>CommandBarButton</Type>
+            <CommandName>Form.Command.КомандаУстановитьСоответствиеПользователя</CommandName>
+          </Button>
+        </ChildItems>
+      </ContextMenu>
+      <AutoCommandBar name="СообщенияБотуКоманднаяПанель">
+        <ChildItems>
+          <Button name="СообщенияБотуКомандаУстановитьСоответствиеПользователя">
+            <Type>CommandBarButton</Type>
+            <CommandName>Form.Command.КомандаУстановитьСоответствиеПользователя</CommandName>
+          </Button>
+        </ChildItems>
+      </AutoCommandBar>
+    </Table>
+  </ChildItems>
+  <Commands>
+    <Command name="КомандаУстановитьСоответствиеПользователя">
+      <Picture>
+        <xr:Ref xmlns:xr="http://v8.1c.ru/8.3/xcf/readable">CommonPicture.ОбычныйДоступСФлажком</xr:Ref>
+      </Picture>
+      <Action>КомандаУстановитьСоответствиеПользователя</Action>
+      <AssociatedTableElementId xsi:type="xs:string">СообщенияБоту</AssociatedTableElementId>
+    </Command>
+  </Commands>
+</Form>`)
+
+	formCtx := &FileProcessingContext{
+		Doc:       formDoc,
+		OwnerKey:  "CommonForm.упо_НастройкиТранспортаОповещенийTelegram",
+		OwnerKind: "CommonForm",
+		FileName:  "Form.xml",
+		RelPath:   "CommonForms/упо_НастройкиТранспортаОповещенийTelegram/Ext/Form.xml",
+	}
+	contexts := []*FileProcessingContext{formCtx}
+	indexes := buildContextIndexes(contexts)
+	decisions := map[string]objectDecision{
+		"CommonForm.упо_НастройкиТранспортаОповещенийTelegram": {Belonging: "Native"},
+		"CommonPicture.ОбычныйДоступСФлажком":                  {Belonging: "AdoptedStub"},
+		"Catalog.НенативныйСправочник":                         {Belonging: "AdoptedStub"},
+	}
+
+	if !cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
+		t.Fatalf("expected native form cleanup to keep telegram user mapping command")
+	}
+
+	for _, value := range []string{
+		"Form.Command.КомандаУстановитьСоответствиеПользователя",
+		"КомандаУстановитьСоответствиеПользователя",
+		"CommonPicture.ОбычныйДоступСФлажком",
+	} {
+		if !formDocContainsText(formDoc, value) {
+			t.Fatalf("expected telegram command-related value %q to remain", value)
+		}
+	}
+	for _, name := range []string{
+		"СообщенияБотуКонтекстноеМенюКомандаУстановитьСоответствиеПользователя",
+		"СообщенияБотуКомандаУстановитьСоответствиеПользователя",
+	} {
+		if !hasFormElementWithName(formDoc, "Button", name) {
+			t.Fatalf("expected telegram button %q to remain", name)
+		}
 	}
 	if formDocContainsText(formDoc, "Catalog.НенативныйСправочник.Command.ОткрытьНенативнуюФорму") {
-		t.Fatalf("expected blocked non-native metadata command reference to be removed")
+		t.Fatalf("expected unrelated blocked metadata command reference to be removed")
 	}
 }
 
@@ -1192,21 +1296,18 @@ func TestCleanupFormDocumentIndexedRemovesForbiddenStandardCommandsForNativeForm
 		}
 	}
 
-	if formDocContainsText(formDoc, "Change") {
-		t.Fatalf("expected nested invalid excluded command to be removed")
+	if !formDocContainsText(formDoc, "Change") {
+		t.Fatalf("expected table command-set excluded command to remain")
 	}
-	if formDocContainsText(formDoc, "Delete") {
-		t.Fatalf("expected nested invalid excluded command to be removed")
+	if !formDocContainsText(formDoc, "Delete") {
+		t.Fatalf("expected unrelated excluded command to remain")
 	}
 	if !formDocContainsText(formDoc, "Form.Item.СписокДокументов.StandardCommand.Refresh") {
 		t.Fatalf("expected unrelated standard command to remain")
 	}
-	if formDoc.Root().FindElement(".//*[local-name()='Table']/*[local-name()='CommandSet']") != nil {
-		t.Fatalf("expected empty nested command set to be removed")
-	}
 }
 
-func TestCleanupFormDocumentIndexedRemovesNestedFormExcludedStandardCommands(t *testing.T) {
+func TestCleanupFormDocumentIndexedRemovesOnlyRootFormExcludedStandardCommands(t *testing.T) {
 	t.Parallel()
 
 	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
@@ -1248,8 +1349,20 @@ func TestCleanupFormDocumentIndexedRemovesNestedFormExcludedStandardCommands(t *
 		t.Fatalf("expected empty root form command set to be removed")
 	}
 
-	if tableCommandSet := formDoc.Root().FindElement(".//*[local-name()='Table']/*[local-name()='CommandSet']"); tableCommandSet != nil {
-		t.Fatalf("expected nested table command set with only invalid commands to be removed")
+	tableCommandSet := formDoc.Root().FindElement(".//*[local-name()='Table']/*[local-name()='CommandSet']")
+	if tableCommandSet == nil {
+		t.Fatalf("expected table command set to remain")
+	}
+	remaining := make(map[string]struct{})
+	for _, child := range tableCommandSet.ChildElements() {
+		if strings.EqualFold(localName(child.Tag), "ExcludedCommand") {
+			remaining[strings.TrimSpace(child.Text())] = struct{}{}
+		}
+	}
+	for _, command := range []string{"Change", "Delete"} {
+		if _, ok := remaining[command]; !ok {
+			t.Fatalf("expected table excluded command %q to remain", command)
+		}
 	}
 }
 
@@ -3396,11 +3509,15 @@ func TestCleanupMissingFormCommandReferencesRemovesDanglingShortNames(t *testing
 	}
 }
 
-func TestRemoveInvalidFormLevelExcludedStandardCommandsRemovesNestedTableCommands(t *testing.T) {
+func TestRemoveInvalidFormLevelExcludedStandardCommandsKeepsNestedTableCommands(t *testing.T) {
 	t.Parallel()
 
 	doc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
 <Form xmlns="http://v8.1c.ru/8.3/xcf/logform" xmlns:v8="http://v8.1c.ru/data" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable">
+  <CommandSet>
+    <ExcludedCommand>Change</ExcludedCommand>
+    <ExcludedCommand>WriteAndClose</ExcludedCommand>
+  </CommandSet>
   <ChildItems>
     <Table name="Список">
       <Title>
@@ -3424,22 +3541,20 @@ func TestRemoveInvalidFormLevelExcludedStandardCommandsRemovesNestedTableCommand
 </Form>`)
 
 	if !removeInvalidFormLevelExcludedStandardCommands(doc) {
-		t.Fatalf("expected nested invalid excluded standard commands to be removed")
+		t.Fatalf("expected root invalid excluded standard commands to be removed")
 	}
 
-	for _, command := range []string{"Change", "Copy", "Create", "Delete", "MoveItem"} {
-		if formDocContainsText(doc, command) {
-			t.Fatalf("expected nested excluded command %q to be removed", command)
-		}
+	if doc.Root().FindElement("./*[local-name()='CommandSet']") != nil {
+		t.Fatalf("expected root command set with only invalid commands to be removed")
 	}
-	for _, command := range []string{"CancelSearch", "Choose", "Refresh"} {
+	for _, command := range []string{"CancelSearch", "Change", "Choose", "Copy", "Create", "Delete", "MoveItem", "Refresh"} {
 		if !formDocContainsText(doc, command) {
-			t.Fatalf("expected non-problematic excluded command %q to remain", command)
+			t.Fatalf("expected nested excluded command %q to remain", command)
 		}
 	}
 }
 
-func TestRemoveInvalidFormLevelExcludedStandardCommandsRemovesEmptyNestedCommandSet(t *testing.T) {
+func TestRemoveInvalidFormLevelExcludedStandardCommandsDoesNothingForNestedOnlyCommandSets(t *testing.T) {
 	t.Parallel()
 
 	doc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
@@ -3460,15 +3575,15 @@ func TestRemoveInvalidFormLevelExcludedStandardCommandsRemovesEmptyNestedCommand
   </ChildItems>
 </Form>`)
 
-	if !removeInvalidFormLevelExcludedStandardCommands(doc) {
-		t.Fatalf("expected empty nested command set to be removed")
+	if removeInvalidFormLevelExcludedStandardCommands(doc) {
+		t.Fatalf("expected nested-only command set to stay untouched")
 	}
 
-	if formDocContainsText(doc, "Delete") {
-		t.Fatalf("expected invalid excluded command to be removed")
+	if !formDocContainsText(doc, "Delete") {
+		t.Fatalf("expected nested invalid excluded command to remain")
 	}
-	if doc.FindElement("//*[local-name()='Table']/*[local-name()='CommandSet']") != nil {
-		t.Fatalf("expected empty nested command set container to be removed")
+	if doc.FindElement("//*[local-name()='Table']/*[local-name()='CommandSet']") == nil {
+		t.Fatalf("expected nested command set container to remain")
 	}
 }
 
