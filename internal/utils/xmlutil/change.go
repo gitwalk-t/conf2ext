@@ -559,7 +559,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 			changed = cleanupRoleDanglingMetadataRights(ctx.Doc, contexts) || changed
 		}
 
-		if strings.Contains(filepath.ToSlash(ctx.RelPath), "/Forms/") {
+		if isFormCleanupContext(ctx) {
 			changed = cleanupFormDocumentIndexed(ctx, contexts, indexes, decisions, nonNativeKeys) || changed
 		}
 
@@ -6317,6 +6317,19 @@ func cleanupMissingFormCommandReferences(doc *etree.Document, contexts []*FilePr
 	})
 }
 
+func isFormCleanupContext(ctx *FileProcessingContext) bool {
+	if ctx == nil {
+		return false
+	}
+
+	relPath := filepath.ToSlash(ctx.RelPath)
+	if strings.Contains(relPath, "/Forms/") {
+		return true
+	}
+
+	return ctx.OwnerKind == "CommonForm" && strings.EqualFold(ctx.FileName, "Form.xml")
+}
+
 func cleanupFormDocumentIndexed(
 	ctx *FileProcessingContext,
 	contexts []*FileProcessingContext,
@@ -6336,6 +6349,7 @@ func cleanupFormDocumentIndexed(
 	changed := false
 	changed = cleanupMissingFormConstantsSetReferencesIndexed(ctx.Doc, contexts, indexes, decisions) || changed
 	changed = cleanupMissingFormCommandReferences(ctx.Doc, contexts) || changed
+	changed = removeForbiddenStandardCommands(ctx.Doc) || changed
 
 	if decision.Belonging == "Native" {
 		changed = cleanupNativeFormNonNativeReferences(ctx.Doc, nonNativeKeys) || changed
@@ -7616,14 +7630,17 @@ func isMetadataCommandReference(value string) bool {
 }
 
 func isForbiddenStandardCommand(parent, child *etree.Element, targets []string) bool {
-	if !subtreeContainsAnyText(child, targets) && !subtreeContainsStandardCommandSuffix(child, []string{"LevelDown", "LevelUp"}) {
+	if !subtreeContainsAnyText(child, targets) && !subtreeContainsStandardCommandSuffix(child, []string{"Change", "ChangeHistory", "GetURL", "LevelDown", "LevelUp"}) {
 		return false
 	}
 
 	childTag := strings.ToLower(localName(child.Tag))
 	parentTag := strings.ToLower(localName(parent.Tag))
 
-	return strings.Contains(childTag, "standardcommand") ||
+	return childTag == "commandname" ||
+		childTag == "command" ||
+		childTag == "excludedcommand" ||
+		strings.Contains(childTag, "standardcommand") ||
 		strings.Contains(parentTag, "standardcommand") ||
 		childTag == "item"
 }

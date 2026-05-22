@@ -1077,6 +1077,92 @@ func TestCleanupFormDocumentIndexedNativeStillRemovesBlockedNonNativeReferences(
 	}
 }
 
+func TestCleanupFormDocumentIndexedRemovesForbiddenStandardCommandsForNativeForms(t *testing.T) {
+	t.Parallel()
+
+	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform">
+  <ChildItems>
+    <Table name="СписокДокументов">
+      <DataPath>СписокДокументов</DataPath>
+      <CommandSet>
+        <ExcludedCommand>Change</ExcludedCommand>
+        <ExcludedCommand>Delete</ExcludedCommand>
+      </CommandSet>
+      <AutoCommandBar name="Панель">
+        <ChildItems>
+          <Button name="Изменить">
+            <Type>CommandBarButton</Type>
+            <CommandName>Form.Item.СписокДокументов.StandardCommand.Change</CommandName>
+          </Button>
+          <Button name="История">
+            <Type>CommandBarButton</Type>
+            <CommandName>Form.Item.СписокДокументов.StandardCommand.ChangeHistory</CommandName>
+          </Button>
+          <Button name="Обновить">
+            <Type>CommandBarButton</Type>
+            <CommandName>Form.Item.СписокДокументов.StandardCommand.Refresh</CommandName>
+          </Button>
+        </ChildItems>
+      </AutoCommandBar>
+    </Table>
+  </ChildItems>
+</Form>`)
+
+	formCtx := &FileProcessingContext{
+		Doc:       formDoc,
+		OwnerKey:  "Catalog.упо_ДокументыОбязательств",
+		OwnerKind: "Catalog",
+		RelPath:   "Catalogs/упо_ДокументыОбязательств/Forms/ФормаСписка/Ext/Form.xml",
+	}
+	contexts := []*FileProcessingContext{formCtx}
+	indexes := buildContextIndexes(contexts)
+	decisions := map[string]objectDecision{
+		"Catalog.упо_ДокументыОбязательств": {Belonging: "Native"},
+	}
+
+	if !cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
+		t.Fatalf("expected native form cleanup to remove forbidden standard commands")
+	}
+
+	for _, forbidden := range []string{
+		"Change",
+		"Form.Item.СписокДокументов.StandardCommand.Change",
+		"Form.Item.СписокДокументов.StandardCommand.ChangeHistory",
+	} {
+		if formDocContainsText(formDoc, forbidden) {
+			t.Fatalf("expected forbidden command %q to be removed", forbidden)
+		}
+	}
+
+	if !formDocContainsText(formDoc, "Delete") {
+		t.Fatalf("expected unrelated excluded command to remain")
+	}
+	if !formDocContainsText(formDoc, "Form.Item.СписокДокументов.StandardCommand.Refresh") {
+		t.Fatalf("expected unrelated standard command to remain")
+	}
+}
+
+func TestIsFormCleanupContextIncludesCommonFormExtForm(t *testing.T) {
+	t.Parallel()
+
+	if !isFormCleanupContext(&FileProcessingContext{
+		FileName:  "Form.xml",
+		OwnerKind: "CommonForm",
+		RelPath:   "CommonForms/упо_РабочийСтолУправлениеДоговорами/Ext/Form.xml",
+	}) {
+		t.Fatalf("expected common form Ext/Form.xml to go through form cleanup")
+	}
+
+	if isFormCleanupContext(&FileProcessingContext{
+		FileName:  "упо_РабочийСтолУправлениеДоговорами.xml",
+		OwnerKind: "CommonForm",
+		RelPath:   "CommonForms/упо_РабочийСтолУправлениеДоговорами.xml",
+	}) {
+		t.Fatalf("did not expect common form metadata object xml to go through form cleanup")
+	}
+}
+
 func TestNormalizeAdoptedStubMetaDataCompositionKeepsRetainedAttributeNative(t *testing.T) {
 	t.Parallel()
 
@@ -7517,6 +7603,25 @@ func dynamicListFieldDeclared(doc *etree.Document, attrName, target string) bool
 					return true
 				}
 			}
+		}
+	}
+
+	return false
+}
+
+func formDocContainsText(doc *etree.Document, target string) bool {
+	if doc == nil || doc.Root() == nil {
+		return false
+	}
+
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return false
+	}
+
+	for _, el := range doc.FindElements("//*") {
+		if strings.TrimSpace(el.Text()) == target {
+			return true
 		}
 	}
 
