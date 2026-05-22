@@ -54,6 +54,9 @@
     "Document.ЗаказПоставщику": {
       "base_object_id": "17c81574-ebf5-4789-b027-c111587907d1"
     },
+    "EventSubscription.ЗаписатьВерсиюОбъекта": {
+      "base_object_id": "e06048ac-0ae5-49a1-927a-1915c5766afa"
+    },
     "EventSubscription.ПроверитьДатуЗапретаИзмененияПередЗаписьюДокумента": {
       "base_object_id": "f02b93b8-84bc-4cf0-9a42-e06d2b32caf8"
     },
@@ -97,7 +100,7 @@
       "base_object_id": "bcf1a1a2-5826-4ef2-beac-2b0fdb9c3a2c"
     },
     "Subsystem.Администрирование": {
-      "base_object_id": "d8290ae8-ab8e-42ae-a404-d71970d6c369"
+      "base_object_id": "7ae2d4a3-f684-43bb-a4fd-25cfb4f4a95c"
     }
   }
 }

@@ -77,5 +77,9 @@
         "base": "",
         "xml_dump": "/input/target"
     },
+    "code_overlay": {
+        "enabled": true,
+        "overlay_file": "configs/code_overlay.json"
+    },
     "conversion_type": "srcConvert"
 }
