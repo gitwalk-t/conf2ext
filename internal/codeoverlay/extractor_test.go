@@ -245,22 +245,65 @@ func TestExtractSkipsForbiddenBlocks(t *testing.T) {
 	}
 }
 
+func TestExtractConfiguredIdentifiersAllowShorthandsAndForbiddenOverride(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "cmd/extract_code_overlay/config.json", "{\n  \"included\": [\n    \"SessionModule\",\n    \"CommonModule.ТестОбщийМодуль\",\n    \"DataProcessor.ТестОбработка.Form.ФормаСписка\",\n    \"DataProcessor.ТестОбработка.Command.Выполнить\"\n  ],\n  \"forbidden\": [\n    \"DataProcessor.ТестОбработка.Command.Выполнить\"\n  ]\n}")
+	writeFile(t, root, "Ext/SessionModule.bsl", "Процедура Сеанс()\nКонецПроцедуры\n")
+	writeFile(t, root, "CommonModules/ТестОбщийМодуль/Ext/Module.bsl", "Процедура Общий()\nКонецПроцедуры\n")
+	writeFile(t, root, "DataProcessors/ТестОбработка/Forms/ФормаСписка/Ext/Form/Module.bsl", "Процедура Форма()\nКонецПроцедуры\n")
+	writeFile(t, root, "DataProcessors/ТестОбработка/Commands/Выполнить/Ext/CommandModule.bsl", "Процедура Команда()\nКонецПроцедуры\n")
+
+	sets, err := loadExtractorBlockSets(filepath.Join(root, "cmd", "extract_code_overlay", "config.json"))
+	if err != nil {
+		t.Fatalf("loadExtractorBlockSets: %v", err)
+	}
+
+	artifact, err := Extract(root, sets.Included, sets.Forbidden)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+
+	gotIDs := make([]string, 0, len(artifact.Blocks))
+	for _, block := range artifact.Blocks {
+		gotIDs = append(gotIDs, block.ID)
+	}
+
+	wantIDs := []string{
+		"CommonModule.ТестОбщийМодуль:CommonModule",
+		"DataProcessor.ТестОбработка.Form.ФормаСписка:FormModule",
+		"Session:SessionModule",
+	}
+	if !reflect.DeepEqual(gotIDs, wantIDs) {
+		t.Fatalf("unexpected block ids:\n got %#v\nwant %#v", gotIDs, wantIDs)
+	}
+}
+
 func TestNormalizeConfiguredBlockIDSupportsIncludedShorthands(t *testing.T) {
 	tests := map[string]string{
 		"SessionModule": "Session:SessionModule",
 		"CommonModule.ОбновлениеИнформационнойБазыУНФ":     "CommonModule.ОбновлениеИнформационнойБазыУНФ:CommonModule",
 		"CommonModule.Тест:CommonModule":                   "CommonModule.Тест:CommonModule",
+		"CommonForm.ТестоваяФорма":                         "CommonForm.ТестоваяФорма:FormModule",
+		"DataProcessor.ТестОбработка.Form.ФормаСписка":     "DataProcessor.ТестОбработка.Form.ФормаСписка:FormModule",
+		"CommonCommand.ТестоваяКоманда":                    "CommonCommand.ТестоваяКоманда:CommandModule",
+		"DataProcessor.ТестОбработка.Command.Выполнить":    "DataProcessor.ТестОбработка.Command.Выполнить:CommandModule",
 		"  CommonModule.ОбновлениеИнформационнойБазыУНФ  ": "CommonModule.ОбновлениеИнформационнойБазыУНФ:CommonModule",
 	}
 
 	for input, want := range tests {
-		got, ok := normalizeConfiguredBlockID(input)
-		if !ok {
-			t.Fatalf("normalizeConfiguredBlockID(%q) unexpectedly returned ok=false", input)
+		got, err := normalizeConfiguredBlockID(input)
+		if err != nil {
+			t.Fatalf("normalizeConfiguredBlockID(%q): %v", input, err)
 		}
 		if got != want {
 			t.Fatalf("normalizeConfiguredBlockID(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestNormalizeConfiguredBlockIDRejectsAmbiguousShorthand(t *testing.T) {
+	if _, err := normalizeConfiguredBlockID("Catalog.Тест"); err == nil {
+		t.Fatal("expected ambiguous shorthand to fail")
 	}
 }
 

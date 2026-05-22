@@ -99,6 +99,7 @@ func Run(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	warnMissingIncludedBlocks(artifact, extractorBlockSets.Included, extractorBlockSets.Forbidden)
 	if err := Write(outputPath, artifact); err != nil {
 		return Result{}, err
 	}
@@ -181,6 +182,28 @@ func Extract(extensionPath string, allowedBlockIDs, forbiddenBlockIDs map[string
 func mergeAllowedBlockIDs(dst, src map[string]struct{}) {
 	for id := range src {
 		dst[id] = struct{}{}
+	}
+}
+
+func warnMissingIncludedBlocks(artifact Artifact, includedBlockIDs, forbiddenBlockIDs map[string]struct{}) {
+	if len(includedBlockIDs) == 0 {
+		return
+	}
+
+	extracted := make(map[string]struct{}, len(artifact.Blocks))
+	for _, block := range artifact.Blocks {
+		extracted[block.ID] = struct{}{}
+	}
+
+	for id := range includedBlockIDs {
+		if _, ok := extracted[id]; ok {
+			continue
+		}
+		if _, forbidden := forbiddenBlockIDs[id]; forbidden {
+			log.Printf("warning: code overlay: explicitly included block %s skipped because extractor config forbidden overrides included", id)
+			continue
+		}
+		log.Printf("warning: code overlay: explicitly included block %s not found in extension dump or skipped by layout/content filters", id)
 	}
 }
 

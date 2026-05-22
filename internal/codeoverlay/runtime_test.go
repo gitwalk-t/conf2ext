@@ -161,6 +161,31 @@ func TestApplyArtifactSessionModule(t *testing.T) {
 	assertFileContent(t, root, "Ext/SessionModule.bsl", "Процедура ПриНачалеРаботыСистемы()\nКонецПроцедуры\n")
 }
 
+func TestApplyNormalizesLegacyShorthandOverlayIDs(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "Ext/SessionModule.bsl", "// generated session\n")
+	writeFile(t, root, "CommonModules/ТестОбщийМодуль/Ext/Module.bsl", "// generated common\n")
+	writeFile(t, root, "DataProcessors/ТестОбработка/Forms/ФормаСписка/Ext/Form/Module.bsl", "// generated form\n")
+	writeFile(t, root, "DataProcessors/ТестОбработка/Commands/Выполнить/Ext/CommandModule.bsl", "// generated command\n")
+
+	overlayRoot := t.TempDir()
+	overlayPath := filepath.Join(overlayRoot, "legacy-overlay.json")
+	writeFile(t, overlayRoot, "legacy-overlay.json", "{\n  \"version\": 1,\n  \"blocks\": [\n    {\n      \"id\": \"SessionModule\",\n      \"object\": \"Session\",\n      \"kind\": \"SessionModule\",\n      \"path\": \"Ext/SessionModule.bsl\",\n      \"hash\": \"\",\n      \"content\": \"Процедура Сеанс()\\nКонецПроцедуры\\n\"\n    },\n    {\n      \"id\": \"CommonModule.ТестОбщийМодуль\",\n      \"object\": \"CommonModule.ТестОбщийМодуль\",\n      \"kind\": \"CommonModule\",\n      \"path\": \"CommonModules/ТестОбщийМодуль/Ext/Module.bsl\",\n      \"hash\": \"\",\n      \"content\": \"Процедура Общий()\\nКонецПроцедуры\\n\"\n    },\n    {\n      \"id\": \"DataProcessor.ТестОбработка.Form.ФормаСписка\",\n      \"object\": \"DataProcessor.ТестОбработка.Form.ФормаСписка\",\n      \"kind\": \"FormModule\",\n      \"path\": \"DataProcessors/ТестОбработка/Forms/ФормаСписка/Ext/Form/Module.bsl\",\n      \"hash\": \"\",\n      \"content\": \"Процедура Форма()\\nКонецПроцедуры\\n\"\n    },\n    {\n      \"id\": \"DataProcessor.ТестОбработка.Command.Выполнить\",\n      \"object\": \"DataProcessor.ТестОбработка.Command.Выполнить\",\n      \"kind\": \"CommandModule\",\n      \"path\": \"DataProcessors/ТестОбработка/Commands/Выполнить/Ext/CommandModule.bsl\",\n      \"hash\": \"\",\n      \"content\": \"Процедура Команда()\\nКонецПроцедуры\\n\"\n    }\n  ]\n}")
+
+	diagnostics, err := Apply(root, overlayPath)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	if diagnostics.Applied != 4 || diagnostics.Skipped != 0 || diagnostics.Missing != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", diagnostics)
+	}
+	assertFileContent(t, root, "Ext/SessionModule.bsl", "Процедура Сеанс()\nКонецПроцедуры\n")
+	assertFileContent(t, root, "CommonModules/ТестОбщийМодуль/Ext/Module.bsl", "Процедура Общий()\nКонецПроцедуры\n")
+	assertFileContent(t, root, "DataProcessors/ТестОбработка/Forms/ФормаСписка/Ext/Form/Module.bsl", "Процедура Форма()\nКонецПроцедуры\n")
+	assertFileContent(t, root, "DataProcessors/ТестОбработка/Commands/Выполнить/Ext/CommandModule.bsl", "Процедура Команда()\nКонецПроцедуры\n")
+}
+
 func TestApplyArtifactHandlesDuplicateOverlayIDs(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "CommonModules/Тест/Ext/Module.bsl", "// generated\n")
