@@ -1799,6 +1799,7 @@ func canonicalizeTargetRenamedAdoptedObjects(
 	configurationChanged := false
 	configDumpChanged := false
 	staleKeys := make(map[string]struct{})
+	renameReplacements := make(map[string]string)
 	for _, uuid := range uuids {
 		candidates := byUUID[uuid]
 		if len(candidates) == 0 {
@@ -1837,6 +1838,7 @@ func canonicalizeTargetRenamedAdoptedObjects(
 		for _, candidate := range candidates {
 			decisions[candidate.Key] = objectDecision{Excluded: true}
 			staleKeys[candidate.Key] = struct{}{}
+			renameReplacements[candidate.Key] = canonicalKey
 			canonicalDecision.SearchResultCode = canonicalDecision.SearchResultCode || candidate.Decision.SearchResultCode
 			canonicalDecision.AdoptedStubExtMetaData = canonicalDecision.AdoptedStubExtMetaData || candidate.Decision.AdoptedStubExtMetaData
 			canonicalDecision.Truncated = canonicalDecision.Truncated || candidate.Decision.Truncated
@@ -1878,6 +1880,20 @@ func canonicalizeTargetRenamedAdoptedObjects(
 	if configDumpChanged && configDumpCtx != nil && configDumpCtx.Doc != nil {
 		if err := configDumpCtx.Doc.WriteToFile(configDumpCtx.Path); err != nil {
 			return nil, nil, fmt.Errorf("ошибка при записи файла %s: %w", configDumpCtx.Path, err)
+		}
+	}
+
+	if len(renameReplacements) > 0 {
+		for _, ctx := range contexts {
+			if ctx == nil || ctx.Doc == nil {
+				continue
+			}
+			if !replaceMetadataReferencesInDoc(ctx.Doc, renameReplacements) {
+				continue
+			}
+			if err := ctx.Doc.WriteToFile(ctx.Path); err != nil {
+				return nil, nil, fmt.Errorf("ошибка при записи файла %s: %w", ctx.Path, err)
+			}
 		}
 	}
 
@@ -6311,6 +6327,45 @@ func removeForbiddenStandardCommands(doc *etree.Document) bool {
 	return changed
 }
 
+func removeInvalidFormLevelExcludedStandardCommands(doc *etree.Document) bool {
+	root := doc.Root()
+	if root == nil {
+		return false
+	}
+
+	commandSet := root.FindElement("./CommandSet")
+	if commandSet == nil {
+		return false
+	}
+
+	invalid := map[string]struct{}{
+		"Change":        {},
+		"Copy":          {},
+		"Create":        {},
+		"Delete":        {},
+		"MoveItem":      {},
+		"WriteAndClose": {},
+	}
+
+	changed := false
+	for _, child := range append([]*etree.Element(nil), commandSet.ChildElements()...) {
+		if !strings.EqualFold(localName(child.Tag), "ExcludedCommand") {
+			continue
+		}
+		if _, bad := invalid[strings.TrimSpace(child.Text())]; !bad {
+			continue
+		}
+		commandSet.RemoveChild(child)
+		changed = true
+	}
+
+	if changed && len(commandSet.ChildElements()) == 0 {
+		root.RemoveChild(commandSet)
+	}
+
+	return changed
+}
+
 func cleanupMissingFormCommandReferences(doc *etree.Document, contexts []*FileProcessingContext) bool {
 	return cleanupMissingFormCommandReferencesWithResolver(doc, func(name string) bool {
 		return roleMetadataTargetExists(name, contexts)
@@ -6341,12 +6396,14 @@ func cleanupFormDocumentIndexed(
 		return false
 	}
 
+	changed := false
+	changed = removeInvalidFormLevelExcludedStandardCommands(ctx.Doc) || changed
+
 	decision, ok := decisions[ctx.OwnerKey]
 	if !ok {
-		return false
+		return changed
 	}
 
-	changed := false
 	changed = cleanupMissingFormConstantsSetReferencesIndexed(ctx.Doc, contexts, indexes, decisions) || changed
 	changed = cleanupMissingFormCommandReferences(ctx.Doc, contexts) || changed
 	changed = removeForbiddenStandardCommands(ctx.Doc) || changed
@@ -6728,7 +6785,7 @@ func cleanupNativeFormNonNativeReferences(doc *etree.Document, nonNativeKeys map
 			children := parent.ChildElements()
 			for i := len(children) - 1; i >= 0; i-- {
 				child := children[i]
-				if shouldRemoveNativeFormElement(child, blockedAttributes, nonNativeKeys) {
+				if shouldRemoveNativeFormElement(parent, child, blockedAttributes, nonNativeKeys) {
 					parent.RemoveChild(child)
 					passChanged = true
 					continue
@@ -7039,16 +7096,6 @@ func normalizeManualQueryWithoutMainTable(doc *etree.Document) bool {
 			continue
 		}
 
-		for _, excluded := range append([]*etree.Element(nil), table.FindElements("./CommandSet/ExcludedCommand")...) {
-			switch strings.TrimSpace(excluded.Text()) {
-			case "Change", "ChangeHistory", "GetURL", "LevelDown", "LevelUp":
-				if parent := excluded.Parent(); parent != nil {
-					parent.RemoveChild(excluded)
-					changed = true
-				}
-			}
-		}
-
 		for _, rowPicture := range append([]*etree.Element(nil), table.FindElements("./RowPictureDataPath")...) {
 			if strings.TrimSpace(rowPicture.Text()) != dataPath+".DefaultPicture" {
 				continue
@@ -7267,14 +7314,21 @@ func buildNestedManualQuerySelect(indent, expr, alias string, nestedFields []str
 	return b.String()
 }
 
-func shouldRemoveNativeFormElement(el *etree.Element, blockedAttributes, nonNativeKeys map[string]struct{}) bool {
+func shouldRemoveNativeFormElement(parent, el *etree.Element, blockedAttributes, nonNativeKeys map[string]struct{}) bool {
 	if el == nil {
 		return false
 	}
 
 	tag := strings.ToLower(localName(el.Tag))
+	parentTag := ""
+	if parent != nil {
+		parentTag = strings.ToLower(localName(parent.Tag))
+	}
 	if tag == "maintable" || tag == "commandname" || tag == "command" || tag == "datapath" || tag == "field" || tag == "item" || tag == "rowpicturedatapath" {
 		if subtreeContainsAnyMetadataReference(el, nonNativeKeys) {
+			if shouldPreserveNativeFormFunctionalOptionElement(parentTag, tag, el, nonNativeKeys) {
+				return false
+			}
 			return true
 		}
 	}
@@ -7297,6 +7351,49 @@ func shouldRemoveNativeFormElement(el *etree.Element, blockedAttributes, nonNati
 	}
 
 	return false
+}
+
+func shouldPreserveNativeFormFunctionalOptionElement(parentTag, tag string, el *etree.Element, nonNativeKeys map[string]struct{}) bool {
+	if el == nil || len(nonNativeKeys) == 0 {
+		return false
+	}
+
+	switch {
+	case tag == "command" && parentTag == "commands":
+		return subtreeContainsOnlyAllowedBlockedMetadataKinds(el, nonNativeKeys, map[string]struct{}{
+			"FunctionalOption":           {},
+			"FunctionalOptionsParameter": {},
+		})
+	case tag == "item" && (parentTag == "functionaloptions" || parentTag == "functionaloptionsparameters"):
+		return subtreeContainsOnlyAllowedBlockedMetadataKinds(el, nonNativeKeys, map[string]struct{}{
+			"FunctionalOption":           {},
+			"FunctionalOptionsParameter": {},
+		})
+	default:
+		return false
+	}
+}
+
+func subtreeContainsOnlyAllowedBlockedMetadataKinds(el *etree.Element, nonNativeKeys, allowedKinds map[string]struct{}) bool {
+	if el == nil || len(nonNativeKeys) == 0 || len(allowedKinds) == 0 {
+		return false
+	}
+
+	hasBlocked := false
+	for _, value := range collectElementValues(el) {
+		for _, ref := range metadataReferencesFromValue(value) {
+			if _, blocked := nonNativeKeys[ref]; !blocked {
+				continue
+			}
+			hasBlocked = true
+			kind, _ := splitObjectKey(ref)
+			if _, allowed := allowedKinds[kind]; !allowed {
+				return false
+			}
+		}
+	}
+
+	return hasBlocked
 }
 
 func subtreeContainsAnyMetadataReference(el *etree.Element, nonNativeKeys map[string]struct{}) bool {
@@ -7495,7 +7592,7 @@ func cleanupFinalNonNativeFormNoise(contexts []*FileProcessingContext, indexes *
 		if ctx == nil || ctx.Doc == nil {
 			continue
 		}
-		if !strings.Contains(filepath.ToSlash(ctx.RelPath), "/Forms/") {
+		if !isFormCleanupContext(ctx) {
 			continue
 		}
 
@@ -7536,7 +7633,7 @@ func shouldRemoveNonNativeFormStandardCommand(el *etree.Element) bool {
 		return false
 	}
 
-	if tag != "commandname" && tag != "command" && tag != "excludedcommand" {
+	if tag != "commandname" && tag != "command" {
 		return false
 	}
 
@@ -7561,7 +7658,7 @@ func shouldRemoveUniversalFormNoise(el *etree.Element) bool {
 	text := strings.TrimSpace(el.Text())
 
 	if text == "LevelDown" || text == "LevelUp" {
-		return tag == "commandname" || tag == "command" || tag == "excludedcommand"
+		return tag == "commandname" || tag == "command"
 	}
 
 	return false
@@ -7614,8 +7711,6 @@ func shouldRemoveFormCommandReference(el *etree.Element, defined map[string]stru
 			return exists != nil && !exists(text)
 		}
 		return false
-	case "excludedcommand":
-		return text == "LevelDown" || text == "LevelUp"
 	default:
 		return false
 	}
@@ -7639,7 +7734,6 @@ func isForbiddenStandardCommand(parent, child *etree.Element, targets []string) 
 
 	return childTag == "commandname" ||
 		childTag == "command" ||
-		childTag == "excludedcommand" ||
 		strings.Contains(childTag, "standardcommand") ||
 		strings.Contains(parentTag, "standardcommand") ||
 		childTag == "item"
@@ -10086,12 +10180,102 @@ func normalizeChartOfCharacteristicTypesPredefined(ctx *FileProcessingContext, c
 			continue
 		}
 
-		if syncCharacteristicPredefinedTypeQualifiers(typeEl, ownerTypeChildren) {
-			changed = true
-		}
 	}
 
 	return changed
+}
+
+func replaceMetadataReferencesInDoc(doc *etree.Document, replacements map[string]string) bool {
+	root := doc.Root()
+	if root == nil || len(replacements) == 0 {
+		return false
+	}
+
+	changed := false
+	var walk func(*etree.Element)
+	walk = func(el *etree.Element) {
+		if el == nil {
+			return
+		}
+
+		if replaced, ok := replaceMetadataReferencesInValue(el.Text(), replacements); ok {
+			el.SetText(replaced)
+			changed = true
+		}
+
+		for i, attr := range el.Attr {
+			if replaced, ok := replaceMetadataReferencesInValue(attr.Value, replacements); ok {
+				el.Attr[i].Value = replaced
+				changed = true
+			}
+		}
+
+		for _, child := range el.ChildElements() {
+			walk(child)
+		}
+	}
+
+	walk(root)
+	return changed
+}
+
+func replaceMetadataReferencesInValue(value string, replacements map[string]string) (string, bool) {
+	if value == "" || len(replacements) == 0 {
+		return value, false
+	}
+
+	changed := false
+	replaced := metadataReferencePattern.ReplaceAllStringFunc(value, func(match string) string {
+		updated, ok := replaceMatchedMetadataReference(match, replacements)
+		if !ok || updated == match {
+			return match
+		}
+		changed = true
+		return updated
+	})
+
+	return replaced, changed
+}
+
+func replaceMatchedMetadataReference(match string, replacements map[string]string) (string, bool) {
+	if match == "" || len(replacements) == 0 {
+		return match, false
+	}
+
+	prefix := ""
+	token := match
+	if idx := strings.LastIndex(token, ":"); idx >= 0 {
+		prefix = token[:idx+1]
+		token = token[idx+1:]
+	}
+
+	dotIdx := strings.IndexByte(token, '.')
+	if dotIdx <= 0 || dotIdx >= len(token)-1 {
+		return match, false
+	}
+
+	kindToken := token[:dotIdx]
+	baseKind, ok := normalizeMetadataReferenceKind(kindToken)
+	if !ok || baseKind == "" {
+		return match, false
+	}
+
+	path := token[dotIdx+1:]
+	for staleKey, canonicalKey := range replacements {
+		staleKind, staleName := splitObjectKey(staleKey)
+		canonicalKind, canonicalName := splitObjectKey(canonicalKey)
+		if staleKind == "" || canonicalKind == "" || staleKind != canonicalKind || baseKind != staleKind {
+			continue
+		}
+		switch {
+		case path == staleName:
+			return prefix + kindToken + "." + canonicalName, true
+		case strings.HasPrefix(path, staleName+"."):
+			return prefix + kindToken + "." + canonicalName + path[len(staleName):], true
+		}
+	}
+
+	return match, false
 }
 
 func normalizeRetainedAdoptedCommandChildObjects(childObjects *etree.Element, retainedCommands map[string]struct{}) bool {
@@ -10142,7 +10326,7 @@ func shouldIndexLiveCommandReferences(ctx *FileProcessingContext, decision objec
 	if decision.Excluded || ctx.FileName == configDumpInfo || isRootServiceFile(ctx) {
 		return false
 	}
-	if strings.EqualFold(ctx.FileName, "Form.xml") && strings.Contains(filepath.ToSlash(ctx.RelPath), "/Forms/") {
+	if isFormCleanupContext(ctx) {
 		return true
 	}
 	if ctx.FileName == "CommandInterface.xml" || ctx.FileName == "MainSectionCommandInterface.xml" {
@@ -10495,7 +10679,7 @@ func finalizeRetainedOwnerCommands(
 		if ctx == nil || ctx.Doc == nil || !strings.EqualFold(ctx.FileName, "Form.xml") {
 			continue
 		}
-		if !strings.Contains(filepath.ToSlash(ctx.RelPath), "/Forms/") {
+		if !isFormCleanupContext(ctx) {
 			continue
 		}
 		if _, excluded := excludedPaths[ctx.Path]; excluded {

@@ -1077,6 +1077,64 @@ func TestCleanupFormDocumentIndexedNativeStillRemovesBlockedNonNativeReferences(
 	}
 }
 
+func TestCleanupFormDocumentIndexedNativeKeepsFunctionalOptionCommands(t *testing.T) {
+	t.Parallel()
+
+	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform">
+  <ChildItems>
+    <Button name="НастройкаЭЦП">
+      <Type>Hyperlink</Type>
+      <CommandName>Form.Command.НастройкаЭЦП</CommandName>
+    </Button>
+    <Button name="НенативнаяКоманда">
+      <Type>Hyperlink</Type>
+      <CommandName>Catalog.НенативныйСправочник.Command.ОткрытьНенативнуюФорму</CommandName>
+    </Button>
+  </ChildItems>
+  <Commands>
+    <Command name="НастройкаЭЦП">
+      <Action>НастройкаЭЦП</Action>
+      <FunctionalOptions>
+        <Item>FunctionalOption.ИспользоватьЭлектронныеПодписи</Item>
+      </FunctionalOptions>
+    </Command>
+  </Commands>
+</Form>`)
+
+	formCtx := &FileProcessingContext{
+		Doc:       formDoc,
+		OwnerKey:  "CommonForm.упо_ПерсональныеНастройки",
+		OwnerKind: "CommonForm",
+		FileName:  "Form.xml",
+		RelPath:   "CommonForms/упо_ПерсональныеНастройки/Ext/Form.xml",
+	}
+	contexts := []*FileProcessingContext{formCtx}
+	indexes := buildContextIndexes(contexts)
+	decisions := map[string]objectDecision{
+		"CommonForm.упо_ПерсональныеНастройки":            {Belonging: "Native"},
+		"FunctionalOption.ИспользоватьЭлектронныеПодписи": {Belonging: "AdoptedStub"},
+		"Catalog.НенативныйСправочник":                    {Belonging: "AdoptedStub"},
+	}
+
+	if !cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
+		t.Fatalf("expected native form cleanup to remove blocked non-native refs while keeping FO-bound commands")
+	}
+
+	if !formDocContainsText(formDoc, "Form.Command.НастройкаЭЦП") {
+		t.Fatalf("expected native form command binding guarded by functional option to remain")
+	}
+	if !formDocContainsText(formDoc, "FunctionalOption.ИспользоватьЭлектронныеПодписи") {
+		t.Fatalf("expected functional option guard for native form command to remain")
+	}
+	if !formDocContainsText(formDoc, "НастройкаЭЦП") {
+		t.Fatalf("expected native form command definition to remain")
+	}
+	if formDocContainsText(formDoc, "Catalog.НенативныйСправочник.Command.ОткрытьНенативнуюФорму") {
+		t.Fatalf("expected blocked non-native metadata command reference to be removed")
+	}
+}
+
 func TestCleanupFormDocumentIndexedRemovesForbiddenStandardCommandsForNativeForms(t *testing.T) {
 	t.Parallel()
 
@@ -1122,11 +1180,10 @@ func TestCleanupFormDocumentIndexedRemovesForbiddenStandardCommandsForNativeForm
 	}
 
 	if !cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
-		t.Fatalf("expected native form cleanup to remove forbidden standard commands")
+		t.Fatalf("expected native form cleanup to remove forbidden standard command references")
 	}
 
 	for _, forbidden := range []string{
-		"Change",
 		"Form.Item.СписокДокументов.StandardCommand.Change",
 		"Form.Item.СписокДокументов.StandardCommand.ChangeHistory",
 	} {
@@ -1135,11 +1192,101 @@ func TestCleanupFormDocumentIndexedRemovesForbiddenStandardCommandsForNativeForm
 		}
 	}
 
+	if !formDocContainsText(formDoc, "Change") {
+		t.Fatalf("expected table command-set excluded command to remain")
+	}
 	if !formDocContainsText(formDoc, "Delete") {
 		t.Fatalf("expected unrelated excluded command to remain")
 	}
 	if !formDocContainsText(formDoc, "Form.Item.СписокДокументов.StandardCommand.Refresh") {
 		t.Fatalf("expected unrelated standard command to remain")
+	}
+}
+
+func TestCleanupFormDocumentIndexedRemovesOnlyRootFormExcludedStandardCommands(t *testing.T) {
+	t.Parallel()
+
+	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform">
+  <CommandSet>
+    <ExcludedCommand>Change</ExcludedCommand>
+    <ExcludedCommand>Delete</ExcludedCommand>
+    <ExcludedCommand>WriteAndClose</ExcludedCommand>
+  </CommandSet>
+  <ChildItems>
+    <Table name="Список">
+      <DataPath>Список</DataPath>
+      <CommandSet>
+        <ExcludedCommand>Change</ExcludedCommand>
+        <ExcludedCommand>Delete</ExcludedCommand>
+      </CommandSet>
+    </Table>
+  </ChildItems>
+</Form>`)
+
+	formCtx := &FileProcessingContext{
+		Doc:       formDoc,
+		OwnerKey:  "Catalog.упо_Тест",
+		OwnerKind: "Catalog",
+		FileName:  "Form.xml",
+		RelPath:   "Catalogs/упо_Тест/Forms/ФормаСписка/Ext/Form.xml",
+	}
+	contexts := []*FileProcessingContext{formCtx}
+	indexes := buildContextIndexes(contexts)
+	decisions := map[string]objectDecision{
+		"Catalog.упо_Тест": {Belonging: "AdoptedStub"},
+	}
+
+	if !cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
+		t.Fatalf("expected cleanup to remove invalid root form excluded commands")
+	}
+
+	if rootCommandSet := formDoc.Root().FindElement("./*[local-name()='CommandSet']"); rootCommandSet != nil {
+		t.Fatalf("expected empty root form command set to be removed")
+	}
+
+	tableCommandSet := formDoc.Root().FindElement(".//*[local-name()='Table']/*[local-name()='CommandSet']")
+	if tableCommandSet == nil {
+		t.Fatalf("expected table command set to remain")
+	}
+	remaining := make(map[string]struct{})
+	for _, child := range tableCommandSet.ChildElements() {
+		if strings.EqualFold(localName(child.Tag), "ExcludedCommand") {
+			remaining[strings.TrimSpace(child.Text())] = struct{}{}
+		}
+	}
+	for _, command := range []string{"Change", "Delete"} {
+		if _, ok := remaining[command]; !ok {
+			t.Fatalf("expected table excluded command %q to remain", command)
+		}
+	}
+}
+
+func TestCleanupFormDocumentIndexedRemovesRootExcludedCommandsWithoutDecision(t *testing.T) {
+	t.Parallel()
+
+	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform">
+  <CommandSet>
+    <ExcludedCommand>Copy</ExcludedCommand>
+    <ExcludedCommand>Create</ExcludedCommand>
+  </CommandSet>
+</Form>`)
+
+	formCtx := &FileProcessingContext{
+		Doc:       formDoc,
+		OwnerKey:  "Catalog.упо_БезРешения",
+		OwnerKind: "Catalog",
+		FileName:  "Form.xml",
+		RelPath:   "Catalogs/упо_БезРешения/Forms/ФормаСписка/Ext/Form.xml",
+	}
+
+	if !cleanupFormDocumentIndexed(formCtx, []*FileProcessingContext{formCtx}, buildContextIndexes([]*FileProcessingContext{formCtx}), map[string]objectDecision{}, nil) {
+		t.Fatalf("expected root form excluded commands to be cleaned even without decision")
+	}
+
+	if formDoc.Root().FindElement("./*[local-name()='CommandSet']") != nil {
+		t.Fatalf("expected invalid root form command set to be removed")
 	}
 }
 
@@ -1160,6 +1307,21 @@ func TestIsFormCleanupContextIncludesCommonFormExtForm(t *testing.T) {
 		RelPath:   "CommonForms/упо_РабочийСтолУправлениеДоговорами.xml",
 	}) {
 		t.Fatalf("did not expect common form metadata object xml to go through form cleanup")
+	}
+}
+
+func TestShouldIndexLiveCommandReferencesIncludesCommonFormExtForm(t *testing.T) {
+	t.Parallel()
+
+	ctx := &FileProcessingContext{
+		Doc:       mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?><Form xmlns="http://v8.1c.ru/8.3/xcf/logform"/>`),
+		FileName:  "Form.xml",
+		OwnerKind: "CommonForm",
+		RelPath:   "CommonForms/упо_ПерсональныеНастройки/Ext/Form.xml",
+	}
+
+	if !shouldIndexLiveCommandReferences(ctx, objectDecision{Belonging: "AdoptedStub"}, nil) {
+		t.Fatalf("expected common form Ext/Form.xml to participate in live command reference indexing")
 	}
 }
 
@@ -3159,8 +3321,46 @@ func TestCleanupNonNativeFormStandardCommandsAndEvents(t *testing.T) {
 	if len(names) != 1 || names[0] != "Оставляемая" {
 		t.Fatalf("unexpected remaining buttons: %#v", names)
 	}
-	if len(doc.FindElements("//ExcludedCommand")) != 0 {
-		t.Fatalf("expected write-and-close excluded command to be removed")
+	if !formDocContainsText(doc, "WriteAndClose") {
+		t.Fatalf("expected excluded command composition to remain untouched")
+	}
+}
+
+func TestCleanupMissingFormCommandReferencesKeepsTableExcludedCommands(t *testing.T) {
+	t.Parallel()
+
+	doc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform">
+  <ChildItems>
+    <Table name="Список">
+      <DataPath>Список</DataPath>
+      <CommandSet>
+        <ExcludedCommand>LevelDown</ExcludedCommand>
+        <ExcludedCommand>LevelUp</ExcludedCommand>
+      </CommandSet>
+      <AutoCommandBar name="Панель">
+        <ChildItems>
+          <Button name="Вниз">
+            <Type>CommandBarButton</Type>
+            <CommandName>Form.Item.Список.StandardCommand.LevelDown</CommandName>
+          </Button>
+        </ChildItems>
+      </AutoCommandBar>
+    </Table>
+  </ChildItems>
+</Form>`)
+
+	if !cleanupMissingFormCommandReferencesWithResolver(doc, func(string) bool { return true }) {
+		t.Fatalf("expected invalid form command reference cleanup to remove explicit UI command reference")
+	}
+
+	if formDocContainsText(doc, "Form.Item.Список.StandardCommand.LevelDown") {
+		t.Fatalf("expected explicit invalid LevelDown UI command reference to be removed")
+	}
+	for _, command := range []string{"LevelDown", "LevelUp"} {
+		if !formDocContainsText(doc, command) {
+			t.Fatalf("expected excluded command %q to remain in table command set", command)
+		}
 	}
 }
 
@@ -3173,6 +3373,13 @@ func TestNormalizeManualQueryWithoutMainTableAddsStandardAliasAndRemovesDefaultP
   <ChildItems>
     <Table name="Список" id="1">
       <DataPath>Список</DataPath>
+      <CommandSet>
+        <ExcludedCommand>Change</ExcludedCommand>
+        <ExcludedCommand>ChangeHistory</ExcludedCommand>
+        <ExcludedCommand>GetURL</ExcludedCommand>
+        <ExcludedCommand>LevelDown</ExcludedCommand>
+        <ExcludedCommand>LevelUp</ExcludedCommand>
+      </CommandSet>
       <RowPictureDataPath>Список.DefaultPicture</RowPictureDataPath>
     </Table>
   </ChildItems>
@@ -3206,6 +3413,11 @@ func TestNormalizeManualQueryWithoutMainTableAddsStandardAliasAndRemovesDefaultP
 	}
 	if doc.FindElement("//Table/RowPictureDataPath") != nil {
 		t.Fatalf("expected default picture row data path to be removed")
+	}
+	for _, command := range []string{"Change", "ChangeHistory", "GetURL", "LevelDown", "LevelUp"} {
+		if !formDocContainsText(doc, command) {
+			t.Fatalf("expected table command-set excluded command %q to remain", command)
+		}
 	}
 }
 
@@ -3458,7 +3670,7 @@ func TestNormalizeChartOfCharacteristicTypesPredefinedKeepsCurrentConfigAlias(t 
 	}
 }
 
-func TestNormalizeChartOfCharacteristicTypesPredefinedSyncsScalarQualifiersFromOwner(t *testing.T) {
+func TestNormalizeChartOfCharacteristicTypesPredefinedKeepsItemSpecificScalarQualifiers(t *testing.T) {
 	t.Parallel()
 
 	ownerDoc := etree.NewDocument()
@@ -3512,8 +3724,8 @@ func TestNormalizeChartOfCharacteristicTypesPredefinedSyncsScalarQualifiersFromO
 	}
 
 	changed := normalizeChartOfCharacteristicTypesPredefined(ctx, contexts)
-	if !changed {
-		t.Fatalf("expected predefined scalar qualifiers to sync from owner type")
+	if changed {
+		t.Fatalf("expected predefined item-specific scalar qualifiers to stay untouched")
 	}
 
 	qualifier := predefinedDoc.Root().FindElement("./Item/Type/*[local-name()='StringQualifiers']")
@@ -3522,15 +3734,15 @@ func TestNormalizeChartOfCharacteristicTypesPredefinedSyncsScalarQualifiersFromO
 	}
 	length := qualifier.FindElement("./*[local-name()='Length']")
 	mode := qualifier.FindElement("./*[local-name()='AllowedLength']")
-	if length == nil || strings.TrimSpace(length.Text()) != "36" {
+	if length == nil || strings.TrimSpace(length.Text()) != "25" {
 		t.Fatalf("expected original string length to remain, got %q", textOrEmpty(length))
 	}
-	if mode == nil || strings.TrimSpace(mode.Text()) != "Variable" {
+	if mode == nil || strings.TrimSpace(mode.Text()) != "Fixed" {
 		t.Fatalf("expected original allowed length to remain, got %q", textOrEmpty(mode))
 	}
 }
 
-func TestNormalizeChartOfCharacteristicTypesPredefinedSyncsOwnerQualifiersForReferenceItem(t *testing.T) {
+func TestNormalizeChartOfCharacteristicTypesPredefinedDoesNotCopyUnrelatedOwnerQualifiersToReferenceItem(t *testing.T) {
 	t.Parallel()
 
 	ownerDoc := etree.NewDocument()
@@ -3581,21 +3793,13 @@ func TestNormalizeChartOfCharacteristicTypesPredefinedSyncsOwnerQualifiersForRef
 	}
 
 	changed := normalizeChartOfCharacteristicTypesPredefined(ctx, contexts)
-	if !changed {
-		t.Fatalf("expected owner qualifiers to sync into matching predefined reference type")
+	if changed {
+		t.Fatalf("expected unrelated owner qualifiers to stay out of predefined reference item")
 	}
 
 	qualifier := predefinedDoc.Root().FindElement("./Item/Type/*[local-name()='StringQualifiers']")
-	if qualifier == nil {
-		t.Fatalf("expected owner string qualifier to be copied to predefined reference item")
-	}
-	length := qualifier.FindElement("./*[local-name()='Length']")
-	mode := qualifier.FindElement("./*[local-name()='AllowedLength']")
-	if length == nil || strings.TrimSpace(length.Text()) != "150" {
-		t.Fatalf("expected synced owner string length, got %q", textOrEmpty(length))
-	}
-	if mode == nil || strings.TrimSpace(mode.Text()) != "Variable" {
-		t.Fatalf("expected synced owner allowed length, got %q", textOrEmpty(mode))
+	if qualifier != nil {
+		t.Fatalf("did not expect owner string qualifier to be copied to predefined reference item")
 	}
 }
 
@@ -4304,6 +4508,17 @@ func TestCanonicalizeTargetRenamedAdoptedObjectsPrefersTargetName(t *testing.T) 
     </Properties>
   </Catalog>
 </MetaDataObject>`)
+	writeFile(root, filepath.Join("DefinedTypes", "ИспользуетИсточник.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses" xmlns:v8="http://v8.1c.ru/8.1/data/core">
+  <DefinedType>
+    <Properties>
+      <Name>ИспользуетИсточник</Name>
+      <Type>
+        <v8:Type>cfg:CatalogRef.Источник</v8:Type>
+      </Type>
+    </Properties>
+  </DefinedType>
+</MetaDataObject>`)
 
 	writeFile(targetRoot, "ConfigDumpInfo.xml", `<?xml version="1.0" encoding="UTF-8"?>
 <ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo">
@@ -4384,6 +4599,15 @@ func TestCanonicalizeTargetRenamedAdoptedObjectsPrefersTargetName(t *testing.T) 
 
 	if ctx := findTopLevelMetadataContextByOwnerKeyIndexed(indexes, contexts, "Catalog.ИсточникУстаревший"); ctx == nil {
 		t.Fatalf("expected canonical target context to be present")
+	}
+
+	definedTypeDoc := etree.NewDocument()
+	if err := definedTypeDoc.ReadFromFile(filepath.Join(root, "DefinedTypes", "ИспользуетИсточник.xml")); err != nil {
+		t.Fatalf("read defined type xml: %v", err)
+	}
+	typeEl := definedTypeDoc.FindElement("//*[local-name()='DefinedType']/*[local-name()='Properties']/*[local-name()='Type']/*[local-name()='Type']")
+	if typeEl == nil || strings.TrimSpace(typeEl.Text()) != "cfg:CatalogRef.ИсточникУстаревший" {
+		t.Fatalf("expected canonical target name in type-bearing ref, got %q", textOrEmpty(typeEl))
 	}
 }
 
