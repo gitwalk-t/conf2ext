@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gitwalk-m/conf2ext/internal/codeoverlayid"
 	"github.com/gitwalk-m/conf2ext/internal/config"
 )
 
@@ -53,14 +54,14 @@ func searchResultPlaceToBlockID(objectKey, place string) (string, bool) {
 
 	switch {
 	case trimmedPlace == "ОбщийМодуль":
-		return trimmedObjectKey + ":CommonModule", true
+		return codeoverlayid.Make(trimmedObjectKey, "CommonModule"), true
 	case trimmedPlace == "МодульМенеджера":
-		return trimmedObjectKey + ":ManagerModule", true
+		return codeoverlayid.Make(trimmedObjectKey, "ManagerModule"), true
 	case trimmedPlace == "МодульОбъекта":
-		return trimmedObjectKey + ":ObjectModule", true
+		return codeoverlayid.Make(trimmedObjectKey, "ObjectModule"), true
 	case trimmedPlace == "МодульКоманды":
 		if strings.HasPrefix(trimmedObjectKey, "CommonCommand.") {
-			return trimmedObjectKey + ":CommandModule", true
+			return codeoverlayid.Make(trimmedObjectKey, "CommandModule"), true
 		}
 		return "", false
 	case strings.HasPrefix(trimmedPlace, "МодульФормы"):
@@ -68,16 +69,16 @@ func searchResultPlaceToBlockID(objectKey, place string) (string, bool) {
 		if formName == "" {
 			return "", false
 		}
-		return trimmedObjectKey + ".Form." + formName + ":FormModule", true
+		return codeoverlayid.Make(trimmedObjectKey+".Form."+formName, "FormModule"), true
 	case strings.HasPrefix(trimmedPlace, "МодульКоманды"):
 		commandName := strings.TrimSpace(strings.TrimPrefix(trimmedPlace, "МодульКоманды"))
 		if commandName == "" {
 			return "", false
 		}
 		if strings.HasPrefix(trimmedObjectKey, "CommonCommand.") {
-			return trimmedObjectKey + ":CommandModule", true
+			return codeoverlayid.Make(trimmedObjectKey, "CommandModule"), true
 		}
-		return trimmedObjectKey + ".Command." + commandName + ":CommandModule", true
+		return codeoverlayid.Make(trimmedObjectKey+".Command."+commandName, "CommandModule"), true
 	default:
 		return "", false
 	}

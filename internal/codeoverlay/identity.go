@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"path/filepath"
 	"strings"
+
+	"github.com/gitwalk-m/conf2ext/internal/codeoverlayid"
 )
 
 var metadataKinds = map[string]string{
@@ -96,7 +98,7 @@ func classifyBlock(relPath string) (objectKey, kind string, ok bool) {
 }
 
 func makeBlockID(objectKey, kind string) string {
-	return objectKey + ":" + kind
+	return codeoverlayid.Make(objectKey, kind)
 }
 
 func normalizeContent(content string) string {

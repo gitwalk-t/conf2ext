@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/gitwalk-m/conf2ext/internal/codeoverlayid"
 	"github.com/gitwalk-m/conf2ext/internal/config"
 )
 
@@ -60,6 +61,16 @@ func LoadArtifact(path string) (Artifact, error) {
 	}
 	if artifact.Version != SchemaVersion {
 		return Artifact{}, fmt.Errorf("неподдерживаемая версия overlay artifact %s: got %d want %d", resolvedPath, artifact.Version, SchemaVersion)
+	}
+	for index := range artifact.Blocks {
+		normalizedID, err := codeoverlayid.NormalizeArtifact(artifact.Blocks[index].ID, artifact.Blocks[index].Object, artifact.Blocks[index].Kind)
+		if err != nil {
+			return Artifact{}, fmt.Errorf("некорректный overlay block %d (%s): %w", index, artifact.Blocks[index].Path, err)
+		}
+		if normalizedID != artifact.Blocks[index].ID {
+			log.Printf("warning: code overlay: normalized legacy overlay block id %q -> %q", artifact.Blocks[index].ID, normalizedID)
+			artifact.Blocks[index].ID = normalizedID
+		}
 	}
 
 	return artifact, nil

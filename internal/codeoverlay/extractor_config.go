@@ -4,7 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
+
+	"github.com/gitwalk-m/conf2ext/internal/codeoverlayid"
 )
 
 type extractorConfig struct {
@@ -28,37 +29,33 @@ func loadExtractorBlockSets(path string) (extractorBlockSets, error) {
 		return extractorBlockSets{}, fmt.Errorf("parse extractor config: %w", err)
 	}
 
+	forbidden, err := normalizeConfiguredBlockSet("forbidden", cfg.Forbidden)
+	if err != nil {
+		return extractorBlockSets{}, err
+	}
+	included, err := normalizeConfiguredBlockSet("included", cfg.Included)
+	if err != nil {
+		return extractorBlockSets{}, err
+	}
+
 	return extractorBlockSets{
-		Forbidden: normalizeConfiguredBlockSet(cfg.Forbidden),
-		Included:  normalizeConfiguredBlockSet(cfg.Included),
+		Forbidden: forbidden,
+		Included:  included,
 	}, nil
 }
 
-func normalizeConfiguredBlockSet(values []string) map[string]struct{} {
+func normalizeConfiguredBlockSet(field string, values []string) (map[string]struct{}, error) {
 	result := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		normalizedID, ok := normalizeConfiguredBlockID(value)
-		if !ok {
-			continue
+	for index, value := range values {
+		normalizedID, err := normalizeConfiguredBlockID(value)
+		if err != nil {
+			return nil, fmt.Errorf("%s[%d]: %w", field, index, err)
 		}
 		result[normalizedID] = struct{}{}
 	}
-	return result
+	return result, nil
 }
 
-func normalizeConfiguredBlockID(value string) (string, bool) {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return "", false
-	}
-	if strings.Contains(trimmed, ":") {
-		return trimmed, true
-	}
-	if trimmed == "SessionModule" {
-		return "Session:SessionModule", true
-	}
-	if strings.HasPrefix(trimmed, "CommonModule.") {
-		return trimmed + ":CommonModule", true
-	}
-	return trimmed, true
+func normalizeConfiguredBlockID(value string) (string, error) {
+	return codeoverlayid.NormalizeConfigured(value)
 }
