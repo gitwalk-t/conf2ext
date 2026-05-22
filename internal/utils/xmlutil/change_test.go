@@ -1192,18 +1192,21 @@ func TestCleanupFormDocumentIndexedRemovesForbiddenStandardCommandsForNativeForm
 		}
 	}
 
-	if !formDocContainsText(formDoc, "Change") {
-		t.Fatalf("expected table command-set excluded command to remain")
+	if formDocContainsText(formDoc, "Change") {
+		t.Fatalf("expected nested invalid excluded command to be removed")
 	}
-	if !formDocContainsText(formDoc, "Delete") {
-		t.Fatalf("expected unrelated excluded command to remain")
+	if formDocContainsText(formDoc, "Delete") {
+		t.Fatalf("expected nested invalid excluded command to be removed")
 	}
 	if !formDocContainsText(formDoc, "Form.Item.СписокДокументов.StandardCommand.Refresh") {
 		t.Fatalf("expected unrelated standard command to remain")
 	}
+	if formDoc.Root().FindElement(".//*[local-name()='Table']/*[local-name()='CommandSet']") != nil {
+		t.Fatalf("expected empty nested command set to be removed")
+	}
 }
 
-func TestCleanupFormDocumentIndexedRemovesOnlyRootFormExcludedStandardCommands(t *testing.T) {
+func TestCleanupFormDocumentIndexedRemovesNestedFormExcludedStandardCommands(t *testing.T) {
 	t.Parallel()
 
 	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
@@ -1245,20 +1248,8 @@ func TestCleanupFormDocumentIndexedRemovesOnlyRootFormExcludedStandardCommands(t
 		t.Fatalf("expected empty root form command set to be removed")
 	}
 
-	tableCommandSet := formDoc.Root().FindElement(".//*[local-name()='Table']/*[local-name()='CommandSet']")
-	if tableCommandSet == nil {
-		t.Fatalf("expected table command set to remain")
-	}
-	remaining := make(map[string]struct{})
-	for _, child := range tableCommandSet.ChildElements() {
-		if strings.EqualFold(localName(child.Tag), "ExcludedCommand") {
-			remaining[strings.TrimSpace(child.Text())] = struct{}{}
-		}
-	}
-	for _, command := range []string{"Change", "Delete"} {
-		if _, ok := remaining[command]; !ok {
-			t.Fatalf("expected table excluded command %q to remain", command)
-		}
+	if tableCommandSet := formDoc.Root().FindElement(".//*[local-name()='Table']/*[local-name()='CommandSet']"); tableCommandSet != nil {
+		t.Fatalf("expected nested table command set with only invalid commands to be removed")
 	}
 }
 
@@ -3402,6 +3393,82 @@ func TestCleanupMissingFormCommandReferencesRemovesDanglingShortNames(t *testing
 		if !formDocContainsText(doc, command) {
 			t.Fatalf("expected valid short command %q to remain", command)
 		}
+	}
+}
+
+func TestRemoveInvalidFormLevelExcludedStandardCommandsRemovesNestedTableCommands(t *testing.T) {
+	t.Parallel()
+
+	doc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform" xmlns:v8="http://v8.1c.ru/data" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable">
+  <ChildItems>
+    <Table name="Список">
+      <Title>
+        <v8:item>
+          <v8:lang>ru</v8:lang>
+          <v8:content>Список</v8:content>
+        </v8:item>
+      </Title>
+      <CommandSet>
+        <ExcludedCommand>CancelSearch</ExcludedCommand>
+        <ExcludedCommand>Change</ExcludedCommand>
+        <ExcludedCommand>Choose</ExcludedCommand>
+        <ExcludedCommand>Copy</ExcludedCommand>
+        <ExcludedCommand>Create</ExcludedCommand>
+        <ExcludedCommand>Delete</ExcludedCommand>
+        <ExcludedCommand>MoveItem</ExcludedCommand>
+        <ExcludedCommand>Refresh</ExcludedCommand>
+      </CommandSet>
+    </Table>
+  </ChildItems>
+</Form>`)
+
+	if !removeInvalidFormLevelExcludedStandardCommands(doc) {
+		t.Fatalf("expected nested invalid excluded standard commands to be removed")
+	}
+
+	for _, command := range []string{"Change", "Copy", "Create", "Delete", "MoveItem"} {
+		if formDocContainsText(doc, command) {
+			t.Fatalf("expected nested excluded command %q to be removed", command)
+		}
+	}
+	for _, command := range []string{"CancelSearch", "Choose", "Refresh"} {
+		if !formDocContainsText(doc, command) {
+			t.Fatalf("expected non-problematic excluded command %q to remain", command)
+		}
+	}
+}
+
+func TestRemoveInvalidFormLevelExcludedStandardCommandsRemovesEmptyNestedCommandSet(t *testing.T) {
+	t.Parallel()
+
+	doc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform" xmlns:v8="http://v8.1c.ru/data">
+  <ChildItems>
+    <Table name="ГруппыПользователей">
+      <Title>
+        <v8:item>
+          <v8:lang>ru</v8:lang>
+          <v8:content>Группы пользователей</v8:content>
+        </v8:item>
+      </Title>
+      <CommandSet>
+        <ExcludedCommand>Delete</ExcludedCommand>
+      </CommandSet>
+      <CurrentRowUse>SelectionPresentationAndChoice</CurrentRowUse>
+    </Table>
+  </ChildItems>
+</Form>`)
+
+	if !removeInvalidFormLevelExcludedStandardCommands(doc) {
+		t.Fatalf("expected empty nested command set to be removed")
+	}
+
+	if formDocContainsText(doc, "Delete") {
+		t.Fatalf("expected invalid excluded command to be removed")
+	}
+	if doc.FindElement("//*[local-name()='Table']/*[local-name()='CommandSet']") != nil {
+		t.Fatalf("expected empty nested command set container to be removed")
 	}
 }
 
