@@ -25,6 +25,18 @@
 - `Native`-подсистема сама по себе не является источником восстановления excluded-object.
 - `Role/Ext/Rights.xml` не должен восстанавливать excluded-object.
 
+## BSL reachability
+
+BSL reachability — отдельный механизм от XML RefDrivenInclusion.
+
+Правила:
+
+- BSL-зависимости не должны участвовать в metadata promotion.
+- BSL-зависимости не должны восстанавливать excluded-object.
+- `Native` event subscriptions являются source root для дотягивания BSL-кода.
+- Если handler Native event subscription вызывает метод Adopted-модуля, полный текст метода должен переноситься даже без `упо_SearchResult`.
+- Это правило ограничено переносом текста методов и не меняет XML classification.
+
 ## Adopted modes
 
 - `AdoptedStub` — базовый adopted-mode.
