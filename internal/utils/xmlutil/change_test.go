@@ -61,7 +61,7 @@ func TestCollectGUIDReplacementsFromConfigDumpReusesPersistedAdoptedIDs(t *testi
 	}
 }
 
-func TestCollectGUIDReplacementsFromConfigDumpSkipsRetainedNativeAdoptedStubMetaDataChildren(t *testing.T) {
+func TestCollectGUIDReplacementsFromConfigDumpTracksAdoptedTabularSectionButSkipsRetainedNativeChildren(t *testing.T) {
 	t.Parallel()
 
 	doc := etree.NewDocument()
@@ -103,12 +103,14 @@ func TestCollectGUIDReplacementsFromConfigDumpSkipsRetainedNativeAdoptedStubMeta
 
 	for _, key := range []string{
 		"Catalog.Пользователи.Attribute.упо_Код",
-		"Catalog.Пользователи.TabularSection.Товары",
 		"Catalog.Пользователи.TabularSection.Товары.Attribute.упо_Цена",
 	} {
 		if _, ok := identityMap.Objects[key]; ok {
 			t.Fatalf("retained native child must not be stored in identity map: %s", key)
 		}
+	}
+	if _, ok := identityMap.Objects["Catalog.Пользователи.TabularSection.Товары"]; !ok {
+		t.Fatalf("expected adopted tabular section to stay tracked, got %#v", identityMap.Objects)
 	}
 	if _, ok := identityMap.Objects["Catalog.Пользователи.Command.Открыть"]; !ok {
 		t.Fatalf("expected adopted command to stay tracked, got %#v", identityMap.Objects)
@@ -189,6 +191,81 @@ func TestCollectMetadataBindingTargetsAppliesOverridesOnlyToTrackedAdoptedPaths(
 	}
 	if targets[attribute].HasBinding {
 		t.Fatalf("retained native attribute must not be marked as explicit binding")
+	}
+}
+
+func TestCollectMetadataBindingTargetsTracksAdoptedTabularSectionAndSkipsRetainedNativeTabularAttributes(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog uuid="11111111-1111-1111-1111-111111111111">
+    <Properties>
+      <Name>Пользователи</Name>
+    </Properties>
+    <ChildObjects>
+      <TabularSection uuid="22222222-2222-2222-2222-222222222222">
+        <Properties>
+          <Name>Товары</Name>
+        </Properties>
+        <ChildObjects>
+          <Attribute uuid="33333333-3333-3333-3333-333333333333">
+            <Properties>
+              <Name>упо_Цена</Name>
+            </Properties>
+          </Attribute>
+        </ChildObjects>
+      </TabularSection>
+    </ChildObjects>
+  </Catalog>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read metadata xml: %v", err)
+	}
+
+	targets := collectMetadataBindingTargets(
+		doc,
+		"Catalog.Пользователи",
+		map[string]string{
+			"Catalog.Пользователи":                                          "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+			"Catalog.Пользователи.TabularSection.Товары":                    "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+			"Catalog.Пользователи.TabularSection.Товары.Attribute.упо_Цена": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+		},
+		map[string]objectDecision{
+			"Catalog.Пользователи": {Belonging: "AdoptedStub"},
+		},
+		map[string]adoptedStubMetaDataRule{
+			"Catalog.Пользователи": {
+				NativeTabularSections: map[string]map[string]struct{}{
+					"Товары": {
+						"упо_Цена": {},
+					},
+				},
+			},
+		},
+	)
+
+	target := metadataTargetElement(doc)
+	section := target.FindElement("./ChildObjects/*[local-name()='TabularSection']")
+	if section == nil {
+		t.Fatalf("expected tabular section child")
+	}
+	if got := targets[section].BaseObjectID; got != "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" {
+		t.Fatalf("unexpected tabular section binding: got %q", got)
+	}
+	if !targets[section].HasBinding {
+		t.Fatalf("expected adopted tabular section to keep explicit binding")
+	}
+
+	attribute := target.FindElement("./ChildObjects/*[local-name()='TabularSection']/*[local-name()='ChildObjects']/*[local-name()='Attribute']")
+	if attribute == nil {
+		t.Fatalf("expected tabular attribute child")
+	}
+	if got := targets[attribute].BaseObjectID; got != "33333333-3333-3333-3333-333333333333" {
+		t.Fatalf("retained native tabular attribute must keep original base object id, got %q", got)
+	}
+	if targets[attribute].HasBinding {
+		t.Fatalf("retained native tabular attribute must not be marked as explicit binding")
 	}
 }
 
@@ -688,7 +765,7 @@ func TestNormalizeAdoptedStubMetaDataCompositionKeepsRetainedAttributeNative(t *
 	}
 }
 
-func TestNormalizeAdoptedStubMetaDataCompositionKeepsRetainedTabularSectionChildrenNative(t *testing.T) {
+func TestNormalizeAdoptedStubMetaDataCompositionKeepsTabularSectionAdoptedAndRetainedChildrenNative(t *testing.T) {
 	t.Parallel()
 
 	doc := etree.NewDocument()
@@ -744,11 +821,11 @@ func TestNormalizeAdoptedStubMetaDataCompositionKeepsRetainedTabularSectionChild
 	if sectionProps == nil {
 		t.Fatalf("expected retained tabular section properties")
 	}
-	if got := textOf(sectionProps, "ObjectBelonging"); got != "" {
-		t.Fatalf("expected retained tabular section to be native, got ObjectBelonging=%q", got)
+	if got := textOf(sectionProps, "ObjectBelonging"); got != "Adopted" {
+		t.Fatalf("expected retained tabular section to stay adopted, got ObjectBelonging=%q", got)
 	}
-	if got := textOf(sectionProps, "ExtendedConfigurationObject"); got != "" {
-		t.Fatalf("expected retained native tabular section to drop ExtendedConfigurationObject, got %q", got)
+	if got := textOf(sectionProps, "ExtendedConfigurationObject"); got != "section-guid" {
+		t.Fatalf("expected retained adopted tabular section to keep ExtendedConfigurationObject, got %q", got)
 	}
 
 	attrProps := doc.FindElement("//*[local-name()='TabularSection']/*[local-name()='ChildObjects']/*[local-name()='Attribute']/*[local-name()='Properties']")
@@ -760,6 +837,97 @@ func TestNormalizeAdoptedStubMetaDataCompositionKeepsRetainedTabularSectionChild
 	}
 	if got := textOf(attrProps, "ExtendedConfigurationObject"); got != "" {
 		t.Fatalf("expected retained native tabular attribute to drop ExtendedConfigurationObject, got %q", got)
+	}
+
+	attrs := doc.FindElements("//*[local-name()='TabularSection']/*[local-name()='ChildObjects']/*[local-name()='Attribute']")
+	if len(attrs) != 1 {
+		t.Fatalf("expected only retained tabular attribute to survive, got %d", len(attrs))
+	}
+}
+
+func TestNormalizeAdoptedStubMetaDataCompositionKeepsMultipleRetainedTabularSectionChildrenNative(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Document>
+    <Properties>
+      <Name>Тест</Name>
+      <ObjectBelonging>Adopted</ObjectBelonging>
+    </Properties>
+    <ChildObjects>
+      <TabularSection>
+        <Properties>
+          <Name>Состав</Name>
+          <ObjectBelonging>Adopted</ObjectBelonging>
+          <ExtendedConfigurationObject>section-guid</ExtendedConfigurationObject>
+        </Properties>
+        <ChildObjects>
+          <Attribute>
+            <Properties>
+              <Name>упо_Реквизит1</Name>
+              <ObjectBelonging>Adopted</ObjectBelonging>
+              <ExtendedConfigurationObject>attr-guid-1</ExtendedConfigurationObject>
+            </Properties>
+          </Attribute>
+          <Attribute>
+            <Properties>
+              <Name>упо_Реквизит2</Name>
+              <ObjectBelonging>Adopted</ObjectBelonging>
+              <ExtendedConfigurationObject>attr-guid-2</ExtendedConfigurationObject>
+            </Properties>
+          </Attribute>
+          <Attribute>
+            <Properties>
+              <Name>Лишний</Name>
+              <ObjectBelonging>Adopted</ObjectBelonging>
+            </Properties>
+          </Attribute>
+        </ChildObjects>
+      </TabularSection>
+    </ChildObjects>
+  </Document>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read xml: %v", err)
+	}
+
+	rule := adoptedStubMetaDataRule{
+		NativeTabularSections: map[string]map[string]struct{}{
+			"Состав": {
+				"упо_Реквизит1": {},
+				"упо_Реквизит2": {},
+			},
+		},
+	}
+
+	if !normalizeAdoptedStubMetaDataComposition(doc, "Document", rule, searchResultObjectOverlay{}) {
+		t.Fatalf("expected adopted metadata composition to keep multiple native tabular attributes")
+	}
+
+	sectionProps := doc.FindElement("//*[local-name()='TabularSection']/*[local-name()='Properties']")
+	if sectionProps == nil {
+		t.Fatalf("expected retained tabular section properties")
+	}
+	if got := textOf(sectionProps, "ObjectBelonging"); got != "Adopted" {
+		t.Fatalf("expected retained tabular section to stay adopted, got ObjectBelonging=%q", got)
+	}
+
+	attrs := doc.FindElements("//*[local-name()='TabularSection']/*[local-name()='ChildObjects']/*[local-name()='Attribute']")
+	if len(attrs) != 2 {
+		t.Fatalf("expected only retained tabular attributes to survive, got %d", len(attrs))
+	}
+	for _, attr := range attrs {
+		props := attr.FindElement("./Properties")
+		if props == nil {
+			t.Fatalf("expected retained tabular attribute properties")
+		}
+		if got := textOf(props, "ObjectBelonging"); got != "" {
+			t.Fatalf("expected retained tabular attribute to be native, got ObjectBelonging=%q", got)
+		}
+		if got := textOf(props, "ExtendedConfigurationObject"); got != "" {
+			t.Fatalf("expected retained native tabular attribute to drop ExtendedConfigurationObject, got %q", got)
+		}
 	}
 }
 
@@ -938,7 +1106,7 @@ func TestCleanupConfigDumpInfoNonNativeChildrenRemovesAdoptedModules(t *testing.
 		"CommonCommand.ТестОбщаяКоманда": {Belonging: "AdoptedStub"},
 	}
 
-	if !cleanupConfigDumpInfoNonNativeChildren(configDump, contexts, decisions, nil) {
+	if !cleanupConfigDumpInfoNonNativeChildren(configDump, contexts, decisions, nil, nil) {
 		t.Fatalf("expected config dump cleanup to remove adopted module entries")
 	}
 
@@ -1028,7 +1196,7 @@ func TestCleanupConfigDumpInfoNonNativeChildrenRemovesAdoptedConstantValueManage
 		"Constant.ТестКонстанта": {Belonging: "AdoptedStub"},
 	}
 
-	if !cleanupConfigDumpInfoNonNativeChildren(configDump, contexts, decisions, nil) {
+	if !cleanupConfigDumpInfoNonNativeChildren(configDump, contexts, decisions, nil, nil) {
 		t.Fatalf("expected config dump cleanup to remove adopted constant value manager module entry")
 	}
 
@@ -2006,7 +2174,7 @@ func TestNormalizeSubsystemContentRemovesMissingMetadataRefs(t *testing.T) {
 		"Constant.ИспользоватьКоннект":         {Excluded: true},
 	}
 
-	changed := normalizeSubsystemContent(doc, contexts, decisions)
+	changed := normalizeSubsystemContent(doc, contexts, decisions, nil)
 	if !changed {
 		t.Fatalf("expected subsystem content cleanup to remove missing refs")
 	}
@@ -5460,6 +5628,123 @@ func TestCollectOwnerCommandCandidatesSkipsReportAndDataProcessorCommands(t *tes
 	}
 }
 
+func TestFinalizeRetainedOwnerCommandsCleansMissingReportAndDataProcessorFormCommands(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		dir       string
+		ownerKind string
+	}{
+		{name: "report", dir: "Reports", ownerKind: "Report"},
+		{name: "data processor", dir: "DataProcessors", ownerKind: "DataProcessor"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			ownerName := "ТестОбъект"
+			ownerKey := tc.ownerKind + "." + ownerName
+
+			ownerDoc := etree.NewDocument()
+			if err := ownerDoc.ReadFromString(fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <%[1]s>
+    <Properties>
+      <Name>%[2]s</Name>
+    </Properties>
+  </%[1]s>
+</MetaDataObject>`, tc.ownerKind, ownerName)); err != nil {
+				t.Fatalf("read owner xml: %v", err)
+			}
+
+			formDoc := etree.NewDocument()
+			if err := formDoc.ReadFromString(fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform">
+  <ChildItems>
+    <Button name="Удаляемая">
+      <CommandName>%[1]s.Command.Удалить</CommandName>
+    </Button>
+    <Button name="Оставляемая">
+      <CommandName>Form.StandardCommand.Help</CommandName>
+    </Button>
+  </ChildItems>
+</Form>`, ownerKey)); err != nil {
+				t.Fatalf("read form xml: %v", err)
+			}
+
+			ownerRelPath := filepath.ToSlash(filepath.Join(tc.dir, ownerName+".xml"))
+			ownerPath := filepath.Join(root, tc.dir, ownerName+".xml")
+			if err := os.MkdirAll(filepath.Dir(ownerPath), 0o755); err != nil {
+				t.Fatalf("mkdir owner dir: %v", err)
+			}
+			if err := ownerDoc.WriteToFile(ownerPath); err != nil {
+				t.Fatalf("write owner xml: %v", err)
+			}
+
+			formRelPath := filepath.ToSlash(filepath.Join(tc.dir, ownerName, "Forms", "ОсновнаяФорма", "Ext", "Form.xml"))
+			formPath := filepath.Join(root, tc.dir, ownerName, "Forms", "ОсновнаяФорма", "Ext", "Form.xml")
+			if err := os.MkdirAll(filepath.Dir(formPath), 0o755); err != nil {
+				t.Fatalf("mkdir form dir: %v", err)
+			}
+			if err := formDoc.WriteToFile(formPath); err != nil {
+				t.Fatalf("write form xml: %v", err)
+			}
+
+			staleCommandModulePath := filepath.Join(root, tc.dir, ownerName, "Commands", "Удалить", "Ext", "CommandModule.bsl")
+			if err := os.MkdirAll(filepath.Dir(staleCommandModulePath), 0o755); err != nil {
+				t.Fatalf("mkdir stale command dir: %v", err)
+			}
+			if err := os.WriteFile(staleCommandModulePath, []byte("// stale command"), 0o644); err != nil {
+				t.Fatalf("write stale command module: %v", err)
+			}
+
+			contexts := []*FileProcessingContext{
+				{
+					Doc:              ownerDoc,
+					Path:             ownerPath,
+					RelPath:          ownerRelPath,
+					FileName:         ownerName + ".xml",
+					Metadata:         true,
+					TopLevelMetadata: true,
+					OwnerKey:         ownerKey,
+					OwnerKind:        tc.ownerKind,
+				},
+				{
+					Doc:       formDoc,
+					Path:      formPath,
+					RelPath:   formRelPath,
+					FileName:  "Form.xml",
+					OwnerKey:  ownerKey,
+					OwnerKind: tc.ownerKind,
+				},
+			}
+			decisions := map[string]objectDecision{
+				ownerKey: {Belonging: "AdoptedStub"},
+			}
+
+			if !roleMetadataTargetExists(ownerKey+".Command.Удалить", contexts) {
+				t.Fatalf("expected raw resolver to see stale command on filesystem")
+			}
+
+			stats, err := finalizeRetainedOwnerCommands(contexts, buildContextIndexes(contexts), decisions, map[string]struct{}{}, nil, nil, nil, nil, nil, nil, nil)
+			if err != nil {
+				t.Fatalf("finalize retained commands: %v", err)
+			}
+			if stats.ChangedFiles == 0 || stats.WrittenFiles == 0 {
+				t.Fatalf("expected finalization to rewrite stale form references, got changed=%d written=%d", stats.ChangedFiles, stats.WrittenFiles)
+			}
+
+			if hasFormElementWithName(formDoc, "Button", "Удаляемая") {
+				t.Fatalf("expected stale command button to be removed")
+			}
+			if !hasFormElementWithName(formDoc, "Button", "Оставляемая") {
+				t.Fatalf("expected unrelated button to stay")
+			}
+		})
+	}
+}
+
 func TestFilterRetainedOwnerCommandsDropsCleanedFunctionalOptionReference(t *testing.T) {
 	t.Parallel()
 
@@ -6688,6 +6973,7 @@ func TestCleanupConfigDumpInfoNonNativeChildrenKeepsSearchResultPreservedMetadat
 		map[string]objectDecision{
 			"Catalog.Тест": {Belonging: "AdoptedStub", SearchResultCode: true},
 		},
+		nil,
 		map[string]struct{}{
 			"Catalog.Тест.Form.ФормаВыбора":              {},
 			"Catalog.Тест.Form.ФормаВыбора.Form":         {},
@@ -6708,6 +6994,204 @@ func TestCleanupConfigDumpInfoNonNativeChildrenKeepsSearchResultPreservedMetadat
 		if !hasMetadataName(configDump, name) {
 			t.Fatalf("expected preserved metadata name %s to remain", name)
 		}
+	}
+}
+
+func TestNormalizeRootConfigurationChildObjectsRemovesExcludedSubsystemAndSessionParameterRefs(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Configuration>
+    <ChildObjects>
+      <Catalog>Партнеры</Catalog>
+      <Subsystem>Служебная</Subsystem>
+      <SessionParameter>ПараметрСеанса</SessionParameter>
+    </ChildObjects>
+  </Configuration>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read configuration xml: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{
+		{Metadata: true, Path: filepath.Join("root", "Configuration.xml"), RelPath: "Configuration.xml", OwnerKey: "Configuration"},
+		{Metadata: true, Path: filepath.Join("root", "Catalogs", "Партнеры.xml"), RelPath: "Catalogs/Партнеры.xml", OwnerKey: "Catalog.Партнеры", OwnerKind: "Catalog"},
+		{Metadata: true, Path: filepath.Join("root", "Subsystems", "Служебная.xml"), RelPath: "Subsystems/Служебная.xml", OwnerKey: "Subsystem.Служебная", OwnerKind: "Subsystem"},
+		{Metadata: true, Path: filepath.Join("root", "SessionParameters", "ПараметрСеанса.xml"), RelPath: "SessionParameters/ПараметрСеанса.xml", OwnerKey: "SessionParameter.ПараметрСеанса", OwnerKind: "SessionParameter"},
+	}
+	decisions := map[string]objectDecision{
+		"Configuration":                   {Belonging: "AdoptedStub"},
+		"Catalog.Партнеры":                {Belonging: "Native"},
+		"Subsystem.Служебная":             {Belonging: "AdoptedStub"},
+		"SessionParameter.ПараметрСеанса": {Belonging: "AdoptedStub"},
+	}
+	excludedPaths := map[string]struct{}{
+		filepath.Join("root", "Subsystems", "Служебная.xml"):             {},
+		filepath.Join("root", "SessionParameters", "ПараметрСеанса.xml"): {},
+	}
+
+	if !normalizeRootConfigurationChildObjects(doc, contexts, decisions, excludedPaths) {
+		t.Fatalf("expected root configuration child objects cleanup to remove dangling refs")
+	}
+	if !hasConfigurationChildObject(doc, "Catalog", "Партнеры") {
+		t.Fatalf("expected emitted catalog ref to stay")
+	}
+	if hasConfigurationChildObject(doc, "Subsystem", "Служебная") {
+		t.Fatalf("expected excluded subsystem ref to be removed")
+	}
+	if hasConfigurationChildObject(doc, "SessionParameter", "ПараметрСеанса") {
+		t.Fatalf("expected excluded session parameter ref to be removed")
+	}
+}
+
+func TestNormalizeSubsystemContentRemovesExcludedSessionParameterRef(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <Subsystem>
+    <Properties>
+      <Name>СлужебнаяПодсистема</Name>
+      <Content>
+        <xr:Item xsi:type="xr:MDObjectRef">Catalog.Партнеры</xr:Item>
+        <xr:Item xsi:type="xr:MDObjectRef">SessionParameter.ПараметрСеанса</xr:Item>
+      </Content>
+    </Properties>
+    <ChildObjects/>
+  </Subsystem>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read subsystem xml: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{
+		{Metadata: true, Path: filepath.Join("root", "Subsystems", "СлужебнаяПодсистема.xml"), RelPath: "Subsystems/СлужебнаяПодсистема.xml", OwnerKey: "Subsystem.СлужебнаяПодсистема", OwnerKind: "Subsystem"},
+		{Metadata: true, Path: filepath.Join("root", "Catalogs", "Партнеры.xml"), RelPath: "Catalogs/Партнеры.xml", OwnerKey: "Catalog.Партнеры", OwnerKind: "Catalog"},
+		{Metadata: true, Path: filepath.Join("root", "SessionParameters", "ПараметрСеанса.xml"), RelPath: "SessionParameters/ПараметрСеанса.xml", OwnerKey: "SessionParameter.ПараметрСеанса", OwnerKind: "SessionParameter"},
+	}
+	decisions := map[string]objectDecision{
+		"Subsystem.СлужебнаяПодсистема":   {Belonging: "Native"},
+		"Catalog.Партнеры":                {Belonging: "Native"},
+		"SessionParameter.ПараметрСеанса": {Belonging: "AdoptedStub"},
+	}
+	excludedPaths := map[string]struct{}{
+		filepath.Join("root", "SessionParameters", "ПараметрСеанса.xml"): {},
+	}
+
+	if !normalizeSubsystemContent(doc, contexts, decisions, excludedPaths) {
+		t.Fatalf("expected subsystem content cleanup to remove excluded session parameter ref")
+	}
+
+	items := doc.Root().FindElements(".//Properties/Content/*")
+	if len(items) != 1 {
+		t.Fatalf("expected one subsystem content item to remain, got %d", len(items))
+	}
+	if strings.TrimSpace(items[0].Text()) != "Catalog.Партнеры" {
+		t.Fatalf("unexpected remaining subsystem content ref: %q", strings.TrimSpace(items[0].Text()))
+	}
+}
+
+func TestCleanupConfigDumpInfoNonNativeChildrenRemovesDanglingTopLevelMetadataEntries(t *testing.T) {
+	t.Parallel()
+
+	configDump := etree.NewDocument()
+	if err := configDump.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo>
+  <Metadata name="Catalog.Партнеры" id="1"/>
+  <Metadata name="Subsystem.Служебная" id="2"/>
+  <Metadata name="SessionParameter.ПараметрСеанса" id="3"/>
+</ConfigDumpInfo>`); err != nil {
+		t.Fatalf("read config dump xml: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{
+		{Metadata: true, Path: filepath.Join("root", "Catalogs", "Партнеры.xml"), RelPath: "Catalogs/Партнеры.xml", OwnerKey: "Catalog.Партнеры", OwnerKind: "Catalog"},
+		{Metadata: true, Path: filepath.Join("root", "Subsystems", "Служебная.xml"), RelPath: "Subsystems/Служебная.xml", OwnerKey: "Subsystem.Служебная", OwnerKind: "Subsystem"},
+		{Metadata: true, Path: filepath.Join("root", "SessionParameters", "ПараметрСеанса.xml"), RelPath: "SessionParameters/ПараметрСеанса.xml", OwnerKey: "SessionParameter.ПараметрСеанса", OwnerKind: "SessionParameter"},
+	}
+	decisions := map[string]objectDecision{
+		"Catalog.Партнеры":                {Belonging: "Native"},
+		"Subsystem.Служебная":             {Belonging: "AdoptedStub"},
+		"SessionParameter.ПараметрСеанса": {Belonging: "AdoptedStub"},
+	}
+	excludedPaths := map[string]struct{}{
+		filepath.Join("root", "Subsystems", "Служебная.xml"):             {},
+		filepath.Join("root", "SessionParameters", "ПараметрСеанса.xml"): {},
+	}
+
+	if !cleanupConfigDumpInfoNonNativeChildren(configDump, contexts, decisions, excludedPaths, nil) {
+		t.Fatalf("expected ConfigDumpInfo cleanup to remove dangling top-level metadata entries")
+	}
+	if !hasMetadataName(configDump, "Catalog.Партнеры") {
+		t.Fatalf("expected emitted catalog metadata entry to stay")
+	}
+	if hasMetadataName(configDump, "Subsystem.Служебная") {
+		t.Fatalf("expected dangling subsystem metadata entry to be removed")
+	}
+	if hasMetadataName(configDump, "SessionParameter.ПараметрСеанса") {
+		t.Fatalf("expected dangling session parameter metadata entry to be removed")
+	}
+}
+
+func TestValidateMetadataReferenceConsistencyPassesForMixedEmittedAndExcludedObjects(t *testing.T) {
+	t.Parallel()
+
+	configurationDoc := etree.NewDocument()
+	if err := configurationDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Configuration>
+    <ChildObjects>
+      <Catalog>Партнеры</Catalog>
+    </ChildObjects>
+  </Configuration>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read configuration xml: %v", err)
+	}
+
+	subsystemDoc := etree.NewDocument()
+	if err := subsystemDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <Subsystem>
+    <Properties>
+      <Name>СлужебнаяПодсистема</Name>
+      <Content>
+        <xr:Item xsi:type="xr:MDObjectRef">Catalog.Партнеры</xr:Item>
+      </Content>
+    </Properties>
+    <ChildObjects/>
+  </Subsystem>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read subsystem xml: %v", err)
+	}
+
+	configDumpDoc := etree.NewDocument()
+	if err := configDumpDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo>
+  <Metadata name="Catalog.Партнеры" id="1"/>
+</ConfigDumpInfo>`); err != nil {
+		t.Fatalf("read config dump xml: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{
+		{Doc: configurationDoc, Metadata: true, Path: filepath.Join("root", "Configuration.xml"), RelPath: "Configuration.xml", OwnerKey: "Configuration"},
+		{Doc: subsystemDoc, Metadata: true, Path: filepath.Join("root", "Subsystems", "СлужебнаяПодсистема.xml"), RelPath: "Subsystems/СлужебнаяПодсистема.xml", OwnerKey: "Subsystem.СлужебнаяПодсистема", OwnerKind: "Subsystem"},
+		{Doc: configDumpDoc, Metadata: true, Path: filepath.Join("root", "ConfigDumpInfo.xml"), RelPath: "ConfigDumpInfo.xml", FileName: configDumpInfo},
+		{Metadata: true, Path: filepath.Join("root", "Catalogs", "Партнеры.xml"), RelPath: "Catalogs/Партнеры.xml", OwnerKey: "Catalog.Партнеры", OwnerKind: "Catalog"},
+		{Metadata: true, Path: filepath.Join("root", "SessionParameters", "ПараметрСеанса.xml"), RelPath: "SessionParameters/ПараметрСеанса.xml", OwnerKey: "SessionParameter.ПараметрСеанса", OwnerKind: "SessionParameter"},
+	}
+	decisions := map[string]objectDecision{
+		"Configuration": {Belonging: "AdoptedStub"},
+		"Subsystem.СлужебнаяПодсистема":   {Belonging: "Native"},
+		"Catalog.Партнеры":                {Belonging: "Native"},
+		"SessionParameter.ПараметрСеанса": {Belonging: "AdoptedStub"},
+	}
+	excludedPaths := map[string]struct{}{
+		filepath.Join("root", "SessionParameters", "ПараметрСеанса.xml"): {},
+	}
+
+	if err := validateMetadataReferenceConsistency(contexts, decisions, excludedPaths); err != nil {
+		t.Fatalf("expected metadata reference consistency validation to pass, got %v", err)
 	}
 }
 

@@ -532,7 +532,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 		if ctx.OwnerKey == "Configuration" {
 			changed = normalizeRootConfiguration(ctx.Properties, cfg) || changed
 			changed = normalizeRootConfigurationInternalInfo(ctx.Doc) || changed
-			changed = normalizeRootConfigurationChildObjects(ctx.Doc, contexts, decisions) || changed
+			changed = normalizeRootConfigurationChildObjects(ctx.Doc, contexts, decisions, excludedPaths) || changed
 			changed = cleanupRootConfigurationModuleTexts(ctx.Doc) || changed
 		}
 
@@ -540,7 +540,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 			changed = normalizeConfigDumpInfoRootNames(ctx.Doc, config.GetDumpInfo().ConfigName, cfg.ExtensionName()) || changed
 			changed = cleanupConfigDumpInfoRootServiceEntries(ctx.Doc, cfg.ExtensionName()) || changed
 			changed = cleanupConfigDumpInfoForbiddenMetadata(ctx.Doc, blockedForbiddenObjectKeys) || changed
-			changed = cleanupConfigDumpInfoNonNativeChildren(ctx.Doc, contexts, decisions, searchResultState.PreservedConfigDumpInfo) || changed
+			changed = cleanupConfigDumpInfoNonNativeChildren(ctx.Doc, contexts, decisions, excludedPaths, searchResultState.PreservedConfigDumpInfo) || changed
 		}
 
 		if ctx.FileName == "CommandInterface.xml" {
@@ -605,8 +605,8 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 		}
 
 		if ctx.OwnerKind == "Subsystem" && ctx.Metadata {
-			changed = normalizeSubsystemChildObjects(ctx.Doc, subsystemChain(ctx.RelPath), contexts, decisions) || changed
-			changed = normalizeSubsystemContent(ctx.Doc, contexts, decisions) || changed
+			changed = normalizeSubsystemChildObjects(ctx.Doc, subsystemChain(ctx.RelPath), contexts, decisions, excludedPaths) || changed
+			changed = normalizeSubsystemContent(ctx.Doc, contexts, decisions, excludedPaths) || changed
 		}
 
 		if ctx.OwnerKind == "ChartOfCharacteristicTypes" && strings.EqualFold(ctx.FileName, "Predefined.xml") {
@@ -713,6 +713,9 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 	if err := validateSearchResultAdoptedObjects(indexes, contexts, decisions, excludedPaths, searchResultState); err != nil {
 		return err
 	}
+	if err := validateMetadataReferenceConsistency(contexts, decisions, excludedPaths); err != nil {
+		return err
+	}
 
 	log.Printf("xml change completed: dir=%s contexts=%d decisions=%d excluded_paths=%d changed_files=%d written_files=%d", dir, len(contexts), len(decisions), len(excludedPaths), changedFilesCount, writtenFilesCount)
 	return nil
@@ -757,6 +760,9 @@ func ResumeChangeFilesFromValidation(cfg *config.Configuration, dir string) erro
 	logXMLStepCompleted("remove excluded files", removeExcludedFilesStartedAt, fmt.Sprintf("excluded_paths=%d removed_files=%d", len(state.excludedPaths), removedExcludedFilesCount))
 
 	if err := validateSearchResultAdoptedObjects(state.indexes, state.contexts, state.decisions, state.excludedPaths, state.searchResultState); err != nil {
+		return err
+	}
+	if err := validateMetadataReferenceConsistency(state.contexts, state.decisions, state.excludedPaths); err != nil {
 		return err
 	}
 
@@ -3205,11 +3211,6 @@ func retainedAsNativeMetadataPath(
 		return keep
 	}
 
-	if len(segments) == 1 && segments[0].Kind == "TabularSection" {
-		_, keep := rule.NativeTabularSections[segments[0].Name]
-		return keep
-	}
-
 	if len(segments) == 2 && segments[0].Kind == "TabularSection" && segments[1].Kind == "Attribute" {
 		attrs := rule.NativeTabularSections[segments[0].Name]
 		_, keep := attrs[segments[1].Name]
@@ -5548,7 +5549,7 @@ func collectConfigurationChildObjectReferences(root *etree.Element, primaryNativ
 	return result
 }
 
-func normalizeRootConfigurationChildObjects(doc *etree.Document, contexts []*FileProcessingContext, decisions map[string]objectDecision) bool {
+func normalizeRootConfigurationChildObjects(doc *etree.Document, contexts []*FileProcessingContext, decisions map[string]objectDecision, excludedPaths map[string]struct{}) bool {
 	if doc == nil {
 		return false
 	}
@@ -5558,10 +5559,7 @@ func normalizeRootConfigurationChildObjects(doc *etree.Document, contexts []*Fil
 		return false
 	}
 
-	allowed := collectRootConfigurationChildObjects(contexts, decisions)
-	if len(allowed) == 0 {
-		return false
-	}
+	allowed := collectEmittedTopLevelMetadataKeys(contexts, decisions, excludedPaths)
 
 	changed := false
 	for _, childObjects := range root.FindElements(".//ChildObjects") {
@@ -5608,7 +5606,7 @@ func normalizeRootConfigurationChildObjects(doc *etree.Document, contexts []*Fil
 	return changed
 }
 
-func collectRootConfigurationChildObjects(contexts []*FileProcessingContext, decisions map[string]objectDecision) map[string]struct{} {
+func collectEmittedTopLevelMetadataKeys(contexts []*FileProcessingContext, decisions map[string]objectDecision, excludedPaths map[string]struct{}) map[string]struct{} {
 	result := make(map[string]struct{})
 	for _, ctx := range contexts {
 		if ctx == nil || ctx.OwnerKey == "" || ctx.OwnerKey == "Configuration" {
@@ -5619,6 +5617,9 @@ func collectRootConfigurationChildObjects(contexts []*FileProcessingContext, dec
 		}
 		decision, ok := decisions[ctx.OwnerKey]
 		if !ok || decision.Excluded {
+			continue
+		}
+		if _, excluded := excludedPaths[ctx.Path]; excluded {
 			continue
 		}
 		result[ctx.OwnerKey] = struct{}{}
@@ -8779,13 +8780,14 @@ func cleanupDanglingCommandInterfaceCommandsWithResolver(doc *etree.Document, ex
 	return changed
 }
 
-func cleanupConfigDumpInfoNonNativeChildren(doc *etree.Document, contexts []*FileProcessingContext, decisions map[string]objectDecision, preserved map[string]struct{}) bool {
+func cleanupConfigDumpInfoNonNativeChildren(doc *etree.Document, contexts []*FileProcessingContext, decisions map[string]objectDecision, excludedPaths map[string]struct{}, preserved map[string]struct{}) bool {
+	emittedTopLevel := collectEmittedTopLevelMetadataKeys(contexts, decisions, excludedPaths)
 	return cleanupConfigDumpInfoNonNativeChildrenWithResolver(doc, decisions, func(name string) bool {
 		return roleMetadataTargetExists(name, contexts)
-	}, preserved)
+	}, emittedTopLevel, preserved)
 }
 
-func cleanupConfigDumpInfoNonNativeChildrenWithResolver(doc *etree.Document, decisions map[string]objectDecision, exists metadataTargetExistsFunc, preserved map[string]struct{}) bool {
+func cleanupConfigDumpInfoNonNativeChildrenWithResolver(doc *etree.Document, decisions map[string]objectDecision, exists metadataTargetExistsFunc, emittedTopLevel map[string]struct{}, preserved map[string]struct{}) bool {
 	if doc == nil || len(decisions) == 0 {
 		return false
 	}
@@ -8816,6 +8818,15 @@ func cleanupConfigDumpInfoNonNativeChildrenWithResolver(doc *etree.Document, dec
 			if _, keep := preserved[name]; keep {
 				walk(child)
 				continue
+			}
+			if len(emittedTopLevel) > 0 {
+				if key, ok := configDumpInfoTopLevelKey(name); ok {
+					if _, keep := emittedTopLevel[key]; !keep {
+						parent.RemoveChild(child)
+						changed = true
+						continue
+					}
+				}
 			}
 			removed := false
 			for prefix := range nonNativePrefixes {
@@ -9755,9 +9766,6 @@ func normalizeAdoptedStubMetaDataChildObjects(childObjects *etree.Element, rule 
 		case "TabularSection":
 			allowedAttrs, keep := rule.NativeTabularSections[name]
 			if keep {
-				if normalizeAdoptedStubMetaDataRetainedChild(el) {
-					changed = true
-				}
 				if normalizeAdoptedStubMetaDataTabularSection(el, allowedAttrs) {
 					changed = true
 				}
@@ -9882,7 +9890,7 @@ func metadataChildName(el *etree.Element) string {
 	return strings.TrimSpace(el.Text())
 }
 
-func normalizeSubsystemChildObjects(doc *etree.Document, parentChain []string, contexts []*FileProcessingContext, decisions map[string]objectDecision) bool {
+func normalizeSubsystemChildObjects(doc *etree.Document, parentChain []string, contexts []*FileProcessingContext, decisions map[string]objectDecision, excludedPaths map[string]struct{}) bool {
 	if doc == nil || len(parentChain) == 0 {
 		return false
 	}
@@ -9905,7 +9913,7 @@ func normalizeSubsystemChildObjects(doc *etree.Document, parentChain []string, c
 		return false
 	}
 
-	allowed := collectAllowedSubsystemChildren(parentChain, contexts, decisions)
+	allowed := collectAllowedSubsystemChildren(parentChain, contexts, decisions, excludedPaths)
 	changed := false
 	for _, child := range append([]etree.Token(nil), childObjects.Child...) {
 		el, ok := child.(*etree.Element)
@@ -9928,7 +9936,7 @@ func normalizeSubsystemChildObjects(doc *etree.Document, parentChain []string, c
 	return changed
 }
 
-func normalizeSubsystemContent(doc *etree.Document, contexts []*FileProcessingContext, decisions map[string]objectDecision) bool {
+func normalizeSubsystemContent(doc *etree.Document, contexts []*FileProcessingContext, decisions map[string]objectDecision, excludedPaths map[string]struct{}) bool {
 	if doc == nil {
 		return false
 	}
@@ -9951,7 +9959,7 @@ func normalizeSubsystemContent(doc *etree.Document, contexts []*FileProcessingCo
 		return false
 	}
 
-	allowed := collectRootConfigurationChildObjects(contexts, decisions)
+	allowed := collectEmittedTopLevelMetadataKeys(contexts, decisions, excludedPaths)
 	changed := false
 	for _, child := range append([]etree.Token(nil), content.Child...) {
 		el, ok := child.(*etree.Element)
@@ -10347,7 +10355,6 @@ func finalizeRetainedOwnerCommands(
 			}
 			stats.WrittenFiles++
 		}
-		return stats, nil
 	}
 
 	finalMetadataPathIndex := buildFinalMetadataPathIndex(contexts, decisions, excludedPaths, retainedOwnerCommands, searchResultState)
@@ -10402,8 +10409,9 @@ func finalizeRetainedOwnerCommands(
 	}
 
 	if configDumpCtx := findContextByRelPath(indexes, contexts, configDumpInfo); configDumpCtx != nil && configDumpCtx.Doc != nil {
+		emittedTopLevel := collectEmittedTopLevelMetadataKeys(contexts, decisions, excludedPaths)
 		changed := cleanupConfigDumpInfoForbiddenMetadata(configDumpCtx.Doc, forbiddenObjectKeys)
-		changed = cleanupConfigDumpInfoNonNativeChildrenWithResolver(configDumpCtx.Doc, decisions, finalExists, preservedConfigDumpInfo) || changed
+		changed = cleanupConfigDumpInfoNonNativeChildrenWithResolver(configDumpCtx.Doc, decisions, finalExists, emittedTopLevel, preservedConfigDumpInfo) || changed
 		if changed {
 			stats.ChangedFiles++
 			if err := configDumpCtx.Doc.WriteToFile(configDumpCtx.Path); err != nil {
@@ -10424,8 +10432,6 @@ func finalizeRetainedOwnerCommands(
 			changed = cleanupDanglingCommandInterfaceCommandsWithResolver(ctx.Doc, finalExists)
 		case strings.EqualFold(ctx.FileName, "Rights.xml"):
 			changed = cleanupRoleDanglingMetadataRightsWithResolver(ctx.Doc, finalExists)
-		case strings.EqualFold(ctx.FileName, "Form.xml") && strings.Contains(filepath.ToSlash(ctx.RelPath), "/Forms/"):
-			changed = cleanupMissingFormCommandReferencesWithResolver(ctx.Doc, finalExists)
 		}
 
 		stats.AffectedDocs++
@@ -10448,6 +10454,29 @@ func finalizeRetainedOwnerCommands(
 		}
 
 		changed := cleanupRoleDanglingMetadataRightsWithResolver(ctx.Doc, finalExists)
+		stats.AffectedDocs++
+		if !changed {
+			continue
+		}
+		stats.ChangedFiles++
+		if err := ctx.Doc.WriteToFile(ctx.Path); err != nil {
+			return stats, fmt.Errorf("ошибка при записи файла %s: %w", ctx.Path, err)
+		}
+		stats.WrittenFiles++
+	}
+
+	for _, ctx := range contexts {
+		if ctx == nil || ctx.Doc == nil || !strings.EqualFold(ctx.FileName, "Form.xml") {
+			continue
+		}
+		if !strings.Contains(filepath.ToSlash(ctx.RelPath), "/Forms/") {
+			continue
+		}
+		if _, excluded := excludedPaths[ctx.Path]; excluded {
+			continue
+		}
+
+		changed := cleanupMissingFormCommandReferencesWithResolver(ctx.Doc, finalExists)
 		stats.AffectedDocs++
 		if !changed {
 			continue
@@ -10704,7 +10733,7 @@ func normalizeComparableTypeValue(value string) string {
 	return value
 }
 
-func collectAllowedSubsystemChildren(parentChain []string, contexts []*FileProcessingContext, decisions map[string]objectDecision) map[string]struct{} {
+func collectAllowedSubsystemChildren(parentChain []string, contexts []*FileProcessingContext, decisions map[string]objectDecision, excludedPaths map[string]struct{}) map[string]struct{} {
 	result := make(map[string]struct{})
 	parentLen := len(parentChain)
 	if parentLen == 0 {
@@ -10717,6 +10746,9 @@ func collectAllowedSubsystemChildren(parentChain []string, contexts []*FileProce
 		}
 		decision, ok := decisions[ctx.OwnerKey]
 		if !ok || decision.Excluded {
+			continue
+		}
+		if _, excluded := excludedPaths[ctx.Path]; excluded {
 			continue
 		}
 
@@ -10738,6 +10770,69 @@ func collectAllowedSubsystemChildren(parentChain []string, contexts []*FileProce
 	}
 
 	return result
+}
+
+func validateMetadataReferenceConsistency(contexts []*FileProcessingContext, decisions map[string]objectDecision, excludedPaths map[string]struct{}) error {
+	emittedTopLevel := collectEmittedTopLevelMetadataKeys(contexts, decisions, excludedPaths)
+	for _, ctx := range contexts {
+		if ctx == nil || ctx.Doc == nil {
+			continue
+		}
+		if _, excluded := excludedPaths[ctx.Path]; excluded {
+			continue
+		}
+
+		switch {
+		case ctx.OwnerKey == "Configuration":
+			root := ctx.Doc.Root()
+			if root == nil {
+				continue
+			}
+			for _, childObjects := range root.FindElements(".//ChildObjects") {
+				for _, child := range childObjects.ChildElements() {
+					kind, ok := configurationChildObjectKinds[child.Tag]
+					if !ok {
+						continue
+					}
+					name := strings.TrimSpace(child.Text())
+					if name == "" {
+						continue
+					}
+					key := kind + "." + name
+					if _, ok := emittedTopLevel[key]; !ok {
+						return fmt.Errorf("metadata reference consistency: %s contains dangling child object %s", ctx.RelPath, key)
+					}
+				}
+			}
+		case ctx.OwnerKind == "Subsystem" && ctx.Metadata:
+			content := metadataTargetElement(ctx.Doc)
+			if content == nil {
+				continue
+			}
+			for _, item := range content.FindElements("./Properties/Content/*") {
+				key, ok := configDumpInfoTopLevelKey(strings.TrimSpace(item.Text()))
+				if !ok {
+					continue
+				}
+				if _, ok := emittedTopLevel[key]; !ok {
+					return fmt.Errorf("metadata reference consistency: %s contains dangling subsystem content ref %s", ctx.RelPath, key)
+				}
+			}
+		case strings.EqualFold(ctx.FileName, configDumpInfo):
+			for _, metadata := range ctx.Doc.FindElements("//*[local-name()='Metadata']") {
+				name := strings.TrimSpace(metadata.SelectAttrValue("name", ""))
+				key, ok := configDumpInfoTopLevelKey(name)
+				if !ok {
+					continue
+				}
+				if _, ok := emittedTopLevel[key]; !ok {
+					return fmt.Errorf("metadata reference consistency: %s contains dangling ConfigDumpInfo ref %s", ctx.RelPath, key)
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 func findTopLevelMetadataContextByOwnerKey(contexts []*FileProcessingContext, key string) *FileProcessingContext {
