@@ -707,6 +707,376 @@ func TestCleanupMissingFormCommonAttributeDynamicListFieldsFromControlOnly(t *te
 	}
 }
 
+func TestCleanupFormDocumentIndexedKeepsIssue15VersionPlanNativeFields(t *testing.T) {
+	t.Parallel()
+
+	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform" xmlns:dcssch="http://v8.1c.ru/8.1/data-composition-system/schema" xmlns:v8="http://v8.1c.ru/8.1/data/core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ChildItems>
+    <Table name="ВерсииТаблица">
+      <DataPath>Версии</DataPath>
+      <ChildItems>
+        <LabelField name="ВерсииНаименование">
+          <DataPath>Версии.Наименование</DataPath>
+        </LabelField>
+        <LabelField name="Статус">
+          <DataPath>Версии.Статус</DataPath>
+        </LabelField>
+        <LabelField name="КоличествоЭлементов">
+          <DataPath>Версии.КоличествоЭлементов</DataPath>
+        </LabelField>
+        <LabelField name="ВерсииСписокСценариев">
+          <DataPath>Версии.СписокСценариев</DataPath>
+        </LabelField>
+        <LabelField name="Ссылка">
+          <DataPath>Версии.Ссылка</DataPath>
+        </LabelField>
+        <LabelField name="Код">
+          <DataPath>Версии.Код</DataPath>
+        </LabelField>
+      </ChildItems>
+    </Table>
+  </ChildItems>
+  <Attributes>
+    <Attribute name="Версии">
+      <Type>
+        <v8:Type>cfg:DynamicList</v8:Type>
+      </Type>
+      <Settings xsi:type="DynamicList">
+        <MainTable>Catalog.упо_ВерсииПланов</MainTable>
+        <Field xsi:type="dcssch:DataSetFieldField">
+          <dcssch:dataPath>Наименование</dcssch:dataPath>
+          <dcssch:field>Наименование</dcssch:field>
+        </Field>
+        <Field xsi:type="dcssch:DataSetFieldField">
+          <dcssch:dataPath>Статус</dcssch:dataPath>
+          <dcssch:field>Статус</dcssch:field>
+        </Field>
+        <Field xsi:type="dcssch:DataSetFieldField">
+          <dcssch:dataPath>КоличествоЭлементов</dcssch:dataPath>
+          <dcssch:field>КоличествоЭлементов</dcssch:field>
+        </Field>
+        <Field xsi:type="dcssch:DataSetFieldField">
+          <dcssch:dataPath>СписокСценариев</dcssch:dataPath>
+          <dcssch:field>СписокСценариев</dcssch:field>
+        </Field>
+        <Field xsi:type="dcssch:DataSetFieldField">
+          <dcssch:dataPath>Ссылка</dcssch:dataPath>
+          <dcssch:field>Ссылка</dcssch:field>
+        </Field>
+        <Field xsi:type="dcssch:DataSetFieldField">
+          <dcssch:dataPath>Код</dcssch:dataPath>
+          <dcssch:field>Код</dcssch:field>
+        </Field>
+      </Settings>
+    </Attribute>
+  </Attributes>
+</Form>`)
+	ownerDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog>
+    <Properties>
+      <Name>упо_ВерсииПланов</Name>
+      <StandardAttributes>
+        <StandardAttribute name="Ref"/>
+        <StandardAttribute name="Description"/>
+        <StandardAttribute name="Code"/>
+      </StandardAttributes>
+    </Properties>
+    <ChildObjects/>
+  </Catalog>
+</MetaDataObject>`)
+
+	formCtx := &FileProcessingContext{
+		Doc:       formDoc,
+		OwnerKey:  "Catalog.упо_ВерсииПланов",
+		OwnerKind: "Catalog",
+		RelPath:   "Catalogs/упо_ВерсииПланов/Forms/ФормаСписка/Ext/Form.xml",
+	}
+	contexts := []*FileProcessingContext{
+		{
+			Doc:       ownerDoc,
+			Metadata:  true,
+			OwnerKey:  "Catalog.упо_ВерсииПланов",
+			OwnerKind: "Catalog",
+			RelPath:   "Catalogs/упо_ВерсииПланов.xml",
+		},
+		formCtx,
+	}
+	indexes := buildContextIndexes(contexts)
+	decisions := map[string]objectDecision{
+		"Catalog.упо_ВерсииПланов": {Belonging: "Native"},
+	}
+
+	if cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
+		t.Fatalf("expected native form cleanup to preserve issue #15 bindings")
+	}
+
+	for _, dataPath := range []string{
+		"Версии.Наименование",
+		"Версии.Статус",
+		"Версии.КоличествоЭлементов",
+		"Версии.СписокСценариев",
+		"Версии.Ссылка",
+		"Версии.Код",
+	} {
+		if !formDocHasDataPath(formDoc, dataPath) {
+			t.Fatalf("expected DataPath %q to remain in native form", dataPath)
+		}
+	}
+
+	for _, field := range []string{
+		"Наименование",
+		"Статус",
+		"КоличествоЭлементов",
+		"СписокСценариев",
+		"Ссылка",
+		"Код",
+	} {
+		if !dynamicListFieldDeclared(formDoc, "Версии", field) {
+			t.Fatalf("expected dynamic list field %q to remain declared", field)
+		}
+	}
+}
+
+func TestCleanupFormDocumentIndexedKeepsIssue15PlansNativeFields(t *testing.T) {
+	t.Parallel()
+
+	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform" xmlns:dcssch="http://v8.1c.ru/8.1/data-composition-system/schema" xmlns:v8="http://v8.1c.ru/8.1/data/core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ChildItems>
+    <Table name="СписокПланов">
+      <DataPath>Список</DataPath>
+      <ChildItems>
+        <LabelField name="ОбъектПлана">
+          <DataPath>Список.ОбъектПлана</DataPath>
+        </LabelField>
+        <LabelField name="Наименование">
+          <DataPath>Список.Наименование</DataPath>
+        </LabelField>
+        <LabelField name="Код">
+          <DataPath>Список.Код</DataPath>
+        </LabelField>
+        <LabelField name="Ссылка">
+          <DataPath>Список.Ссылка</DataPath>
+        </LabelField>
+      </ChildItems>
+    </Table>
+  </ChildItems>
+  <Attributes>
+    <Attribute name="Список">
+      <Type>
+        <v8:Type>cfg:DynamicList</v8:Type>
+      </Type>
+      <Settings xsi:type="DynamicList">
+        <MainTable>Catalog.упо_Планы</MainTable>
+        <Field xsi:type="dcssch:DataSetFieldField">
+          <dcssch:dataPath>ОбъектПлана</dcssch:dataPath>
+          <dcssch:field>ОбъектПлана</dcssch:field>
+        </Field>
+        <Field xsi:type="dcssch:DataSetFieldField">
+          <dcssch:dataPath>Наименование</dcssch:dataPath>
+          <dcssch:field>Наименование</dcssch:field>
+        </Field>
+        <Field xsi:type="dcssch:DataSetFieldField">
+          <dcssch:dataPath>Код</dcssch:dataPath>
+          <dcssch:field>Код</dcssch:field>
+        </Field>
+        <Field xsi:type="dcssch:DataSetFieldField">
+          <dcssch:dataPath>Ссылка</dcssch:dataPath>
+          <dcssch:field>Ссылка</dcssch:field>
+        </Field>
+      </Settings>
+    </Attribute>
+  </Attributes>
+</Form>`)
+	ownerDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog>
+    <Properties>
+      <Name>упо_Планы</Name>
+      <StandardAttributes>
+        <StandardAttribute name="Ref"/>
+        <StandardAttribute name="Description"/>
+        <StandardAttribute name="Code"/>
+      </StandardAttributes>
+    </Properties>
+    <ChildObjects/>
+  </Catalog>
+</MetaDataObject>`)
+
+	formCtx := &FileProcessingContext{
+		Doc:       formDoc,
+		OwnerKey:  "Catalog.упо_Планы",
+		OwnerKind: "Catalog",
+		RelPath:   "Catalogs/упо_Планы/Forms/ФормаСписка/Ext/Form.xml",
+	}
+	contexts := []*FileProcessingContext{
+		{
+			Doc:       ownerDoc,
+			Metadata:  true,
+			OwnerKey:  "Catalog.упо_Планы",
+			OwnerKind: "Catalog",
+			RelPath:   "Catalogs/упо_Планы.xml",
+		},
+		formCtx,
+	}
+	indexes := buildContextIndexes(contexts)
+	decisions := map[string]objectDecision{
+		"Catalog.упо_Планы": {Belonging: "Native"},
+	}
+
+	if cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
+		t.Fatalf("expected native plans form cleanup to preserve issue #15 bindings")
+	}
+
+	for _, dataPath := range []string{
+		"Список.ОбъектПлана",
+		"Список.Наименование",
+		"Список.Код",
+		"Список.Ссылка",
+	} {
+		if !formDocHasDataPath(formDoc, dataPath) {
+			t.Fatalf("expected DataPath %q to remain in native form", dataPath)
+		}
+	}
+
+	for _, field := range []string{"ОбъектПлана", "Наименование", "Код", "Ссылка"} {
+		if !dynamicListFieldDeclared(formDoc, "Список", field) {
+			t.Fatalf("expected dynamic list field %q to remain declared", field)
+		}
+	}
+}
+
+func TestCleanupFormDocumentIndexedNonNativeStillRemovesMissingDynamicListFields(t *testing.T) {
+	t.Parallel()
+
+	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform" xmlns:dcssch="http://v8.1c.ru/8.1/data-composition-system/schema" xmlns:v8="http://v8.1c.ru/8.1/data/core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ChildItems>
+    <Table name="СписокПланов">
+      <DataPath>Список</DataPath>
+      <ChildItems>
+        <LabelField name="ОбъектПлана">
+          <DataPath>Список.ОбъектПлана</DataPath>
+        </LabelField>
+        <LabelField name="Ссылка">
+          <DataPath>Список.Ссылка</DataPath>
+        </LabelField>
+      </ChildItems>
+    </Table>
+  </ChildItems>
+  <Attributes>
+    <Attribute name="Список">
+      <Type>
+        <v8:Type>cfg:DynamicList</v8:Type>
+      </Type>
+      <Settings xsi:type="DynamicList">
+        <MainTable>Catalog.упо_Планы</MainTable>
+        <Field xsi:type="dcssch:DataSetFieldField">
+          <dcssch:dataPath>ОбъектПлана</dcssch:dataPath>
+          <dcssch:field>ОбъектПлана</dcssch:field>
+        </Field>
+        <Field xsi:type="dcssch:DataSetFieldField">
+          <dcssch:dataPath>Ссылка</dcssch:dataPath>
+          <dcssch:field>Ссылка</dcssch:field>
+        </Field>
+      </Settings>
+    </Attribute>
+  </Attributes>
+</Form>`)
+	ownerDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog>
+    <Properties>
+      <Name>упо_Планы</Name>
+      <StandardAttributes>
+        <StandardAttribute name="Ref"/>
+        <StandardAttribute name="Description"/>
+        <StandardAttribute name="Code"/>
+      </StandardAttributes>
+    </Properties>
+    <ChildObjects/>
+  </Catalog>
+</MetaDataObject>`)
+
+	formCtx := &FileProcessingContext{
+		Doc:       formDoc,
+		OwnerKey:  "Catalog.упо_Планы",
+		OwnerKind: "Catalog",
+		RelPath:   "Catalogs/упо_Планы/Forms/ФормаСписка/Ext/Form.xml",
+	}
+	contexts := []*FileProcessingContext{
+		{
+			Doc:       ownerDoc,
+			Metadata:  true,
+			OwnerKey:  "Catalog.упо_Планы",
+			OwnerKind: "Catalog",
+			RelPath:   "Catalogs/упо_Планы.xml",
+		},
+		formCtx,
+	}
+	indexes := buildContextIndexes(contexts)
+	decisions := map[string]objectDecision{
+		"Catalog.упо_Планы": {Belonging: "AdoptedStub"},
+	}
+
+	if !cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
+		t.Fatalf("expected non-native form cleanup to remove missing dynamic list field")
+	}
+	if formDocHasDataPath(formDoc, "Список.ОбъектПлана") {
+		t.Fatalf("expected non-native cleanup to remove missing issue #15 field")
+	}
+	if !formDocHasDataPath(formDoc, "Список.Ссылка") {
+		t.Fatalf("expected standard field to remain after non-native cleanup")
+	}
+	if dynamicListFieldDeclared(formDoc, "Список", "ОбъектПлана") {
+		t.Fatalf("expected missing field declaration to be removed for non-native form")
+	}
+}
+
+func TestCleanupFormDocumentIndexedNativeStillRemovesBlockedNonNativeReferences(t *testing.T) {
+	t.Parallel()
+
+	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform" xmlns:v8="http://v8.1c.ru/8.1/data/core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ChildItems>
+    <Table name="ВнешнийСписок">
+      <DataPath>ВнешнийСписок</DataPath>
+    </Table>
+  </ChildItems>
+  <Attributes>
+    <Attribute name="ВнешнийСписок">
+      <Type>
+        <v8:Type>cfg:DynamicList</v8:Type>
+      </Type>
+      <Settings xsi:type="DynamicList">
+        <MainTable>Catalog.НенативныйСписок</MainTable>
+      </Settings>
+    </Attribute>
+  </Attributes>
+</Form>`)
+	formCtx := &FileProcessingContext{
+		Doc:       formDoc,
+		OwnerKey:  "Catalog.упо_Планы",
+		OwnerKind: "Catalog",
+		RelPath:   "Catalogs/упо_Планы/Forms/ФормаСписка/Ext/Form.xml",
+	}
+	contexts := []*FileProcessingContext{formCtx}
+	indexes := buildContextIndexes(contexts)
+	decisions := map[string]objectDecision{
+		"Catalog.упо_Планы":        {Belonging: "Native"},
+		"Catalog.НенативныйСписок": {Belonging: "AdoptedStub"},
+	}
+
+	if !cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
+		t.Fatalf("expected native cleanup to remove blocked non-native dynamic list reference")
+	}
+	if formDocHasDataPath(formDoc, "ВнешнийСписок") {
+		t.Fatalf("expected blocked non-native table to be removed from native form")
+	}
+}
+
 func TestNormalizeAdoptedStubMetaDataCompositionKeepsRetainedAttributeNative(t *testing.T) {
 	t.Parallel()
 
@@ -7095,6 +7465,62 @@ func TestValidateSearchResultAdoptedObjectsRequiresAdoptedTopLevelXML(t *testing
 	}, map[string]struct{}{}, state); err == nil {
 		t.Fatalf("expected native decision to fail validation")
 	}
+}
+
+func mustReadTestXML(t *testing.T, content string) *etree.Document {
+	t.Helper()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(content); err != nil {
+		t.Fatalf("read test xml: %v", err)
+	}
+
+	return doc
+}
+
+func formDocHasDataPath(doc *etree.Document, target string) bool {
+	if doc == nil {
+		return false
+	}
+
+	for _, dataPath := range doc.FindElements("//*[local-name()='DataPath']") {
+		if strings.TrimSpace(dataPath.Text()) == target {
+			return true
+		}
+	}
+
+	return false
+}
+
+func dynamicListFieldDeclared(doc *etree.Document, attrName, target string) bool {
+	if doc == nil || doc.Root() == nil {
+		return false
+	}
+
+	for _, attr := range doc.FindElements("//*[local-name()='Attribute']") {
+		if strings.TrimSpace(attr.SelectAttrValue("name", "")) != attrName {
+			continue
+		}
+		for _, field := range attr.FindElements(".//*[local-name()='Field']") {
+			if len(field.ChildElements()) == 0 {
+				if strings.TrimSpace(field.Text()) == target {
+					return true
+				}
+				continue
+			}
+			for _, child := range field.ChildElements() {
+				tag := localName(child.Tag)
+				if !strings.EqualFold(tag, "dataPath") && !strings.EqualFold(tag, "field") {
+					continue
+				}
+				if strings.TrimSpace(child.Text()) == target {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
 }
 
 func hasMetadataName(doc *etree.Document, name string) bool {

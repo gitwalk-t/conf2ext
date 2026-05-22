@@ -462,6 +462,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 	forbiddenChildMetadataPaths := collectForbiddenChildMetadataPaths(blockedForbiddenObjectKeys)
 	blockedForbiddenRefs := collectReferenceMapFromObjectKeys(blockedForbiddenObjectKeys)
 	excludedRefs = mergeReferenceMaps(excludedRefs, blockedForbiddenRefs)
+	nonNativeKeys := collectNonNativeKeys(decisions)
 	excludedMetadataPrefixes := collectExcludedMetadataPrefixes(excludedRefs)
 	truncatedKeys := collectTruncatedKeys(decisions)
 	truncatedChildPrefixes := collectTruncatedChildPrefixes(truncatedKeys)
@@ -559,18 +560,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 		}
 
 		if strings.Contains(filepath.ToSlash(ctx.RelPath), "/Forms/") {
-			changed = cleanupNonNativeDynamicListMainTables(ctx.Doc, decisions) || changed
-			changed = normalizeManualQueryWithoutMainTable(ctx.Doc) || changed
-			changed = cleanupMissingFormConstantsSetReferencesIndexed(ctx.Doc, contexts, indexes, decisions) || changed
-			changed = cleanupMissingFormCommonAttributeDynamicListFieldsIndexed(ctx.Doc, contexts, indexes, decisions) || changed
-			changed = cleanupMissingFormCommandReferences(ctx.Doc, contexts) || changed
-			if decision.Belonging != "Native" {
-				changed = cleanupNonNativeManualQueryOrphanReferences(ctx.Doc) || changed
-				ownerCtx := findTopLevelMetadataContextByOwnerKeyIndexed(indexes, contexts, ctx.OwnerKey)
-				changed = cleanupMissingFormOwnerObjectReferences(ctx.Doc, ownerCtx) || changed
-				changed = cleanupNonNativeFormLifecycleEvents(ctx.Doc) || changed
-				changed = cleanupNonNativeFormStandardCommands(ctx.Doc) || changed
-			}
+			changed = cleanupFormDocumentIndexed(ctx, contexts, indexes, decisions, nonNativeKeys) || changed
 		}
 
 		if ctx.OwnerKind == "FunctionalOptionsParameter" && ctx.Properties != nil {
@@ -6325,6 +6315,44 @@ func cleanupMissingFormCommandReferences(doc *etree.Document, contexts []*FilePr
 	return cleanupMissingFormCommandReferencesWithResolver(doc, func(name string) bool {
 		return roleMetadataTargetExists(name, contexts)
 	})
+}
+
+func cleanupFormDocumentIndexed(
+	ctx *FileProcessingContext,
+	contexts []*FileProcessingContext,
+	indexes *contextIndexes,
+	decisions map[string]objectDecision,
+	nonNativeKeys map[string]struct{},
+) bool {
+	if ctx == nil || ctx.Doc == nil {
+		return false
+	}
+
+	decision, ok := decisions[ctx.OwnerKey]
+	if !ok {
+		return false
+	}
+
+	changed := false
+	changed = cleanupMissingFormConstantsSetReferencesIndexed(ctx.Doc, contexts, indexes, decisions) || changed
+	changed = cleanupMissingFormCommandReferences(ctx.Doc, contexts) || changed
+
+	if decision.Belonging == "Native" {
+		changed = cleanupNativeFormNonNativeReferences(ctx.Doc, nonNativeKeys) || changed
+		return changed
+	}
+
+	changed = cleanupNonNativeDynamicListMainTables(ctx.Doc, decisions) || changed
+	changed = normalizeManualQueryWithoutMainTable(ctx.Doc) || changed
+	changed = cleanupMissingFormCommonAttributeDynamicListFieldsIndexed(ctx.Doc, contexts, indexes, decisions) || changed
+	changed = cleanupNonNativeManualQueryOrphanReferences(ctx.Doc) || changed
+
+	ownerCtx := findTopLevelMetadataContextByOwnerKeyIndexed(indexes, contexts, ctx.OwnerKey)
+	changed = cleanupMissingFormOwnerObjectReferences(ctx.Doc, ownerCtx) || changed
+	changed = cleanupNonNativeFormLifecycleEvents(ctx.Doc) || changed
+	changed = cleanupNonNativeFormStandardCommands(ctx.Doc) || changed
+
+	return changed
 }
 
 func cleanupMissingFormCommandReferencesWithResolver(doc *etree.Document, exists metadataTargetExistsFunc) bool {
