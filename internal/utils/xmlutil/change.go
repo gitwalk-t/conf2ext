@@ -6366,10 +6366,10 @@ func removeInvalidFormLevelExcludedStandardCommands(doc *etree.Document) bool {
 	return changed
 }
 
-func cleanupMissingFormCommandReferences(doc *etree.Document, contexts []*FileProcessingContext) bool {
-	return cleanupMissingFormCommandReferencesWithResolver(doc, func(name string) bool {
+func cleanupMissingFormCommandReferences(doc *etree.Document, ownerKey string, contexts []*FileProcessingContext) bool {
+	return cleanupMissingFormCommandReferencesWithResolver(doc, formCommandReferenceResolver(ownerKey, func(name string) bool {
 		return roleMetadataTargetExists(name, contexts)
-	})
+	}))
 }
 
 func isFormCleanupContext(ctx *FileProcessingContext) bool {
@@ -6405,7 +6405,7 @@ func cleanupFormDocumentIndexed(
 	}
 
 	changed = cleanupMissingFormConstantsSetReferencesIndexed(ctx.Doc, contexts, indexes, decisions) || changed
-	changed = cleanupMissingFormCommandReferences(ctx.Doc, contexts) || changed
+	changed = cleanupMissingFormCommandReferences(ctx.Doc, ctx.OwnerKey, contexts) || changed
 	changed = removeForbiddenStandardCommands(ctx.Doc) || changed
 
 	if decision.Belonging == "Native" {
@@ -7687,6 +7687,22 @@ func collectDefinedFormCommands(root *etree.Element) map[string]struct{} {
 	return defined
 }
 
+func formCommandReferenceResolver(ownerKey string, exists metadataTargetExistsFunc) metadataTargetExistsFunc {
+	return func(name string) bool {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return true
+		}
+		if exists != nil && exists(name) {
+			return true
+		}
+		if ownerKey == "" || strings.Contains(name, ".") || exists == nil {
+			return false
+		}
+		return exists(ownerKey + ".Command." + name)
+	}
+}
+
 func shouldRemoveFormCommandReference(el *etree.Element, defined map[string]struct{}, exists metadataTargetExistsFunc) bool {
 	tag := strings.ToLower(localName(el.Tag))
 	text := strings.TrimSpace(el.Text())
@@ -7708,6 +7724,12 @@ func shouldRemoveFormCommandReference(el *etree.Element, defined map[string]stru
 			return !ok
 		}
 		if isMetadataCommandReference(text) {
+			return exists != nil && !exists(text)
+		}
+		if !strings.Contains(text, ".") {
+			if _, ok := defined[text]; ok {
+				return false
+			}
 			return exists != nil && !exists(text)
 		}
 		return false
@@ -10686,7 +10708,7 @@ func finalizeRetainedOwnerCommands(
 			continue
 		}
 
-		changed := cleanupMissingFormCommandReferencesWithResolver(ctx.Doc, finalExists)
+		changed := cleanupMissingFormCommandReferencesWithResolver(ctx.Doc, formCommandReferenceResolver(ctx.OwnerKey, finalExists))
 		stats.AffectedDocs++
 		if !changed {
 			continue

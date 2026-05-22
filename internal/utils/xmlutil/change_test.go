@@ -3364,6 +3364,47 @@ func TestCleanupMissingFormCommandReferencesKeepsTableExcludedCommands(t *testin
 	}
 }
 
+func TestCleanupMissingFormCommandReferencesRemovesDanglingShortNames(t *testing.T) {
+	t.Parallel()
+
+	doc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform">
+  <ChildItems>
+    <Button name="Delete"><CommandName>Delete</CommandName></Button>
+    <Button name="Change"><CommandName>Change</CommandName></Button>
+    <Button name="Copy"><CommandName>Copy</CommandName></Button>
+    <Button name="Create"><CommandName>Create</CommandName></Button>
+    <Button name="MoveItem"><CommandName>MoveItem</CommandName></Button>
+    <Button name="Локальная"><CommandName>ЛокальнаяКоманда</CommandName></Button>
+    <Button name="КомандаОбъекта"><CommandName>КомандаОбъекта</CommandName></Button>
+  </ChildItems>
+  <Commands>
+    <Command name="ЛокальнаяКоманда">
+      <Action>ЛокальнаяКоманда</Action>
+    </Command>
+  </Commands>
+</Form>`)
+
+	resolver := formCommandReferenceResolver("Catalog.Тест", func(name string) bool {
+		return name == "Catalog.Тест.Command.КомандаОбъекта"
+	})
+
+	if !cleanupMissingFormCommandReferencesWithResolver(doc, resolver) {
+		t.Fatalf("expected dangling short command references to be removed")
+	}
+
+	for _, command := range []string{"Delete", "Change", "Copy", "Create", "MoveItem"} {
+		if formDocContainsText(doc, command) {
+			t.Fatalf("expected dangling short command %q to be removed", command)
+		}
+	}
+	for _, command := range []string{"ЛокальнаяКоманда", "КомандаОбъекта"} {
+		if !formDocContainsText(doc, command) {
+			t.Fatalf("expected valid short command %q to remain", command)
+		}
+	}
+}
+
 func TestNormalizeManualQueryWithoutMainTableAddsStandardAliasAndRemovesDefaultPicture(t *testing.T) {
 	t.Parallel()
 
