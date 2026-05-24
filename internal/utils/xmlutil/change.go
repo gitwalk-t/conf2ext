@@ -6366,6 +6366,82 @@ func removeInvalidFormLevelExcludedStandardCommands(doc *etree.Document) bool {
 	return changed
 }
 
+func collectExcludedCommands(commandSet *etree.Element) map[string]struct{} {
+	collected := make(map[string]struct{})
+	if commandSet == nil {
+		return collected
+	}
+
+	for _, child := range commandSet.ChildElements() {
+		if !strings.EqualFold(localName(child.Tag), "ExcludedCommand") {
+			continue
+		}
+		name := strings.TrimSpace(child.Text())
+		if name == "" {
+			continue
+		}
+		collected[name] = struct{}{}
+	}
+
+	return collected
+}
+
+func isSelectionFormRelPath(relPath string) bool {
+	relPath = strings.ToLower(filepath.ToSlash(relPath))
+	return strings.Contains(relPath, "/forms/") && (strings.Contains(relPath, "выбор") || strings.Contains(relPath, "choice"))
+}
+
+func removeInvalidChoiceTableExcludedStandardCommands(doc *etree.Document, keepChoiceTableCommands bool) bool {
+	root := doc.Root()
+	if root == nil {
+		return false
+	}
+
+	invalid := map[string]struct{}{
+		"Change":        {},
+		"Copy":          {},
+		"Create":        {},
+		"Delete":        {},
+		"MoveItem":      {},
+		"WriteAndClose": {},
+	}
+
+	changed := false
+	for _, table := range root.FindElements(".//*[local-name()='Table']") {
+		if !strings.EqualFold(strings.TrimSpace(textOf(table, "ChoiceMode")), "true") {
+			continue
+		}
+
+		commandSet := table.FindElement("./CommandSet")
+		if commandSet == nil {
+			continue
+		}
+
+		for _, child := range append([]*etree.Element(nil), commandSet.ChildElements()...) {
+			if !strings.EqualFold(localName(child.Tag), "ExcludedCommand") {
+				continue
+			}
+
+			name := strings.TrimSpace(child.Text())
+			if _, bad := invalid[name]; !bad {
+				continue
+			}
+			if keepChoiceTableCommands {
+				continue
+			}
+
+			commandSet.RemoveChild(child)
+			changed = true
+		}
+
+		if len(commandSet.ChildElements()) == 0 {
+			table.RemoveChild(commandSet)
+		}
+	}
+
+	return changed
+}
+
 func cleanupMissingFormCommandReferences(doc *etree.Document, ownerKey string, contexts []*FileProcessingContext) bool {
 	return cleanupMissingFormCommandReferencesWithResolver(doc, formCommandReferenceResolver(ownerKey, func(name string) bool {
 		return roleMetadataTargetExists(name, contexts)
@@ -6397,6 +6473,7 @@ func cleanupFormDocumentIndexed(
 	}
 
 	changed := false
+	changed = removeInvalidChoiceTableExcludedStandardCommands(ctx.Doc, isSelectionFormRelPath(ctx.RelPath)) || changed
 	changed = removeInvalidFormLevelExcludedStandardCommands(ctx.Doc) || changed
 
 	decision, ok := decisions[ctx.OwnerKey]
