@@ -3822,6 +3822,31 @@ func TestRemoveInvalidChoiceTableExcludedStandardCommandsKeepsSelectionFormComma
 	}
 }
 
+func TestRemoveInvalidChoiceTableExcludedStandardCommandsMarksChangedWhenRemovingEmptyCommandSet(t *testing.T) {
+	t.Parallel()
+
+	doc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform">
+  <ChildItems>
+    <Table name="ГруппыПользователей">
+      <ChoiceMode>true</ChoiceMode>
+      <DataPath>ГруппыПользователей</DataPath>
+      <CommandSet>
+        <ExcludedCommand>Delete</ExcludedCommand>
+      </CommandSet>
+    </Table>
+  </ChildItems>
+</Form>`)
+
+	if !removeInvalidChoiceTableExcludedStandardCommands(doc, false) {
+		t.Fatalf("expected cleanup to report document change when removing last invalid choice-table command")
+	}
+
+	if doc.Root().FindElement(".//*[local-name()='Table']/*[local-name()='CommandSet']") != nil {
+		t.Fatalf("expected empty choice-table command set container to be removed")
+	}
+}
+
 func TestNormalizeManualQueryWithoutMainTableAddsStandardAliasAndRemovesDefaultPicture(t *testing.T) {
 	t.Parallel()
 

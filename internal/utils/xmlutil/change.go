@@ -6436,6 +6436,7 @@ func removeInvalidChoiceTableExcludedStandardCommands(doc *etree.Document, keepC
 
 		if len(commandSet.ChildElements()) == 0 {
 			table.RemoveChild(commandSet)
+			changed = true
 		}
 	}
 
