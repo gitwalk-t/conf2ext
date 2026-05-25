@@ -16,6 +16,7 @@
 `targetCompatibilitySet`:
 - не делает target глобальным source graph;
 - не заменяет обычный `RefDrivenInclusion`.
+- применяется только к top-level metadata objects.
 
 ## AdoptedStubExtMetaData
 
@@ -38,7 +39,8 @@ CommonTemplate.упо_MetaDataFile
 
 Если source и target совпадают по `id/uuid`:
 - canonical name берется из target;
-- stale source-name не должен создавать duplicate adopted-object.
+- stale source-name не должен создавать duplicate adopted-object;
+- UUID-aware matching должен работать даже если persisted extension id устарел.
 
 ## Merge constraints
 
