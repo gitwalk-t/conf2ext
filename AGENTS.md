@@ -1,88 +1,80 @@
 # AGENTS.md
 
-## Стартовый маршрут
+## Bootstrap
 
-Всегда сначала читать:
+Всегда читать только:
 
-1. `.codex/index.md`
-2. `.codex/agent-start.md`
+1. `.codex/agent-start.md`
+2. `.codex/index.md`
 
-Дальше читать только документы, относящиеся к текущей задаче.
+Дальше читать только task-specific context.
 
-## Быстрый routing
+---
 
-- XML/classification logic:
-  - `.codex/context/xml-rules.md`
-  - `.codex/context/terms.md`
-  - `docs/architecture.md`
+## Routing
 
-- Debugging и ошибки загрузки:
-  - `docs/debugging.md`
+### XML/classification
 
-- Запуск и monitoring:
-  - `.codex/skills/run-conversion.md`
-  - `.codex/skills/check-run-status.md`
-  - `.codex/skills/cleanup-run-tails.md`
+- `.codex/context/xml-rules.md`
+- `.codex/context/terms.md`
+- `docs/architecture.md`
 
-- GitHub Issue workflow:
-  - `.codex/skills/use-github-issue-task.md`
+### Debugging/loading errors
 
-- Обновление локального репозитория из git:
-  - `.codex/skills/update-repo-from-git.md`
+- `docs/debugging.md`
 
-- Временный operational context:
-  - `.codex/context/current-state.md`
-  - `.codex/handoff.md`
+### Conversion orchestration
 
-## Основные правила
+- `.codex/skills/run-conversion.md`
+- `.codex/skills/check-run-status.md`
+- `.codex/skills/cleanup-run-tails.md`
 
-- Предпочитай минимальный diff.
-- Не делать широкий рефакторинг `internal/utils/xmlutil/change.go` без прямой необходимости.
+### GitHub Issue workflow
+
+- `.codex/skills/use-github-issue-task.md`
+
+### Repository update
+
+- `.codex/skills/update-repo-from-git.md`
+
+### Operational context
+
+Только при handoff/debugging:
+
+- `.codex/context/current-state.md`
+- `.codex/handoff.md`
+
+---
+
+## Hard constraints
+
+- Предпочитай minimal diff.
+- Не делать широкий рефакторинг `internal/utils/xmlutil/change.go`.
 - Не добавлять зависимости без необходимости.
-- Не менять XML/business rules ради “красоты”.
+- Не менять XML/business rules ради cleanup.
+- Не читать весь `.codex/context/*` подряд.
+- Не читать debugging docs без debugging-задачи.
+- Не дублировать workflow logic между skills.
+
+---
+
+## Stable invariants
+
 - `excluded_*` — soft exclude.
 - `forbidden_*` — hard exclude.
-- BSL не является источником classification rules.
-- `configs/config.json` считать активным локальным конфигом по умолчанию.
+- BSL не источник classification rules.
+- `configs/config.json` — основной локальный config.
 
-## Прогоны
+---
 
-- Перед новым запуском использовать:
-
-```text
-.codex/skills/cleanup-run-tails.md
-```
-
-- Для проверки статуса использовать:
-
-```text
-.codex/skills/check-run-status.md
-```
-
-- Для orchestration использовать:
-
-```text
-.codex/skills/run-conversion.md
-```
-
-## Git update
-
-Для любого обновления локального worktree из git использовать:
-
-```text
-.codex/skills/update-repo-from-git.md
-```
-
-Не дублировать git update orchestration в других skills.
-
-## Что проверять перед завершением
+## Validation
 
 ```powershell
 go build ./...
 go test ./...
 ```
 
-Если изменились долгоживущие XML/classification rules:
+Если изменены XML/classification rules:
+
 - обновить `.codex/context/xml-rules.md`
-- при необходимости обновить `docs/architecture.md`
-- при необходимости обновить `.codex/decisions.md`
+- обновить `docs/architecture.md` при необходимости
