@@ -44,6 +44,18 @@ BSL reachability — отдельный механизм от XML RefDrivenInclu
 - `AdoptedStubMetaData` — mode через `Use_MetaDataFile`.
 - `AdoptedStubExtMetaData` — target-sensitive merge mode.
 
+## Use_MetaDataFile semantics
+
+`CommonTemplate.упо_MetaDataFile` может восстанавливать soft-excluded owner object как adopted metadata object.
+
+Правила:
+- owner object должен сохраняться в extension;
+- added leaf-fields/requisites могут оставаться `Native`;
+- leaf-field promotion не должен удалять owner XML;
+- `forbidden_*` остается сильнее `Use_MetaDataFile`;
+- `included_Native_objects` остается сильнее soft-exclude;
+- BSL не используется как source classification.
+
 ## Registrator rule
 
 Если register остается `Native`, его documents-registrators тоже должны остаться `Native`.
