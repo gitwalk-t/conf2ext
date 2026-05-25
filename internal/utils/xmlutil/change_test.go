@@ -601,6 +601,27 @@ func TestValidateMetaDataFileTemplateRejectsInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestLoadMetaDataFileTemplateIfEnabledSkipsDisabledConfig(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	templateDir := filepath.Join(dir, "CommonTemplates", "упо_MetaDataFile", "Ext")
+	if err := os.MkdirAll(templateDir, 0o755); err != nil {
+		t.Fatalf("mkdir template dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(templateDir, "Template.txt"), []byte(`{not-json}`), 0o644); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+
+	raw, err := loadMetaDataFileTemplateIfEnabled(&config.Configuration{}, dir)
+	if err != nil {
+		t.Fatalf("expected disabled metadata file to skip loading, got %v", err)
+	}
+	if raw != nil {
+		t.Fatalf("expected no parsed template for disabled metadata file, got %#v", raw)
+	}
+}
+
 func TestMergeAdoptedStubMetaDataIntoFormContractUnionsFields(t *testing.T) {
 	t.Parallel()
 

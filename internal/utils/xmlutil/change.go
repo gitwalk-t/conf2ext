@@ -378,12 +378,13 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 
 	log.Printf("xml step: build object sets")
 	buildObjectSetsStartedAt := time.Now()
-	if err := validateMetaDataFileTemplate(cfg, dir); err != nil {
+	rawMetaDataFile, err := loadMetaDataFileTemplateIfEnabled(cfg, dir)
+	if err != nil {
 		return err
 	}
 	explicitNativeObjects := collectConfiguredNativeObjects(contexts, cfg.IncludedNativeObjects)
 	includedAdoptedStubObjects := collectConfiguredAdoptedStubObjects(contexts, cfg)
-	adoptedStubMetaDataRules := collectAdoptedStubMetaDataRules(cfg, dir)
+	adoptedStubMetaDataRules := collectAdoptedStubMetaDataRulesFromTemplate(rawMetaDataFile)
 	for key := range adoptedStubMetaDataRules {
 		includedAdoptedStubObjects[key] = struct{}{}
 	}
@@ -426,7 +427,10 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 	if err != nil {
 		return err
 	}
-	targetMergeRules := collectTargetMergeRules(cfg, dir)
+	targetMergeRules := collectTargetMergeRulesFromTemplate(cfg, rawMetaDataFile)
+	if rawMetaDataFile == nil {
+		targetMergeRules = collectTargetMergeRules(cfg, dir)
+	}
 
 	log.Printf("xml step: promote referenced objects")
 	promoteReferencedObjectsStartedAt := time.Now()
@@ -873,12 +877,13 @@ func buildChangeFilesState(cfg *config.Configuration, dir string) (*changeFilesS
 
 	log.Printf("xml step: build object sets")
 	buildObjectSetsStartedAt := time.Now()
-	if err := validateMetaDataFileTemplate(cfg, dir); err != nil {
+	rawMetaDataFile, err := loadMetaDataFileTemplateIfEnabled(cfg, dir)
+	if err != nil {
 		return nil, err
 	}
 	explicitNativeObjects := collectConfiguredNativeObjects(contexts, cfg.IncludedNativeObjects)
 	includedAdoptedStubObjects := collectConfiguredAdoptedStubObjects(contexts, cfg)
-	adoptedStubMetaDataRules := collectAdoptedStubMetaDataRules(cfg, dir)
+	adoptedStubMetaDataRules := collectAdoptedStubMetaDataRulesFromTemplate(rawMetaDataFile)
 	for key := range adoptedStubMetaDataRules {
 		includedAdoptedStubObjects[key] = struct{}{}
 	}
@@ -922,7 +927,10 @@ func buildChangeFilesState(cfg *config.Configuration, dir string) (*changeFilesS
 	if err != nil {
 		return nil, err
 	}
-	targetMergeRules := collectTargetMergeRules(cfg, dir)
+	targetMergeRules := collectTargetMergeRulesFromTemplate(cfg, rawMetaDataFile)
+	if rawMetaDataFile == nil {
+		targetMergeRules = collectTargetMergeRules(cfg, dir)
+	}
 
 	log.Printf("xml step: promote referenced objects")
 	promoteReferencedObjectsStartedAt := time.Now()
@@ -1516,6 +1524,15 @@ func collectTargetMergeRules(cfg *config.Configuration, dir string) targetMergeR
 	raw, err := parseMetaDataFileTemplate(templatePath)
 	if err != nil {
 		log.Printf("xml step: skip target merge rules, cannot parse %s: %v", templatePath, err)
+		return result
+	}
+
+	return collectTargetMergeRulesFromTemplate(cfg, raw)
+}
+
+func collectTargetMergeRulesFromTemplate(cfg *config.Configuration, raw map[string]any) targetMergeRuleSet {
+	result := targetMergeRuleSet{ObjectKeys: make(map[string]struct{})}
+	if cfg == nil || strings.TrimSpace(cfg.Target.XMLDump) == "" || raw == nil {
 		return result
 	}
 
@@ -4560,35 +4577,34 @@ func applyFormDynamicListContracts(decisions map[string]objectDecision, contract
 }
 
 func collectAdoptedStubMetaDataRules(cfg *config.Configuration, dir string) map[string]adoptedStubMetaDataRule {
-	result := make(map[string]adoptedStubMetaDataRule)
+	raw, err := loadMetaDataFileTemplateIfEnabled(cfg, dir)
+	if err != nil {
+		log.Printf("additional processing: skip AdoptedStubMetaData: %v", err)
+		return map[string]adoptedStubMetaDataRule{}
+	}
+
+	return collectAdoptedStubMetaDataRulesFromTemplate(raw)
+}
+
+func validateMetaDataFileTemplate(cfg *config.Configuration, dir string) error {
+	_, err := loadMetaDataFileTemplateIfEnabled(cfg, dir)
+	return err
+}
+
+func loadMetaDataFileTemplateIfEnabled(cfg *config.Configuration, dir string) (map[string]any, error) {
 	if cfg == nil || !cfg.IsMetaDataFileEnabled() {
-		return result
+		return nil, nil
 	}
 
 	templatePath := filepath.Join(dir, "CommonTemplates", "упо_MetaDataFile", "Ext", "Template.txt")
 	raw, err := parseMetaDataFileTemplate(templatePath)
 	if err != nil {
-		log.Printf("additional processing: skip AdoptedStubMetaData, cannot parse %s: %v", templatePath, err)
-		return result
-	}
-
-	collectAdoptedStubMetaDataRulesFromValue(raw, result)
-	return result
-}
-
-func validateMetaDataFileTemplate(cfg *config.Configuration, dir string) error {
-	if cfg == nil || !cfg.IsMetaDataFileEnabled() {
-		return nil
-	}
-
-	templatePath := filepath.Join(dir, "CommonTemplates", "упо_MetaDataFile", "Ext", "Template.txt")
-	if _, err := parseMetaDataFileTemplate(templatePath); err != nil {
 		err = fmt.Errorf("invalid CommonTemplates/упо_MetaDataFile/Ext/Template.txt: %w", err)
 		log.Printf("xml step: %v", err)
-		return err
+		return nil, err
 	}
 
-	return nil
+	return raw, nil
 }
 
 func parseMetaDataFileTemplate(templatePath string) (map[string]any, error) {
@@ -4603,6 +4619,16 @@ func parseMetaDataFileTemplate(templatePath string) (map[string]any, error) {
 		return nil, err
 	}
 	return raw, nil
+}
+
+func collectAdoptedStubMetaDataRulesFromTemplate(raw map[string]any) map[string]adoptedStubMetaDataRule {
+	result := make(map[string]adoptedStubMetaDataRule)
+	if raw == nil {
+		return result
+	}
+
+	collectAdoptedStubMetaDataRulesFromValue(raw, result)
+	return result
 }
 
 func collectAdoptedStubMetaDataRulesFromValue(value any, rules map[string]adoptedStubMetaDataRule) {
