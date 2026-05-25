@@ -4280,6 +4280,10 @@ func promoteRegisterDocumentOwnersToNativeIndexed(
 			if _, primary := primaryNativeObjects[docKey]; primary {
 				continue
 			}
+			if _, softExcluded := excludedObjects[docKey]; softExcluded {
+				debugDecision(docKey, "kept excluded: registrator rule cannot override configured soft exclude")
+				continue
+			}
 
 			docDecision, exists := decisions[docKey]
 			if exists && docDecision.Belonging == "Native" && !docDecision.Excluded {

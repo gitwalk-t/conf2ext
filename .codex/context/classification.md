@@ -59,3 +59,7 @@ BSL reachability — отдельный механизм от XML RefDrivenInclu
 ## Registrator rule
 
 Если register остается `Native`, его documents-registrators тоже должны остаться `Native`.
+
+Ограничение:
+- registrator rule не должен переопределять `excluded_subsystems` или `excluded_objects`;
+- explicit `included_Native_objects` остается сильнее soft-exclude и срабатывает раньше registrator rule.

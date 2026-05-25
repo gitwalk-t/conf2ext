@@ -3063,6 +3063,82 @@ func TestIsRefDrivenInclusionSourceRejectsAdoptedSubsystem(t *testing.T) {
 	}
 }
 
+func TestPromoteRegisterDocumentOwnersToNativeKeepsSoftExcludedDocument(t *testing.T) {
+	t.Parallel()
+
+	contexts := []*FileProcessingContext{
+		{
+			OwnerKey:  "InformationRegister.НативныйРегистр",
+			OwnerKind: "InformationRegister",
+		},
+		{
+			OwnerKey:  "Document.ОтражениеЗарплатыВФинансовомУчете",
+			OwnerKind: "Document",
+		},
+	}
+	decisions := map[string]objectDecision{
+		"InformationRegister.НативныйРегистр":        {Belonging: "Native"},
+		"Document.ОтражениеЗарплатыВФинансовомУчете": {Excluded: true},
+	}
+
+	promoteRegisterDocumentOwnersToNativeIndexed(
+		contexts,
+		nil,
+		decisions,
+		&config.Configuration{},
+		nil,
+		map[string]struct{}{"Document.ОтражениеЗарплатыВФинансовомУчете": {}},
+		nil,
+		map[string]map[string]struct{}{
+			"InformationRegister.НативныйРегистр": {
+				"Document.ОтражениеЗарплатыВФинансовомУчете": {},
+			},
+		},
+	)
+
+	if decision := decisions["Document.ОтражениеЗарплатыВФинансовомУчете"]; !decision.Excluded || decision.Belonging != "" {
+		t.Fatalf("expected soft-excluded registrator document to stay excluded, got %#v", decision)
+	}
+}
+
+func TestPromoteRegisterDocumentOwnersToNativeRestoresRegularDocument(t *testing.T) {
+	t.Parallel()
+
+	contexts := []*FileProcessingContext{
+		{
+			OwnerKey:  "InformationRegister.НативныйРегистр",
+			OwnerKind: "InformationRegister",
+		},
+		{
+			OwnerKey:  "Document.ОбычныйДокумент",
+			OwnerKind: "Document",
+		},
+	}
+	decisions := map[string]objectDecision{
+		"InformationRegister.НативныйРегистр": {Belonging: "Native"},
+		"Document.ОбычныйДокумент":            {Excluded: true},
+	}
+
+	promoteRegisterDocumentOwnersToNativeIndexed(
+		contexts,
+		nil,
+		decisions,
+		&config.Configuration{},
+		nil,
+		nil,
+		nil,
+		map[string]map[string]struct{}{
+			"InformationRegister.НативныйРегистр": {
+				"Document.ОбычныйДокумент": {},
+			},
+		},
+	)
+
+	if decision := decisions["Document.ОбычныйДокумент"]; decision.Excluded || decision.Belonging != "Native" {
+		t.Fatalf("expected regular registrator document to be restored as Native, got %#v", decision)
+	}
+}
+
 func TestNonNativeVersioningSubsystemDoesNotRestoreEventSubscriptionsOrHandlerModule(t *testing.T) {
 	t.Parallel()
 
