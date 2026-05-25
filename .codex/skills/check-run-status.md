@@ -11,11 +11,11 @@
 
 ## Назначение
 
-Skill отвечает только за проверку состояния текущего прогона.
+Skill отвечает за проверку и финализацию состояния текущего прогона.
 
-Skill не завершает процессы.
 Skill не запускает новый прогон.
-Skill не делает cleanup.
+
+Cleanup не является основной задачей skill, кроме special-case `PAUSED_AFTER_SUCCESS`.
 
 ## Что проверять
 
@@ -72,11 +72,20 @@ Wrapper завис только на:
 Press any key to exit...
 ```
 
-В этом случае orchestrator должен вызвать:
+В этом состоянии cleanup обязателен.
+
+Skill должен выполнить:
 
 ```text
 .codex/skills/cleanup-run-tails.md
 ```
+
+Это не считается отдельным orchestration flow.
+
+Cleanup является частью финализации успешного прогона:
+- dump уже подтвержден как корректный;
+- `ChangeFiles` завершился успешно;
+- остались только зависшие wrapper/process tails.
 
 ## Формат status summary
 
