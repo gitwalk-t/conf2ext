@@ -6,6 +6,17 @@
 - Non-native формы не являются источником `RefDrivenInclusion`.
 - Если форма не должна переноситься — удаляется целиком.
 
+## Native form cleanup boundary
+
+Для `Native` forms:
+- aggressive dynamic-list cleanup запрещен;
+- нельзя удалять `MainTable`;
+- нельзя удалять custom/manual-query dynamic-list fields только потому, что они отсутствуют в metadata owner;
+- нельзя массово удалять `DataPath` через generic missing-field cleanup;
+- cleanup должен удалять только доказанно dangling/non-native references.
+
+Aggressive cleanup допускается только для non-Native forms (`Adopted` / `AdoptedStub*`).
+
 ## AdoptedStubExt(Form)
 
 Используется для form-driven target objects.
@@ -42,9 +53,21 @@ Field считается доступным через:
 - `LineNumber -> НомерСтроки`
 - `Active -> Активность`
 
+## Dynamic-list virtual fields
+
+Стандартные/virtual list fields должны сохраняться даже если они не найдены через обычный metadata lookup.
+
+Минимальный allowlist:
+- `Ссылка`
+- `Наименование`
+- `Код`
+- `ПометкаУдаления`
+- `Представление`
+
 ## Common failure patterns
 
 - broken `DataPath`
 - removed `CommonAttribute`
 - dangling metadata-command
 - partial form cleanup
+- aggressive cleanup applied to Native forms
