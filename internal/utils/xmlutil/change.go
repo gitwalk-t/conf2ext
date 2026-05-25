@@ -252,8 +252,9 @@ type targetMergeRuleSet struct {
 }
 
 type targetCompatibilitySet struct {
-	Enabled bool
-	Keys    map[string]struct{}
+	Enabled             bool
+	Keys                map[string]struct{}
+	CanonicalKeysByUUID map[string]string
 }
 
 type preparedTargetMergeObject struct {
@@ -377,6 +378,9 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 
 	log.Printf("xml step: build object sets")
 	buildObjectSetsStartedAt := time.Now()
+	if err := validateMetaDataFileTemplate(cfg, dir); err != nil {
+		return err
+	}
 	explicitNativeObjects := collectConfiguredNativeObjects(contexts, cfg.IncludedNativeObjects)
 	includedAdoptedStubObjects := collectConfiguredAdoptedStubObjects(contexts, cfg)
 	adoptedStubMetaDataRules := collectAdoptedStubMetaDataRules(cfg, dir)
@@ -869,6 +873,9 @@ func buildChangeFilesState(cfg *config.Configuration, dir string) (*changeFilesS
 
 	log.Printf("xml step: build object sets")
 	buildObjectSetsStartedAt := time.Now()
+	if err := validateMetaDataFileTemplate(cfg, dir); err != nil {
+		return nil, err
+	}
 	explicitNativeObjects := collectConfiguredNativeObjects(contexts, cfg.IncludedNativeObjects)
 	includedAdoptedStubObjects := collectConfiguredAdoptedStubObjects(contexts, cfg)
 	adoptedStubMetaDataRules := collectAdoptedStubMetaDataRules(cfg, dir)
@@ -1277,6 +1284,19 @@ func collectGUIDReplacementsFromConfigDump(
 	if identityMap == nil {
 		identityMap = newIdentityMapState()
 	}
+	sourceMetadataUUIDs := make(map[string]string)
+	for _, candidate := range contexts {
+		if candidate == nil || candidate.Doc == nil || candidate.OwnerKey == "" || !candidate.Metadata || !isTopLevelMetadataFile(candidate) {
+			continue
+		}
+		target := metadataTargetElement(candidate.Doc)
+		if target == nil {
+			continue
+		}
+		if uuid := normalizeGUIDValue(target.SelectAttrValue("uuid", "")); uuid != "" {
+			sourceMetadataUUIDs[candidate.OwnerKey] = uuid
+		}
+	}
 
 	var walk func(*etree.Element)
 	walk = func(el *etree.Element) {
@@ -1284,7 +1304,8 @@ func collectGUIDReplacementsFromConfigDump(
 			name := strings.TrimSpace(el.SelectAttrValue("name", ""))
 			id := strings.TrimSpace(el.SelectAttrValue("id", ""))
 			if shouldTrackIdentityMetadataPath(name, decisions, adoptedStubMetaDataRules) {
-				ensureIdentityReplacement(replacements, identityMap, name, id)
+				topKey, _, _ := parseMetadataPath(name)
+				ensureIdentityReplacement(replacements, identityMap, name, id, sourceMetadataUUIDs[topKey])
 			} else if identityMap.Objects != nil {
 				delete(identityMap.Objects, name)
 			}
@@ -1298,7 +1319,7 @@ func collectGUIDReplacementsFromConfigDump(
 	walk(ctx.Doc.Root())
 }
 
-func ensureIdentityReplacement(replacements map[string]string, identityMap *identityMapState, metadataPath, currentID string) {
+func ensureIdentityReplacement(replacements map[string]string, identityMap *identityMapState, metadataPath, currentID, sourceMetadataUUID string) {
 	if replacements == nil || identityMap == nil {
 		return
 	}
@@ -1311,6 +1332,28 @@ func ensureIdentityReplacement(replacements map[string]string, identityMap *iden
 	identityMap.ensureDefaults()
 	state := identityMap.Objects[metadataPath]
 	extensionID := normalizeGUIDValue(state.ExtensionID)
+	currentGUIDs := extractGUIDs(currentID)
+	currentGUIDSet := make(map[string]struct{}, len(currentGUIDs))
+	for _, guid := range currentGUIDs {
+		currentGUIDSet[strings.ToLower(guid)] = struct{}{}
+	}
+	sourceMetadataUUID = normalizeGUIDValue(sourceMetadataUUID)
+	if extensionID != "" {
+		if sourceMetadataUUID != "" && extensionID == sourceMetadataUUID {
+			currentGUID := normalizeGUIDValue(currentID)
+			if currentGUID != "" && currentGUID != sourceMetadataUUID {
+				log.Printf("stale extension_id matches source metadata uuid: metadata=%s extension_id=%s current_id=%s", metadataPath, extensionID, currentGUID)
+				extensionID = currentGUID
+				state.ExtensionID = extensionID
+				identityMap.Objects[metadataPath] = state
+			}
+		}
+		if _, sameAsSource := currentGUIDSet[extensionID]; sameAsSource {
+			state.ExtensionID = extensionID
+			identityMap.Objects[metadataPath] = state
+			return
+		}
+	}
 	if extensionID == "" {
 		log.Printf("missing extension_id: metadata=%s", metadataPath)
 		extensionID = newGUID()
@@ -1320,7 +1363,11 @@ func ensureIdentityReplacement(replacements map[string]string, identityMap *iden
 	}
 
 	for _, guid := range extractGUIDs(currentID) {
-		replacements[strings.ToLower(guid)] = extensionID
+		normalized := strings.ToLower(guid)
+		if normalized == extensionID {
+			continue
+		}
+		replacements[normalized] = extensionID
 	}
 }
 
@@ -1466,25 +1513,13 @@ func collectTargetMergeRules(cfg *config.Configuration, dir string) targetMergeR
 	}
 
 	templatePath := filepath.Join(dir, "CommonTemplates", "упо_MetaDataFile", "Ext", "Template.txt")
-	data, err := os.ReadFile(templatePath)
+	raw, err := parseMetaDataFileTemplate(templatePath)
 	if err != nil {
-		log.Printf("xml step: skip target merge rules, cannot read %s: %v", templatePath, err)
-		return result
-	}
-	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
-
-	var raw any
-	if err := json.Unmarshal(data, &raw); err != nil {
 		log.Printf("xml step: skip target merge rules, cannot parse %s: %v", templatePath, err)
 		return result
 	}
 
-	root, ok := raw.(map[string]any)
-	if !ok {
-		return result
-	}
-
-	for rawKind, child := range root {
+	for rawKind, child := range raw {
 		kind := normalizeMetaDataFileKind(rawKind)
 		if kind != "DefinedType" && kind != "ExchangePlan" && kind != "EventSubscription" {
 			continue
@@ -1506,7 +1541,10 @@ func collectTargetMergeRules(cfg *config.Configuration, dir string) targetMergeR
 }
 
 func collectTargetCompatibilitySet(cfg *config.Configuration) (targetCompatibilitySet, error) {
-	result := targetCompatibilitySet{Keys: make(map[string]struct{})}
+	result := targetCompatibilitySet{
+		Keys:                make(map[string]struct{}),
+		CanonicalKeysByUUID: make(map[string]string),
+	}
 	if cfg == nil || strings.TrimSpace(cfg.Target.XMLDump) == "" {
 		return result, nil
 	}
@@ -1550,6 +1588,9 @@ func collectTargetCompatibilitySet(cfg *config.Configuration) (targetCompatibili
 				continue
 			}
 			result.Keys[key] = struct{}{}
+			if uuid := normalizeGUIDValue(metadataTargetElement(doc).SelectAttrValue("uuid", "")); uuid != "" {
+				result.CanonicalKeysByUUID[uuid] = key
+			}
 		}
 	}
 
@@ -1567,7 +1608,7 @@ func applyTargetCompatibilitySet(
 	}
 
 	for _, ctx := range contexts {
-		if ctx == nil || ctx.OwnerKey == "" || !isTargetSensitiveKind(ctx.OwnerKind) {
+		if ctx == nil || ctx.OwnerKey == "" || !isTargetSensitiveKind(ctx.OwnerKind) || !isTopLevelMetadataFile(ctx) {
 			continue
 		}
 		if _, blocked := forbidden[ctx.OwnerKey]; blocked {
@@ -1578,7 +1619,7 @@ func applyTargetCompatibilitySet(
 		if !exists || decision.Excluded || decision.Belonging == "Native" {
 			continue
 		}
-		if _, ok := targetCompatibility.Keys[ctx.OwnerKey]; ok {
+		if targetCompatibilityAllowsKeyOrContext(ctx.OwnerKey, ctx, decision, targetCompatibility) {
 			continue
 		}
 
@@ -1614,6 +1655,32 @@ func targetCompatibilityAllowsDecision(key string, decision objectDecision, targ
 	}
 	_, ok := targetCompatibility.Keys[key]
 	return ok
+}
+
+func targetCompatibilityCanonicalKeyForContext(ctx *FileProcessingContext, targetCompatibility targetCompatibilitySet) string {
+	if !targetCompatibility.Enabled || ctx == nil {
+		return ""
+	}
+
+	uuid := metadataUUIDForConfigDumpEntry(ctx)
+	if uuid == "" {
+		return ""
+	}
+
+	return strings.TrimSpace(targetCompatibility.CanonicalKeysByUUID[uuid])
+}
+
+func targetCompatibilityAllowsKeyOrContext(
+	key string,
+	ctx *FileProcessingContext,
+	decision objectDecision,
+	targetCompatibility targetCompatibilitySet,
+) bool {
+	if targetCompatibilityAllowsDecision(key, decision, targetCompatibility) {
+		return true
+	}
+
+	return targetCompatibilityCanonicalKeyForContext(ctx, targetCompatibility) != ""
 }
 
 func collectTargetTopLevelMetadataKeysByUUID(targetXMLDump string) (map[string]string, error) {
@@ -2149,17 +2216,26 @@ func mergeTargetMetadataComposition(
 			continue
 		}
 
+		currentCtx := findContextByOwnerKeyIndexed(indexes, contexts, key)
 		targetCtx, err := loadTargetTopLevelContextByKey(key)
 		if err != nil {
 			return nil, nil, err
 		}
+		if (targetCtx == nil || targetCtx.Doc == nil) && currentCtx != nil {
+			canonicalKey := targetCompatibilityCanonicalKeyForContext(currentCtx, targetCompatibility)
+			if canonicalKey != "" && canonicalKey != key {
+				targetCtx, err = loadTargetTopLevelContextByKey(canonicalKey)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+		}
 		if targetCtx == nil || targetCtx.Doc == nil {
 			continue
 		}
-		currentCtx := findContextByOwnerKeyIndexed(indexes, contexts, key)
 		decision, exists := decisions[key]
 		if !exists || decision.Excluded || currentCtx == nil || currentCtx.Doc == nil {
-			if _, compatible := targetCompatibility.Keys[key]; !compatible {
+			if !targetCompatibilityAllowsKeyOrContext(key, currentCtx, decision, targetCompatibility) {
 				continue
 			}
 			currentCtx, _, err = ensureTargetTopLevelObjectImported(key, currentCtx, targetCtx)
@@ -2172,7 +2248,7 @@ func mergeTargetMetadataComposition(
 		if !exists || decision.Excluded || currentCtx == nil || currentCtx.Doc == nil {
 			continue
 		}
-		if !targetCompatibilityAllowsDecision(key, decision, targetCompatibility) {
+		if !targetCompatibilityAllowsKeyOrContext(key, currentCtx, decision, targetCompatibility) {
 			continue
 		}
 		decision = preserveAdoptedStubExtMetaData(decision)
@@ -4490,21 +4566,43 @@ func collectAdoptedStubMetaDataRules(cfg *config.Configuration, dir string) map[
 	}
 
 	templatePath := filepath.Join(dir, "CommonTemplates", "упо_MetaDataFile", "Ext", "Template.txt")
-	data, err := os.ReadFile(templatePath)
+	raw, err := parseMetaDataFileTemplate(templatePath)
 	if err != nil {
-		log.Printf("additional processing: skip AdoptedStubMetaData, cannot read %s: %v", templatePath, err)
-		return result
-	}
-	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
-
-	var raw any
-	if err := json.Unmarshal(data, &raw); err != nil {
 		log.Printf("additional processing: skip AdoptedStubMetaData, cannot parse %s: %v", templatePath, err)
 		return result
 	}
 
 	collectAdoptedStubMetaDataRulesFromValue(raw, result)
 	return result
+}
+
+func validateMetaDataFileTemplate(cfg *config.Configuration, dir string) error {
+	if cfg == nil || !cfg.IsMetaDataFileEnabled() {
+		return nil
+	}
+
+	templatePath := filepath.Join(dir, "CommonTemplates", "упо_MetaDataFile", "Ext", "Template.txt")
+	if _, err := parseMetaDataFileTemplate(templatePath); err != nil {
+		err = fmt.Errorf("invalid CommonTemplates/упо_MetaDataFile/Ext/Template.txt: %w", err)
+		log.Printf("xml step: %v", err)
+		return err
+	}
+
+	return nil
+}
+
+func parseMetaDataFileTemplate(templatePath string) (map[string]any, error) {
+	data, err := os.ReadFile(templatePath)
+	if err != nil {
+		return nil, err
+	}
+	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
 func collectAdoptedStubMetaDataRulesFromValue(value any, rules map[string]adoptedStubMetaDataRule) {
@@ -4631,9 +4729,6 @@ func applyAdoptedStubMetaDataRules(
 ) {
 	for key := range rules {
 		if _, blocked := forbidden[key]; blocked {
-			continue
-		}
-		if _, excluded := excludedObjects[key]; excluded {
 			continue
 		}
 

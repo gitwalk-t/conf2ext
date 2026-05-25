@@ -61,6 +61,99 @@ func TestCollectGUIDReplacementsFromConfigDumpReusesPersistedAdoptedIDs(t *testi
 	}
 }
 
+func TestCollectGUIDReplacementsFromConfigDumpSkipsNoOpReplacementForCurrentID(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo>
+  <Metadata name="Catalog.Валюты" id="11111111-1111-1111-1111-111111111111"/>
+</ConfigDumpInfo>`); err != nil {
+		t.Fatalf("read config dump xml: %v", err)
+	}
+
+	replacements := make(map[string]string)
+	identityMap := &identityMapState{
+		Version: 1,
+		Objects: map[string]identityMapObjectBinding{
+			"Catalog.Валюты": {ExtensionID: "11111111-1111-1111-1111-111111111111"},
+		},
+	}
+
+	collectGUIDReplacementsFromConfigDump(
+		[]*FileProcessingContext{{Doc: doc, FileName: configDumpInfo}},
+		map[string]objectDecision{
+			"Catalog.Валюты": {Belonging: "AdoptedStub"},
+		},
+		replacements,
+		identityMap,
+		nil,
+	)
+
+	state := identityMap.Objects["Catalog.Валюты"]
+	if state.ExtensionID != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("expected identity map to keep current id, got %#v", state)
+	}
+	if got := replacements["11111111-1111-1111-1111-111111111111"]; got != "" {
+		t.Fatalf("expected no-op replacement to be skipped, got %q", got)
+	}
+}
+
+func TestCollectGUIDReplacementsFromConfigDumpUpdatesPersistedSourceUUIDToCurrentConfigDumpID(t *testing.T) {
+	t.Parallel()
+
+	configDumpDoc := etree.NewDocument()
+	if err := configDumpDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo>
+  <Metadata name="BusinessProcess.Задание" id="22222222-2222-2222-2222-222222222222"/>
+</ConfigDumpInfo>`); err != nil {
+		t.Fatalf("read config dump xml: %v", err)
+	}
+
+	objectDoc := etree.NewDocument()
+	if err := objectDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <BusinessProcess uuid="11111111-1111-1111-1111-111111111111">
+    <Properties>
+      <Name>Задание</Name>
+      <ObjectBelonging>Adopted</ObjectBelonging>
+      <ExtendedConfigurationObject>22222222-2222-2222-2222-222222222222</ExtendedConfigurationObject>
+    </Properties>
+  </BusinessProcess>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read metadata object xml: %v", err)
+	}
+
+	replacements := make(map[string]string)
+	identityMap := &identityMapState{
+		Version: 1,
+		Objects: map[string]identityMapObjectBinding{
+			"BusinessProcess.Задание": {ExtensionID: "11111111-1111-1111-1111-111111111111"},
+		},
+	}
+
+	collectGUIDReplacementsFromConfigDump(
+		[]*FileProcessingContext{
+			{Doc: configDumpDoc, FileName: configDumpInfo},
+			{Doc: objectDoc, OwnerKey: "BusinessProcess.Задание", Metadata: true, TopLevelMetadata: true},
+		},
+		map[string]objectDecision{
+			"BusinessProcess.Задание": {Belonging: "AdoptedStub"},
+		},
+		replacements,
+		identityMap,
+		nil,
+	)
+
+	state := identityMap.Objects["BusinessProcess.Задание"]
+	if state.ExtensionID != "22222222-2222-2222-2222-222222222222" {
+		t.Fatalf("expected identity map to move from source uuid to current config dump id, got %#v", state)
+	}
+	if got := replacements["22222222-2222-2222-2222-222222222222"]; got != "" {
+		t.Fatalf("expected no replacement for already-correct current config dump id, got %q", got)
+	}
+}
+
 func TestCollectGUIDReplacementsFromConfigDumpTracksAdoptedTabularSectionButSkipsRetainedNativeChildren(t *testing.T) {
 	t.Parallel()
 
@@ -466,6 +559,48 @@ func TestCollectAdoptedStubMetaDataRulesReadsBOMAndNestedPaths(t *testing.T) {
 	}
 }
 
+func TestValidateMetaDataFileTemplateRejectsInvalidJSON(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	templateDir := filepath.Join(dir, "CommonTemplates", "упо_MetaDataFile", "Ext")
+	if err := os.MkdirAll(templateDir, 0o755); err != nil {
+		t.Fatalf("mkdir template dir: %v", err)
+	}
+
+	content := `{
+  "ПланОбмена": {
+    "ИнтеграцияС1СДокументооборотомПереопределяемый": {
+      "Состав": [
+        "Справочник.упо_Планы"
+      ]
+    }
+  }
+},
+{
+  "Документ": {
+    "Бюджет": {
+      "Реквизиты": [
+        "Документ.Бюджет.Реквизит.упо_План"
+      ]
+    }
+  }
+}`
+	if err := os.WriteFile(filepath.Join(templateDir, "Template.txt"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+
+	err := validateMetaDataFileTemplate(&config.Configuration{
+		AdditionalProcessing: config.AdditionalProcessing{UseMetaDataFile: true},
+	}, dir)
+	if err == nil {
+		t.Fatal("expected invalid MetaDataFile template to fail validation")
+	}
+	if !strings.Contains(err.Error(), "CommonTemplates/упо_MetaDataFile/Ext/Template.txt") {
+		t.Fatalf("expected template path in error, got %v", err)
+	}
+}
+
 func TestMergeAdoptedStubMetaDataIntoFormContractUnionsFields(t *testing.T) {
 	t.Parallel()
 
@@ -507,7 +642,7 @@ func TestMergeAdoptedStubMetaDataIntoFormContractUnionsFields(t *testing.T) {
 	}
 }
 
-func TestApplyAdoptedStubMetaDataRulesDoesNotRestoreExcludedObject(t *testing.T) {
+func TestApplyAdoptedStubMetaDataRulesRestoresSoftExcludedObject(t *testing.T) {
 	t.Parallel()
 
 	key := "Document.ОтражениеЗарплатыВФинансовомУчете"
@@ -530,8 +665,8 @@ func TestApplyAdoptedStubMetaDataRulesDoesNotRestoreExcludedObject(t *testing.T)
 	)
 
 	decision := decisions[key]
-	if !decision.Excluded || decision.Belonging != "" {
-		t.Fatalf("expected excluded metadata-file object to stay excluded, got %#v", decision)
+	if decision.Excluded || decision.Belonging != "AdoptedStub" {
+		t.Fatalf("expected metadata-file object to override soft exclude as AdoptedStub, got %#v", decision)
 	}
 }
 
@@ -4500,6 +4635,51 @@ func TestCollectTargetCompatibilitySetReadsOnlyTargetSensitiveTopLevelXML(t *tes
 	}
 }
 
+func TestChangeFilesFailsOnInvalidMetaDataFileTemplate(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeFile := func(relPath, content string) {
+		t.Helper()
+		path := filepath.Join(root, relPath)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	writeFile("Configuration.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Configuration><ChildObjects/></Configuration>
+</MetaDataObject>`)
+	writeFile("ConfigDumpInfo.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo"><ConfigVersions/></ConfigDumpInfo>`)
+	writeFile(filepath.Join("CommonTemplates", "упо_MetaDataFile", "Ext", "Template.txt"), `{
+  "ПланОбмена": {}
+},
+{
+  "Документ": {
+    "Бюджет": {
+      "Реквизиты": []
+    }
+  }
+}`)
+
+	err := ChangeFiles(&config.Configuration{
+		AdditionalProcessing: config.AdditionalProcessing{
+			UseMetaDataFile: true,
+		},
+	}, root)
+	if err == nil {
+		t.Fatal("expected ChangeFiles to fail on invalid MetaDataFile template")
+	}
+	if !strings.Contains(err.Error(), "CommonTemplates/упо_MetaDataFile/Ext/Template.txt") {
+		t.Fatalf("expected template path in ChangeFiles error, got %v", err)
+	}
+}
+
 func TestCollectTargetTopLevelMetadataKeysByUUIDReadsOnlyTopLevelConfigDumpEntries(t *testing.T) {
 	t.Parallel()
 
@@ -6333,6 +6513,419 @@ func TestBuildChangeFilesStateDoesNotImportForbiddenTargetRef(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "Catalogs", "Запрещенный.xml")); !os.IsNotExist(err) {
 		t.Fatalf("did not expect forbidden target-ref-driven file to be created")
+	}
+}
+
+func TestChangeFilesKeepsCanonicalRenamedTargetSensitiveMetaDataFileObjects(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	targetRoot := t.TempDir()
+	writeFile := func(base, relPath, content string) {
+		t.Helper()
+		path := filepath.Join(base, relPath)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	type targetSensitiveObject struct {
+		kind          string
+		sourceName    string
+		canonicalName string
+		uuid          string
+		sourceXML     string
+		targetXML     string
+		sourceExtra   map[string]string
+		targetExtra   map[string]string
+	}
+
+	topLevelDirByKind := map[string]string{
+		"DefinedType":       "DefinedTypes",
+		"EventSubscription": "EventSubscriptions",
+		"ExchangePlan":      "ExchangePlans",
+	}
+
+	objects := []targetSensitiveObject{
+		{
+			kind:          "DefinedType",
+			sourceName:    "ЗначениеДоступаОбъект",
+			canonicalName: "ЗначениеДоступаОбъектКанон",
+			uuid:          "11111111-1111-1111-1111-111111111111",
+			sourceXML: `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <DefinedType uuid="11111111-1111-1111-1111-111111111111">
+    <Properties><Name>ЗначениеДоступаОбъект</Name><Type/></Properties>
+  </DefinedType>
+</MetaDataObject>`,
+			targetXML: `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <DefinedType uuid="11111111-1111-1111-1111-111111111111">
+    <Properties><Name>ЗначениеДоступаОбъектКанон</Name><Type/></Properties>
+  </DefinedType>
+</MetaDataObject>`,
+		},
+		{
+			kind:          "DefinedType",
+			sourceName:    "ПредметЗаметок",
+			canonicalName: "ПредметЗаметокКанон",
+			uuid:          "22222222-2222-2222-2222-222222222222",
+			sourceXML: `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <DefinedType uuid="22222222-2222-2222-2222-222222222222">
+    <Properties><Name>ПредметЗаметок</Name><Type/></Properties>
+  </DefinedType>
+</MetaDataObject>`,
+			targetXML: `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <DefinedType uuid="22222222-2222-2222-2222-222222222222">
+    <Properties><Name>ПредметЗаметокКанон</Name><Type/></Properties>
+  </DefinedType>
+</MetaDataObject>`,
+		},
+		{
+			kind:          "ExchangePlan",
+			sourceName:    "ИнтеграцияС1СДокументооборотомПереопределяемый",
+			canonicalName: "ИнтеграцияС1СДокументооборотомПереопределяемыйКанон",
+			uuid:          "33333333-3333-3333-3333-333333333333",
+			sourceXML: `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <ExchangePlan uuid="33333333-3333-3333-3333-333333333333">
+    <Properties><Name>ИнтеграцияС1СДокументооборотомПереопределяемый</Name></Properties>
+    <ChildObjects/>
+  </ExchangePlan>
+</MetaDataObject>`,
+			targetXML: `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <ExchangePlan uuid="33333333-3333-3333-3333-333333333333">
+    <Properties><Name>ИнтеграцияС1СДокументооборотомПереопределяемыйКанон</Name></Properties>
+    <ChildObjects/>
+  </ExchangePlan>
+</MetaDataObject>`,
+			sourceExtra: map[string]string{
+				filepath.Join("ExchangePlans", "ИнтеграцияС1СДокументооборотомПереопределяемый", "Ext", "Content.xml"): `<?xml version="1.0" encoding="UTF-8"?>
+<Content xmlns="http://v8.1c.ru/8.3/MDClasses"/>`,
+			},
+			targetExtra: map[string]string{
+				filepath.Join("ExchangePlans", "ИнтеграцияС1СДокументооборотомПереопределяемыйКанон", "Ext", "Content.xml"): `<?xml version="1.0" encoding="UTF-8"?>
+<Content xmlns="http://v8.1c.ru/8.3/MDClasses"/>`,
+			},
+		},
+		{
+			kind:          "ExchangePlan",
+			sourceName:    "ОбновлениеИнформационнойБазы",
+			canonicalName: "ОбновлениеИнформационнойБазыКанон",
+			uuid:          "44444444-4444-4444-4444-444444444444",
+			sourceXML: `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <ExchangePlan uuid="44444444-4444-4444-4444-444444444444">
+    <Properties><Name>ОбновлениеИнформационнойБазы</Name></Properties>
+    <ChildObjects/>
+  </ExchangePlan>
+</MetaDataObject>`,
+			targetXML: `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <ExchangePlan uuid="44444444-4444-4444-4444-444444444444">
+    <Properties><Name>ОбновлениеИнформационнойБазыКанон</Name></Properties>
+    <ChildObjects/>
+  </ExchangePlan>
+</MetaDataObject>`,
+			sourceExtra: map[string]string{
+				filepath.Join("ExchangePlans", "ОбновлениеИнформационнойБазы", "Ext", "Content.xml"): `<?xml version="1.0" encoding="UTF-8"?>
+<Content xmlns="http://v8.1c.ru/8.3/MDClasses"/>`,
+			},
+			targetExtra: map[string]string{
+				filepath.Join("ExchangePlans", "ОбновлениеИнформационнойБазыКанон", "Ext", "Content.xml"): `<?xml version="1.0" encoding="UTF-8"?>
+<Content xmlns="http://v8.1c.ru/8.3/MDClasses"/>`,
+			},
+		},
+		{
+			kind:          "EventSubscription",
+			sourceName:    "ИнтеграцияС1СДокументооборотомПодписка",
+			canonicalName: "ИнтеграцияС1СДокументооборотомПодпискаКанон",
+			uuid:          "55555555-5555-5555-5555-555555555555",
+			sourceXML: `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <EventSubscription uuid="55555555-5555-5555-5555-555555555555">
+    <Properties><Name>ИнтеграцияС1СДокументооборотомПодписка</Name><Source/></Properties>
+  </EventSubscription>
+</MetaDataObject>`,
+			targetXML: `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <EventSubscription uuid="55555555-5555-5555-5555-555555555555">
+    <Properties><Name>ИнтеграцияС1СДокументооборотомПодпискаКанон</Name><Source/></Properties>
+  </EventSubscription>
+</MetaDataObject>`,
+		},
+	}
+
+	configurationChildren := make([]string, 0, len(objects))
+	sourceConfigDumpEntries := make([]string, 0, len(objects))
+	targetConfigDumpEntries := make([]string, 0, len(objects))
+	for _, object := range objects {
+		tag, ok := configurationChildObjectTag(object.kind)
+		if !ok {
+			t.Fatalf("missing configuration child object tag for %s", object.kind)
+		}
+		relDir, ok := topLevelDirByKind[object.kind]
+		if !ok {
+			t.Fatalf("missing top-level dir for %s", object.kind)
+		}
+
+		configurationChildren = append(configurationChildren, fmt.Sprintf("<%s>%s</%s>", tag, object.sourceName, tag))
+		sourceConfigDumpEntries = append(sourceConfigDumpEntries, fmt.Sprintf(`<Metadata name="%s.%s" id="%s"/>`, object.kind, object.sourceName, object.uuid))
+		targetConfigDumpEntries = append(targetConfigDumpEntries, fmt.Sprintf(`<Metadata name="%s.%s" id="%s"/>`, object.kind, object.canonicalName, object.uuid))
+
+		writeFile(root, filepath.Join(relDir, object.sourceName+".xml"), object.sourceXML)
+		writeFile(targetRoot, filepath.Join(relDir, object.canonicalName+".xml"), object.targetXML)
+		for relPath, content := range object.sourceExtra {
+			writeFile(root, relPath, content)
+		}
+		for relPath, content := range object.targetExtra {
+			writeFile(targetRoot, relPath, content)
+		}
+	}
+
+	writeFile(root, "Configuration.xml", fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Configuration><ChildObjects>%s</ChildObjects></Configuration>
+</MetaDataObject>`, strings.Join(configurationChildren, "")))
+	writeFile(root, "ConfigDumpInfo.xml", fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo"><ConfigVersions>%s</ConfigVersions></ConfigDumpInfo>`, strings.Join(sourceConfigDumpEntries, "")))
+	writeFile(targetRoot, "ConfigDumpInfo.xml", fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo"><ConfigVersions>%s</ConfigVersions></ConfigDumpInfo>`, strings.Join(targetConfigDumpEntries, "")))
+	writeFile(root, filepath.Join("CommonTemplates", "упо_MetaDataFile", "Ext", "Template.txt"), `{
+  "ПланОбмена": {
+    "ИнтеграцияС1СДокументооборотомПереопределяемый": {
+      "Состав": []
+    },
+    "ОбновлениеИнформационнойБазы": {
+      "Состав": []
+    }
+  },
+  "ОпределяемыйТип": {
+    "ЗначениеДоступаОбъект": {
+      "Тип": []
+    },
+    "ПредметЗаметок": {
+      "Тип": []
+    }
+  },
+  "ПодпискаНаСобытие": {
+    "ИнтеграцияС1СДокументооборотомПодписка": {
+      "Источник": []
+    }
+  }
+}`)
+
+	if err := ChangeFiles(&config.Configuration{
+		Target: config.Target{XMLDump: targetRoot},
+		AdditionalProcessing: config.AdditionalProcessing{
+			UseMetaDataFile: true,
+		},
+	}, root); err != nil {
+		t.Fatalf("change files: %v", err)
+	}
+
+	configurationDoc := etree.NewDocument()
+	if err := configurationDoc.ReadFromFile(filepath.Join(root, "Configuration.xml")); err != nil {
+		t.Fatalf("read configuration xml: %v", err)
+	}
+	configDumpDoc := etree.NewDocument()
+	if err := configDumpDoc.ReadFromFile(filepath.Join(root, "ConfigDumpInfo.xml")); err != nil {
+		t.Fatalf("read config dump info: %v", err)
+	}
+
+	for _, object := range objects {
+		tag, ok := configurationChildObjectTag(object.kind)
+		if !ok {
+			t.Fatalf("missing configuration child object tag for %s", object.kind)
+		}
+		relDir, ok := topLevelDirByKind[object.kind]
+		if !ok {
+			t.Fatalf("missing top-level dir for %s", object.kind)
+		}
+
+		if hasConfigurationChildObject(configurationDoc, tag, object.sourceName) {
+			t.Fatalf("did not expect stale configuration child object %s.%s", object.kind, object.sourceName)
+		}
+		if !hasConfigurationChildObject(configurationDoc, tag, object.canonicalName) {
+			t.Fatalf("expected canonical configuration child object %s.%s", object.kind, object.canonicalName)
+		}
+
+		sourceKey := object.kind + "." + object.sourceName
+		canonicalKey := object.kind + "." + object.canonicalName
+		if hasMetadataName(configDumpDoc, sourceKey) {
+			t.Fatalf("did not expect stale ConfigDumpInfo entry %s", sourceKey)
+		}
+		if !hasMetadataName(configDumpDoc, canonicalKey) {
+			t.Fatalf("expected canonical ConfigDumpInfo entry %s", canonicalKey)
+		}
+
+		if _, err := os.Stat(filepath.Join(root, relDir, object.canonicalName+".xml")); err != nil {
+			t.Fatalf("expected canonical top-level xml for %s: %v", canonicalKey, err)
+		}
+		if _, err := os.Stat(filepath.Join(root, relDir, object.sourceName+".xml")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("did not expect stale top-level xml for %s, err=%v", sourceKey, err)
+		}
+	}
+
+}
+
+func TestChangeFilesKeepsSoftExcludedMetaDataFileOwnerObjectWithNativeLeafFields(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeFile := func(base, relPath, content string) {
+		t.Helper()
+		path := filepath.Join(base, relPath)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	writeFile(root, "Configuration.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Configuration>
+    <ChildObjects>
+      <Document>Бюджет</Document>
+    </ChildObjects>
+  </Configuration>
+</MetaDataObject>`)
+	writeFile(root, "ConfigDumpInfo.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo">
+  <ConfigVersions>
+    <Metadata name="Document.Бюджет" id="11111111-1111-1111-1111-111111111111">
+      <Metadata name="Document.Бюджет.Attribute.упо_План" id="22222222-2222-2222-2222-222222222222"/>
+      <Metadata name="Document.Бюджет.TabularSection.Поступления" id="33333333-3333-3333-3333-333333333333">
+        <Metadata name="Document.Бюджет.TabularSection.Поступления.Attribute.упо_План" id="44444444-4444-4444-4444-444444444444"/>
+      </Metadata>
+    </Metadata>
+  </ConfigVersions>
+</ConfigDumpInfo>`)
+	writeFile(root, filepath.Join("Documents", "Бюджет.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Document uuid="11111111-1111-1111-1111-111111111111">
+    <Properties>
+      <Name>Бюджет</Name>
+      <ObjectBelonging>Adopted</ObjectBelonging>
+    </Properties>
+    <ChildObjects>
+      <Attribute>
+        <Properties>
+          <Name>упо_План</Name>
+          <ObjectBelonging>Adopted</ObjectBelonging>
+        </Properties>
+      </Attribute>
+      <TabularSection>
+        <Properties>
+          <Name>Поступления</Name>
+          <ObjectBelonging>Adopted</ObjectBelonging>
+        </Properties>
+        <ChildObjects>
+          <Attribute>
+            <Properties>
+              <Name>упо_План</Name>
+              <ObjectBelonging>Adopted</ObjectBelonging>
+            </Properties>
+          </Attribute>
+        </ChildObjects>
+      </TabularSection>
+    </ChildObjects>
+  </Document>
+</MetaDataObject>`)
+	writeFile(root, filepath.Join("CommonTemplates", "упо_MetaDataFile", "Ext", "Template.txt"), `{
+  "ПланОбмена": {},
+  "Документ": {
+    "Бюджет": {
+      "Реквизиты": [
+        "Документ.Бюджет.Реквизит.упо_План"
+      ],
+      "ТабличныеЧасти": {
+        "Поступления": [
+          "Документ.Бюджет.ТабличнаяЧасть.Поступления.Реквизит.упо_План"
+        ]
+      }
+    }
+  }
+}`)
+
+	if err := ChangeFiles(&config.Configuration{
+		ExcludedObjects: []string{
+			"Document.Бюджет",
+		},
+		AdditionalProcessing: config.AdditionalProcessing{
+			UseMetaDataFile: true,
+		},
+	}, root); err != nil {
+		t.Fatalf("change files: %v", err)
+	}
+
+	configurationDoc := etree.NewDocument()
+	if err := configurationDoc.ReadFromFile(filepath.Join(root, "Configuration.xml")); err != nil {
+		t.Fatalf("read configuration xml: %v", err)
+	}
+	if !hasConfigurationChildObject(configurationDoc, "Document", "Бюджет") {
+		t.Fatalf("expected Document.Бюджет to stay in Configuration.xml")
+	}
+
+	configDumpDoc := etree.NewDocument()
+	if err := configDumpDoc.ReadFromFile(filepath.Join(root, "ConfigDumpInfo.xml")); err != nil {
+		t.Fatalf("read config dump info: %v", err)
+	}
+	for _, name := range []string{
+		"Document.Бюджет",
+		"Document.Бюджет.Attribute.упо_План",
+		"Document.Бюджет.TabularSection.Поступления",
+		"Document.Бюджет.TabularSection.Поступления.Attribute.упо_План",
+	} {
+		if !hasMetadataName(configDumpDoc, name) {
+			t.Fatalf("expected ConfigDumpInfo to keep %s", name)
+		}
+	}
+
+	documentDoc := etree.NewDocument()
+	documentPath := filepath.Join(root, "Documents", "Бюджет.xml")
+	if err := documentDoc.ReadFromFile(documentPath); err != nil {
+		t.Fatalf("read document xml: %v", err)
+	}
+
+	ownerProps := documentDoc.FindElement("//*[local-name()='Document']/*[local-name()='Properties']")
+	if ownerProps == nil {
+		t.Fatalf("expected document properties in %s", documentPath)
+	}
+	if got := textOf(ownerProps, "ObjectBelonging"); got != "Adopted" {
+		t.Fatalf("expected owner object to stay adopted, got ObjectBelonging=%q", got)
+	}
+
+	attrProps := documentDoc.FindElement("//*[local-name()='Document']/*[local-name()='ChildObjects']/*[local-name()='Attribute']/*[local-name()='Properties']")
+	if attrProps == nil {
+		t.Fatalf("expected retained owner attribute properties in %s", documentPath)
+	}
+	if got := textOf(attrProps, "ObjectBelonging"); got != "" {
+		t.Fatalf("expected retained owner attribute to stay native leaf, got ObjectBelonging=%q", got)
+	}
+
+	sectionProps := documentDoc.FindElement("//*[local-name()='TabularSection']/*[local-name()='Properties']")
+	if sectionProps == nil {
+		t.Fatalf("expected retained tabular section properties in %s", documentPath)
+	}
+	if got := textOf(sectionProps, "ObjectBelonging"); got != "Adopted" {
+		t.Fatalf("expected retained tabular section to stay adopted, got ObjectBelonging=%q", got)
+	}
+
+	sectionAttrProps := documentDoc.FindElement("//*[local-name()='TabularSection']/*[local-name()='ChildObjects']/*[local-name()='Attribute']/*[local-name()='Properties']")
+	if sectionAttrProps == nil {
+		t.Fatalf("expected retained tabular section attribute properties in %s", documentPath)
+	}
+	if got := textOf(sectionAttrProps, "ObjectBelonging"); got != "" {
+		t.Fatalf("expected retained tabular section attribute to stay native leaf, got ObjectBelonging=%q", got)
 	}
 }
 
