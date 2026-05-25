@@ -84,6 +84,9 @@
     "InformationRegister.КурсыВалют": {
       "base_object_id": "e6d21b35-d6ea-4685-8cda-9088020e0cda"
     },
+    "InformationRegister.КодыТоваровПодключаемогоОборудованияOffline": {
+      "base_object_id": "705adae4-b4d3-406e-b4dc-a424b1f0b707"
+    },
     "InformationRegister.УдалитьСводныеПриложенияСостояниеВыгрузки": {
       "base_object_id": "cebeef8d-ffc4-4850-af6e-d94c80089452"
     },
