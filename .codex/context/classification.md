@@ -22,6 +22,7 @@
   - допустимые `Native`-объекты;
   - их формы;
   - отдельные `AdoptedStubExt(DefinedType/EventSubscription)`.
+- нативные template-content (`*/Templates/*/Ext/Template.xml`) не являются источником восстановления excluded-object.
 - `Native`-подсистема сама по себе не является источником восстановления excluded-object.
 - `Role/Ext/Rights.xml` не должен восстанавливать excluded-object.
 
@@ -46,12 +47,13 @@ BSL reachability — отдельный механизм от XML RefDrivenInclu
 
 ## Use_MetaDataFile semantics
 
-`CommonTemplate.упо_MetaDataFile` может восстанавливать soft-excluded owner object как adopted metadata object.
+`CommonTemplate.упо_MetaDataFile` не должен восстанавливать excluded owner object с нуля.
 
 Правила:
 - owner object должен сохраняться в extension;
 - added leaf-fields/requisites могут оставаться `Native`;
 - leaf-field promotion не должен удалять owner XML;
+- `CommonTemplate.упо_MetaDataFile` может только расширять уже сохраненный owner object;
 - `forbidden_*` остается сильнее `Use_MetaDataFile`;
 - `included_Native_objects` остается сильнее soft-exclude;
 - BSL не используется как source classification.

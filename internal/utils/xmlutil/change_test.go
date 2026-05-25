@@ -663,7 +663,7 @@ func TestMergeAdoptedStubMetaDataIntoFormContractUnionsFields(t *testing.T) {
 	}
 }
 
-func TestApplyAdoptedStubMetaDataRulesRestoresSoftExcludedObject(t *testing.T) {
+func TestApplyAdoptedStubMetaDataRulesDoesNotRestoreSoftExcludedObject(t *testing.T) {
 	t.Parallel()
 
 	key := "Document.ОтражениеЗарплатыВФинансовомУчете"
@@ -686,8 +686,8 @@ func TestApplyAdoptedStubMetaDataRulesRestoresSoftExcludedObject(t *testing.T) {
 	)
 
 	decision := decisions[key]
-	if decision.Excluded || decision.Belonging != "AdoptedStub" {
-		t.Fatalf("expected metadata-file object to override soft exclude as AdoptedStub, got %#v", decision)
+	if !decision.Excluded || decision.Belonging != "" {
+		t.Fatalf("expected metadata-file rule not to restore soft-excluded object, got %#v", decision)
 	}
 }
 
@@ -3136,6 +3136,97 @@ func TestPromoteRegisterDocumentOwnersToNativeRestoresRegularDocument(t *testing
 
 	if decision := decisions["Document.ОбычныйДокумент"]; decision.Excluded || decision.Belonging != "Native" {
 		t.Fatalf("expected regular registrator document to be restored as Native, got %#v", decision)
+	}
+}
+
+func TestNativeTemplateDoesNotPromoteExcludedDocument(t *testing.T) {
+	t.Parallel()
+
+	catalogDoc := etree.NewDocument()
+	if err := catalogDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Catalog>
+    <Properties>
+      <Name>упо_Правила</Name>
+    </Properties>
+  </Catalog>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read catalog xml: %v", err)
+	}
+
+	templateDoc := etree.NewDocument()
+	if err := templateDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<Template xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <TemplateText>Document.ПриобретениеТоваровУслуг.Товары</TemplateText>
+</Template>`); err != nil {
+		t.Fatalf("read template xml: %v", err)
+	}
+
+	documentDoc := etree.NewDocument()
+	if err := documentDoc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Document>
+    <Properties>
+      <Name>ПриобретениеТоваровУслуг</Name>
+    </Properties>
+  </Document>
+</MetaDataObject>`); err != nil {
+		t.Fatalf("read document xml: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{
+		{
+			Doc:       catalogDoc,
+			RelPath:   "Catalogs/упо_Правила.xml",
+			Metadata:  true,
+			OwnerKey:  "Catalog.упо_Правила",
+			OwnerKind: "Catalog",
+			OwnerName: "упо_Правила",
+		},
+		{
+			Doc:       templateDoc,
+			RelPath:   "Catalogs/упо_Правила/Templates/ERPPM_ДоходыРасходы_ПоДокументам/Ext/Template.xml",
+			OwnerKey:  "Catalog.упо_Правила",
+			OwnerKind: "Catalog",
+			OwnerName: "упо_Правила",
+			FileName:  "Template.xml",
+		},
+		{
+			Doc:       documentDoc,
+			RelPath:   "Documents/ПриобретениеТоваровУслуг.xml",
+			Metadata:  true,
+			OwnerKey:  "Document.ПриобретениеТоваровУслуг",
+			OwnerKind: "Document",
+			OwnerName: "ПриобретениеТоваровУслуг",
+		},
+	}
+	decisions := map[string]objectDecision{
+		"Catalog.упо_Правила":               {Belonging: "Native"},
+		"Document.ПриобретениеТоваровУслуг": {Excluded: true},
+	}
+
+	referenceGraph := collectReferenceGraph(contexts, &config.Configuration{}, nil, decisions, nil)
+	if refs := referenceGraph["Catalog.упо_Правила"]; len(refs) != 0 {
+		t.Fatalf("expected native template refs to be ignored, got %#v", refs)
+	}
+
+	promoteReferencedObjectsToAdoptedStubIndexed(
+		contexts,
+		buildContextIndexes(contexts),
+		decisions,
+		&config.Configuration{},
+		referenceGraph,
+		collectIncomingReferenceGraph(referenceGraph),
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		targetCompatibilitySet{},
+	)
+
+	if decision := decisions["Document.ПриобретениеТоваровУслуг"]; !decision.Excluded || decision.Belonging != "" {
+		t.Fatalf("expected excluded document to stay excluded when only native template references it, got %#v", decision)
 	}
 }
 
@@ -6889,7 +6980,7 @@ func TestChangeFilesKeepsCanonicalRenamedTargetSensitiveMetaDataFileObjects(t *t
 
 }
 
-func TestChangeFilesKeepsSoftExcludedMetaDataFileOwnerObjectWithNativeLeafFields(t *testing.T) {
+func TestChangeFilesRemovesSoftExcludedMetaDataFileOwnerObjectWithNativeLeafFields(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -6985,8 +7076,8 @@ func TestChangeFilesKeepsSoftExcludedMetaDataFileOwnerObjectWithNativeLeafFields
 	if err := configurationDoc.ReadFromFile(filepath.Join(root, "Configuration.xml")); err != nil {
 		t.Fatalf("read configuration xml: %v", err)
 	}
-	if !hasConfigurationChildObject(configurationDoc, "Document", "Бюджет") {
-		t.Fatalf("expected Document.Бюджет to stay in Configuration.xml")
+	if hasConfigurationChildObject(configurationDoc, "Document", "Бюджет") {
+		t.Fatalf("did not expect Document.Бюджет in Configuration.xml")
 	}
 
 	configDumpDoc := etree.NewDocument()
@@ -6999,47 +7090,15 @@ func TestChangeFilesKeepsSoftExcludedMetaDataFileOwnerObjectWithNativeLeafFields
 		"Document.Бюджет.TabularSection.Поступления",
 		"Document.Бюджет.TabularSection.Поступления.Attribute.упо_План",
 	} {
-		if !hasMetadataName(configDumpDoc, name) {
-			t.Fatalf("expected ConfigDumpInfo to keep %s", name)
+		if hasMetadataName(configDumpDoc, name) {
+			t.Fatalf("did not expect ConfigDumpInfo to keep %s", name)
 		}
 	}
 
 	documentDoc := etree.NewDocument()
 	documentPath := filepath.Join(root, "Documents", "Бюджет.xml")
-	if err := documentDoc.ReadFromFile(documentPath); err != nil {
-		t.Fatalf("read document xml: %v", err)
-	}
-
-	ownerProps := documentDoc.FindElement("//*[local-name()='Document']/*[local-name()='Properties']")
-	if ownerProps == nil {
-		t.Fatalf("expected document properties in %s", documentPath)
-	}
-	if got := textOf(ownerProps, "ObjectBelonging"); got != "Adopted" {
-		t.Fatalf("expected owner object to stay adopted, got ObjectBelonging=%q", got)
-	}
-
-	attrProps := documentDoc.FindElement("//*[local-name()='Document']/*[local-name()='ChildObjects']/*[local-name()='Attribute']/*[local-name()='Properties']")
-	if attrProps == nil {
-		t.Fatalf("expected retained owner attribute properties in %s", documentPath)
-	}
-	if got := textOf(attrProps, "ObjectBelonging"); got != "" {
-		t.Fatalf("expected retained owner attribute to stay native leaf, got ObjectBelonging=%q", got)
-	}
-
-	sectionProps := documentDoc.FindElement("//*[local-name()='TabularSection']/*[local-name()='Properties']")
-	if sectionProps == nil {
-		t.Fatalf("expected retained tabular section properties in %s", documentPath)
-	}
-	if got := textOf(sectionProps, "ObjectBelonging"); got != "Adopted" {
-		t.Fatalf("expected retained tabular section to stay adopted, got ObjectBelonging=%q", got)
-	}
-
-	sectionAttrProps := documentDoc.FindElement("//*[local-name()='TabularSection']/*[local-name()='ChildObjects']/*[local-name()='Attribute']/*[local-name()='Properties']")
-	if sectionAttrProps == nil {
-		t.Fatalf("expected retained tabular section attribute properties in %s", documentPath)
-	}
-	if got := textOf(sectionAttrProps, "ObjectBelonging"); got != "" {
-		t.Fatalf("expected retained tabular section attribute to stay native leaf, got ObjectBelonging=%q", got)
+	if err := documentDoc.ReadFromFile(documentPath); err == nil {
+		t.Fatalf("did not expect soft-excluded metadata-file owner xml to survive at %s", documentPath)
 	}
 }
 
