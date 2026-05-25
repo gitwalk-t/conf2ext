@@ -19,7 +19,13 @@ GitHub Issue — основной контейнер задачи для Codex.
 - отделить постановку задачи от исполнения;
 - связать результат с branch / commit / PR / комментариями issue.
 
-Skill не заменяет task-route файлы. Issue задает конкретную задачу, а task-route выбирает минимальный контекст для ее типа.
+Task routing не хранится в этом skill.
+
+Для выбора минимального task-route использовать:
+
+```text
+.codex/index.md
+```
 
 ## Canonical issue template
 
@@ -42,34 +48,9 @@ Skill не заменяет task-route файлы. Issue задает конкр
 
 1. Сначала прочитать само issue полностью.
 2. Затем прочитать только файлы из раздела `Контекст`.
-3. Определить тип задачи и выбрать соответствующий route из `.codex/tasks/*` или skill из `.codex/skills/*`.
+3. Использовать `.codex/index.md` для выбора минимального route.
 4. Не читать весь репозиторий без необходимости.
 5. Если нужен дополнительный файл, открыть его только после краткой причины в рабочем отчете.
-
-## Routing по типу задачи
-
-- `bugfix` / XML classification:
-  - `.codex/tasks/classification-bug.md`
-  - relevant `.codex/context/*`
-
-- `run/debug` / ошибка загрузки:
-  - `.codex/tasks/loading-error.md`
-  - `docs/debugging.md`
-  - `.codex/skills/check-run-status.md`
-
-- `performance-review`:
-  - читать diff / commit / PR
-  - не менять код без отдельного запроса
-  - искать лишние проходы, повторный I/O, повторный XML parse, лишние allocations, broad scans
-
-- `performance-fix`:
-  - сначала зафиксировать узкое место
-  - менять минимально
-  - не совмещать perf-fix с широким refactoring
-
-- `docs`:
-  - менять только релевантный documentation layer
-  - не переносить временный operational state в stable docs
 
 ## Выполнение задачи из issue
 
