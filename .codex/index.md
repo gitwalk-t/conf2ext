@@ -1,13 +1,19 @@
 # Индекс контекста агента
 
-Цель — минимизировать startup-context и направлять агента только к нужным semantic layers.
+Цель:
+- минимальный startup-context;
+- deterministic routing;
+- selective context loading.
 
 ## Читать первым
 
 1. `.codex/agent-start.md`
-2. Этот индекс
+2. `AGENTS.md`
+3. Этот индекс
 
-## Machine-readable task routes
+---
+
+## Task routes
 
 ### Form debugging
 
@@ -27,9 +33,11 @@
 .codex/tasks/loading-error.md
 ```
 
-## Stable knowledge
+---
 
-### XML subdomains
+## Stable domain context
+
+### XML domains
 
 - `.codex/context/classification.md`
 - `.codex/context/forms.md`
@@ -41,9 +49,15 @@
 
 - `docs/architecture.md`
 
-### Debugging cookbook
+### Debugging
 
 - `docs/debugging.md`
+
+### Shared agent policies
+
+- `docs/agent-core/documentation-rules.md`
+
+---
 
 ## Execution layer
 
@@ -51,29 +65,32 @@
 - `.codex/skills/check-run-status.md`
 - `.codex/skills/cleanup-run-tails.md`
 - `.codex/skills/use-github-issue-task.md`
+- `.codex/skills/update-repo-from-git.md`
+
+---
 
 ## Operational state
+
+Читать только при debugging/handoff:
 
 - `.codex/context/current-state.md`
 - `.codex/handoff.md`
 
+---
+
 ## Anti-patterns
 
-- `.codex/patterns/dangerous-refactors.md`
+- читать весь `.codex/context/*` подряд;
+- reread всей документации;
+- дублирование workflow logic;
+- смешивание stable docs и operational state.
 
-## Правила маршрутизации
+---
 
-- Использовать task-route файл вместо ручного выбора контекста.
-- Использовать GitHub Issue как основной контейнер задачи для Codex.
-- Не читать весь XML-domain подряд.
-- Не читать operational state для обычной задачи.
-- Не читать debugging cookbook без debugging-задачи.
-- Не читать orchestration skills без run/monitoring-задачи.
-
-## Куда класть новую информацию
+## Context placement
 
 - XML/classification rules → `.codex/context/*`
-- Task workflow → `.codex/tasks/*`
-- Operational state → `.codex/context/current-state.md` или `.codex/handoff.md`
-- Anti-patterns/regressions → `.codex/patterns/*`
-- Human-facing docs → `README.md` или `docs/*`
+- Workflow/process → `.codex/skills/*`
+- Shared policies → `docs/agent-core/*`
+- Operational state → `.codex/context/current-state.md`
+- Human-facing docs → `README.md`, `docs/*`
