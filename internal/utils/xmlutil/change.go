@@ -428,9 +428,6 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 		return err
 	}
 	targetMergeRules := collectTargetMergeRulesFromTemplate(cfg, rawMetaDataFile)
-	if rawMetaDataFile == nil {
-		targetMergeRules = collectTargetMergeRules(cfg, dir)
-	}
 
 	log.Printf("xml step: promote referenced objects")
 	promoteReferencedObjectsStartedAt := time.Now()
@@ -928,9 +925,6 @@ func buildChangeFilesState(cfg *config.Configuration, dir string) (*changeFilesS
 		return nil, err
 	}
 	targetMergeRules := collectTargetMergeRulesFromTemplate(cfg, rawMetaDataFile)
-	if rawMetaDataFile == nil {
-		targetMergeRules = collectTargetMergeRules(cfg, dir)
-	}
 
 	log.Printf("xml step: promote referenced objects")
 	promoteReferencedObjectsStartedAt := time.Now()

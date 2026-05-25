@@ -4541,6 +4541,18 @@ func TestCollectTargetMergeRulesRecognizesDefinedTypeAlias(t *testing.T) {
 	}
 }
 
+func TestCollectTargetMergeRulesFromTemplateReturnsEmptyWhenTemplateNotLoaded(t *testing.T) {
+	t.Parallel()
+
+	rules := collectTargetMergeRulesFromTemplate(&config.Configuration{
+		Target: config.Target{XMLDump: t.TempDir()},
+	}, nil)
+
+	if len(rules.ObjectKeys) != 0 {
+		t.Fatalf("expected empty target merge rules without loaded template, got %#v", rules.ObjectKeys)
+	}
+}
+
 func TestLoadXMLContextsScopesRelativeDirs(t *testing.T) {
 	t.Parallel()
 
@@ -5954,6 +5966,7 @@ func TestBuildChangeFilesStateMergesTargetMetadataOnlyForMetaDataFileObjects(t *
 			"DefinedType.ЦелевойТип",
 			"DefinedType.ОбычныйТип",
 		},
+		AdditionalProcessing: config.AdditionalProcessing{UseMetaDataFile: true},
 		Target: config.Target{
 			XMLDump: targetRoot,
 		},
@@ -6070,6 +6083,7 @@ func TestBuildChangeFilesStateRevivesExcludedTargetMergeObject(t *testing.T) {
 		IncludedNativeObjects: []string{
 			"Catalog.ИзSource",
 		},
+		AdditionalProcessing: config.AdditionalProcessing{UseMetaDataFile: true},
 		Target: config.Target{
 			XMLDump: targetRoot,
 		},
@@ -6218,6 +6232,7 @@ func TestBuildChangeFilesStateRevivesSoftExcludedTargetRefFromDefinedTypeMerge(t
 		ExcludedObjects: []string{
 			"Catalog.ИзTarget",
 		},
+		AdditionalProcessing: config.AdditionalProcessing{UseMetaDataFile: true},
 		Target: config.Target{
 			XMLDump: targetRoot,
 		},
@@ -6333,6 +6348,7 @@ func TestBuildChangeFilesStateTargetMergedDefinedTypeUsesExtendedProperty(t *tes
 		IncludedNativeObjects: []string{
 			"Catalog.ИзSource",
 		},
+		AdditionalProcessing: config.AdditionalProcessing{UseMetaDataFile: true},
 		Target: config.Target{
 			XMLDump: targetRoot,
 		},
@@ -6432,6 +6448,7 @@ func TestBuildChangeFilesStateMarksExchangePlanAsAdoptedStubExtMetaData(t *testi
 		IncludedAdoptedStubObjects: []string{
 			"Catalog.ИзSource",
 		},
+		AdditionalProcessing: config.AdditionalProcessing{UseMetaDataFile: true},
 		Target: config.Target{
 			XMLDump: targetRoot,
 		},
