@@ -4125,6 +4125,9 @@ func collectReferenceGraph(contexts []*FileProcessingContext, cfg *config.Config
 		if ctx == nil || ctx.OwnerKey == "" || ctx.Doc == nil || ctx.Doc.Root() == nil {
 			continue
 		}
+		if isTemplateContentContext(ctx) {
+			continue
+		}
 		decision, hasDecision := decisions[ctx.OwnerKey]
 		if hasDecision && decision.SearchResultCode && decision.Belonging != "Native" &&
 			!isTopLevelMetadataFile(ctx) && !searchResultPreservesPath(searchResultState, ctx.Path) {
@@ -4156,6 +4159,14 @@ func collectReferenceGraph(contexts []*FileProcessingContext, cfg *config.Config
 	}
 
 	return graph
+}
+
+func isTemplateContentContext(ctx *FileProcessingContext) bool {
+	if ctx == nil {
+		return false
+	}
+
+	return strings.Contains(filepath.ToSlash(ctx.RelPath), "/Templates/")
 }
 
 func collectAdoptedStubExtReferenceGraph(contexts []*FileProcessingContext, decisions map[string]objectDecision, searchResultState *searchResultState) map[string]map[string]struct{} {
@@ -4278,6 +4289,10 @@ func promoteRegisterDocumentOwnersToNativeIndexed(
 				continue
 			}
 			if _, primary := primaryNativeObjects[docKey]; primary {
+				continue
+			}
+			if _, softExcluded := excludedObjects[docKey]; softExcluded {
+				debugDecision(docKey, "kept excluded: registrator rule cannot override configured soft exclude")
 				continue
 			}
 
@@ -4758,8 +4773,7 @@ func applyAdoptedStubMetaDataRules(
 		}
 
 		if decision.Excluded || decision.Belonging == "" {
-			decisions[key] = objectDecision{Belonging: "AdoptedStub", SearchResultCode: decision.SearchResultCode}
-			debugDecision(key, "kept as AdoptedStubMetaData from CommonTemplate упо_MetaDataFile")
+			debugDecision(key, "kept excluded: CommonTemplate упо_MetaDataFile cannot restore excluded owner object")
 			continue
 		}
 
@@ -4769,6 +4783,8 @@ func applyAdoptedStubMetaDataRules(
 			debugDecision(key, "expanded to AdoptedStubMetaData from CommonTemplate упо_MetaDataFile")
 		}
 	}
+
+	_ = excludedObjects
 }
 
 type searchResultPlaceRequest struct {
