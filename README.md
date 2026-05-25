@@ -2,12 +2,16 @@
 
 Go CLI-инструмент для конвертации конфигурации 1С в расширение `.cfe` через переписывание XML-выгрузки.
 
-Основной активный сценарий:
-- `srcConvert` — взять готовое дерево XML-исходников, переписать XML по правилам extension и собрать `.cfe`.
+## Основной сценарий
 
-## Запуск
+`srcConvert`:
+- взять готовое дерево XML-исходников;
+- переписать XML по правилам extension;
+- собрать `.cfe`.
 
-Основная точка входа:
+## Быстрый старт
+
+Запуск:
 
 ```powershell
 go run . --config .\\configs\\config.json
@@ -19,19 +23,14 @@ go run . --config .\\configs\\config.json
 go run .\\cmd\\app
 ```
 
-Сборка:
+Сборка и тесты:
 
 ```powershell
 go build ./...
-```
-
-Тесты:
-
-```powershell
 go test ./...
 ```
 
-## Основные модули
+## Архитектура
 
 - `cmd/` — CLI
 - `pkg/` — публичные wrapper API
@@ -40,7 +39,7 @@ go test ./...
 - `internal/utils/xmlutil/` — XML rewrite и classification logic
 - `internal/export_format/` — mapping export format -> platform version
 
-Главный рискованный файл:
+Ключевой файл XML rewrite:
 
 ```text
 internal/utils/xmlutil/change.go
@@ -51,58 +50,41 @@ internal/utils/xmlutil/change.go
 - `configs/config.json` — активный локальный конфиг
 - `output/_log` — логи
 - `output/_tmp` — временные XML-выгрузки
-- `.codex/skills/` — run/debug helpers
-- `.codex/context/` — agent context
+- `docs/` — human-facing документация
+- `.codex/` — агентский контекст и skills
 
 ## Документация
 
-### Для архитектуры
-
+Архитектура:
 - `docs/architecture.md`
 - `docs/technical-spec.md`
 
-### Для debugging
-
+Debugging:
 - `docs/debugging.md`
 
-### Для агентского контекста
+Агентский bootstrap:
+- `AGENTS.md`
 
-Стартовая точка:
-
-- `.codex/index.md`
-
-Минимальный startup-context:
-
-- `.codex/agent-start.md`
-
-XML/classification rules:
-
-- `.codex/context/xml-rules.md`
-
-Терминология:
-
-- `.codex/context/terms.md`
-
-## Основные инварианты
+## Инварианты
 
 - `excluded_*` — soft exclude
 - `forbidden_*` — hard exclude
-- BSL не анализируется
+- BSL не анализируется как источник classification rules
 - формы не режутся частично
-- `Native` и `AdoptedStub` — основные technical modes
+- `Native` и `AdoptedStub` — основные режимы обработки
 
 ## Переменные окружения
 
-- `CONFIG_PATH` — fallback path к конфигу
-- `FILES_CONVERTER_KEEP_TMP=1` — не удалять временные каталоги
-- `FILES_CONVERTER_SNAPSHOT_BEFORE_CHANGE=1` — сохранить snapshot до XML rewrite
-- `FILES_CONVERTER_DEBUG_DECISIONS=1` — decision debug для XML logic
+- `CONFIG_PATH`
+- `FILES_CONVERTER_KEEP_TMP=1`
+- `FILES_CONVERTER_SNAPSHOT_BEFORE_CHANGE=1`
+- `FILES_CONVERTER_DEBUG_DECISIONS=1`
 
-## Что важно про репозиторий
+## Ограничения проекта
 
 - HTTP/API слоя нет
 - полноценного CI пока нет
-- основные проверки:
+- базовая проверка:
 
 ```powershell
 go build ./...
