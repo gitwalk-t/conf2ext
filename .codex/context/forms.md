@@ -10,6 +10,9 @@
 
 Для `Native` forms:
 - aggressive dynamic-list cleanup запрещен;
+- aggressive command cleanup запрещен;
+- нельзя менять standard command flags (`Create`/`Copy`/`Delete`/`Change` и аналоги) generic cleanup-ом;
+- нельзя удалять native form command references только потому, что generic resolver не доказал их existence;
 - нельзя удалять `MainTable`;
 - нельзя удалять custom/manual-query dynamic-list fields только потому, что они отсутствуют в metadata owner;
 - нельзя массово удалять `DataPath` через generic missing-field cleanup;

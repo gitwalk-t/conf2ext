@@ -6519,7 +6519,17 @@ func collectExcludedCommands(commandSet *etree.Element) map[string]struct{} {
 
 func isSelectionFormRelPath(relPath string) bool {
 	relPath = strings.ToLower(filepath.ToSlash(relPath))
-	return strings.Contains(relPath, "/forms/") && (strings.Contains(relPath, "выбор") || strings.Contains(relPath, "choice"))
+	idx := strings.Index(relPath, "/forms/")
+	if idx < 0 {
+		return false
+	}
+
+	formName := relPath[idx+len("/forms/"):]
+	if cut := strings.Index(formName, "/"); cut >= 0 {
+		formName = formName[:cut]
+	}
+
+	return strings.Contains(formName, "формавыбор") || strings.Contains(formName, "choiceform")
 }
 
 func removeInvalidChoiceTableExcludedStandardCommands(doc *etree.Document, keepChoiceTableCommands bool) bool {
@@ -6574,6 +6584,104 @@ func removeInvalidChoiceTableExcludedStandardCommands(doc *etree.Document, keepC
 	return changed
 }
 
+func removeInvalidNonNativeCommandSetExcludedStandardCommands(doc *etree.Document) bool {
+	root := doc.Root()
+	if root == nil {
+		return false
+	}
+
+	invalid := map[string]struct{}{
+		"Change":        {},
+		"Copy":          {},
+		"Create":        {},
+		"Delete":        {},
+		"MoveItem":      {},
+		"WriteAndClose": {},
+	}
+
+	changed := false
+	for _, commandSet := range root.FindElements(".//*[local-name()='CommandSet']") {
+		for _, child := range append([]*etree.Element(nil), commandSet.ChildElements()...) {
+			if !strings.EqualFold(localName(child.Tag), "ExcludedCommand") {
+				continue
+			}
+
+			name := strings.TrimSpace(child.Text())
+			if _, bad := invalid[name]; !bad {
+				continue
+			}
+
+			commandSet.RemoveChild(child)
+			changed = true
+		}
+
+		if len(commandSet.ChildElements()) != 0 {
+			continue
+		}
+		if parent := commandSet.Parent(); parent != nil {
+			parent.RemoveChild(commandSet)
+			changed = true
+		}
+	}
+
+	return changed
+}
+
+func hasLocalFormCommandWithStdPictureChange(root *etree.Element) bool {
+	if root == nil {
+		return false
+	}
+
+	commands := root.FindElement("./*[local-name()='Commands']")
+	if commands == nil {
+		return false
+	}
+
+	for _, command := range commands.ChildElements() {
+		if !strings.EqualFold(localName(command.Tag), "Command") {
+			continue
+		}
+		for _, ref := range command.FindElements(".//*[local-name()='Ref']") {
+			if strings.TrimSpace(ref.Text()) == "StdPicture.Change" {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func removeNativeShadowedChangeExcludedCommands(doc *etree.Document) bool {
+	root := doc.Root()
+	if root == nil || !hasLocalFormCommandWithStdPictureChange(root) {
+		return false
+	}
+
+	changed := false
+	for _, commandSet := range root.FindElements(".//*[local-name()='CommandSet']") {
+		for _, child := range append([]*etree.Element(nil), commandSet.ChildElements()...) {
+			if !strings.EqualFold(localName(child.Tag), "ExcludedCommand") {
+				continue
+			}
+			if strings.TrimSpace(child.Text()) != "Change" {
+				continue
+			}
+			commandSet.RemoveChild(child)
+			changed = true
+		}
+
+		if len(commandSet.ChildElements()) != 0 {
+			continue
+		}
+		if parent := commandSet.Parent(); parent != nil {
+			parent.RemoveChild(commandSet)
+			changed = true
+		}
+	}
+
+	return changed
+}
+
 func cleanupMissingFormCommandReferences(doc *etree.Document, ownerKey string, contexts []*FileProcessingContext) bool {
 	return cleanupMissingFormCommandReferencesWithResolver(doc, formCommandReferenceResolver(ownerKey, func(name string) bool {
 		return roleMetadataTargetExists(name, contexts)
@@ -6605,23 +6713,26 @@ func cleanupFormDocumentIndexed(
 	}
 
 	changed := false
-	changed = removeInvalidChoiceTableExcludedStandardCommands(ctx.Doc, isSelectionFormRelPath(ctx.RelPath)) || changed
-	changed = removeInvalidFormLevelExcludedStandardCommands(ctx.Doc) || changed
 
 	decision, ok := decisions[ctx.OwnerKey]
 	if !ok {
+		changed = removeInvalidChoiceTableExcludedStandardCommands(ctx.Doc, isSelectionFormRelPath(ctx.RelPath)) || changed
+		changed = removeInvalidFormLevelExcludedStandardCommands(ctx.Doc) || changed
 		return changed
 	}
 
 	changed = cleanupMissingFormConstantsSetReferencesIndexed(ctx.Doc, contexts, indexes, decisions) || changed
-	changed = cleanupMissingFormCommandReferences(ctx.Doc, ctx.OwnerKey, contexts) || changed
 	changed = removeForbiddenStandardCommands(ctx.Doc) || changed
 
 	if decision.Belonging == "Native" {
+		changed = removeNativeShadowedChangeExcludedCommands(ctx.Doc) || changed
 		changed = cleanupNativeFormNonNativeReferences(ctx.Doc, nonNativeKeys) || changed
 		return changed
 	}
 
+	changed = removeInvalidChoiceTableExcludedStandardCommands(ctx.Doc, isSelectionFormRelPath(ctx.RelPath)) || changed
+	changed = removeInvalidFormLevelExcludedStandardCommands(ctx.Doc) || changed
+	changed = cleanupMissingFormCommandReferences(ctx.Doc, ctx.OwnerKey, contexts) || changed
 	changed = cleanupNonNativeDynamicListMainTables(ctx.Doc, decisions) || changed
 	changed = normalizeManualQueryWithoutMainTable(ctx.Doc) || changed
 	changed = cleanupMissingFormCommonAttributeDynamicListFieldsIndexed(ctx.Doc, contexts, indexes, decisions) || changed
@@ -7816,6 +7927,9 @@ func cleanupFinalNonNativeFormNoise(contexts []*FileProcessingContext, indexes *
 		changed = normalizeManualQueryWithoutMainTable(ctx.Doc) || changed
 		changed = cleanupNonNativeManualQueryOrphanReferences(ctx.Doc) || changed
 		changed = cleanupMissingFormOwnerObjectReferences(ctx.Doc, ownerCtx) || changed
+		changed = removeInvalidFormLevelExcludedStandardCommands(ctx.Doc) || changed
+		changed = removeInvalidChoiceTableExcludedStandardCommands(ctx.Doc, isSelectionFormRelPath(ctx.RelPath)) || changed
+		changed = removeInvalidNonNativeCommandSetExcludedStandardCommands(ctx.Doc) || changed
 		changed = cleanupNonNativeFormLifecycleEvents(ctx.Doc) || changed
 		changed = cleanupNonNativeFormStandardCommands(ctx.Doc) || changed
 		if !changed {
@@ -7963,6 +8077,9 @@ func isForbiddenStandardCommand(parent, child *etree.Element, targets []string) 
 
 	childTag := strings.ToLower(localName(child.Tag))
 	parentTag := strings.ToLower(localName(parent.Tag))
+	if parentTag == "commands" && childTag == "command" {
+		return false
+	}
 
 	return childTag == "commandname" ||
 		childTag == "command" ||
@@ -10915,6 +11032,9 @@ func finalizeRetainedOwnerCommands(
 			continue
 		}
 		if _, excluded := excludedPaths[ctx.Path]; excluded {
+			continue
+		}
+		if decision, ok := decisions[ctx.OwnerKey]; ok && !decision.Excluded && decision.Belonging == "Native" {
 			continue
 		}
 
