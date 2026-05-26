@@ -1429,7 +1429,7 @@ func TestCleanupFormDocumentIndexedKeepsIssue22NativeCharacteristicTypeCommandIt
         <ChildItems>
           <Button name="ВладельцыКонтекстноеМенюРедакторАлгоритмаПостобработки">
             <Type>CommandBarButton</Type>
-            <CommandName>` + commandRef + `</CommandName>
+            <CommandName>`+commandRef+`</CommandName>
           </Button>
         </ChildItems>
       </ContextMenu>
@@ -9153,6 +9153,7 @@ func TestCollectSearchResultStatePromotesExcludedObjectAndPreservesFormPaths(t *
 	if err != nil {
 		t.Fatalf("load xml contexts: %v", err)
 	}
+	indexes := buildContextIndexes(contexts)
 
 	cfg := &config.Configuration{
 		Prefix:               "упо_",
@@ -9163,7 +9164,7 @@ func TestCollectSearchResultStatePromotesExcludedObjectAndPreservesFormPaths(t *
 		"Catalog.Тест": {Excluded: true},
 	}
 
-	state, err := collectSearchResultState(cfg, root, contexts, decisions, nil, nil, nil)
+	state, err := collectSearchResultState(cfg, root, nil, indexes, decisions, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("collect search result state: %v", err)
 	}
@@ -9524,4 +9525,82 @@ func textOrEmpty(el *etree.Element) string {
 		return ""
 	}
 	return strings.TrimSpace(el.Text())
+}
+
+func TestBuildForbiddenRegisterSetKeepsOnlyRegisters(t *testing.T) {
+	t.Parallel()
+
+	registers := buildForbiddenRegisterSet(map[string]struct{}{
+		"AccumulationRegister.Остатки": {},
+		"Catalog.Тест":                 {},
+		"InformationRegister.Курсы":    {},
+	})
+
+	if len(registers) != 2 {
+		t.Fatalf("expected only register kinds, got %#v", registers)
+	}
+	if _, ok := registers["AccumulationRegister"]["Остатки"]; !ok {
+		t.Fatalf("expected accumulation register to stay in set, got %#v", registers)
+	}
+	if _, ok := registers["InformationRegister"]["Курсы"]; !ok {
+		t.Fatalf("expected information register to stay in set, got %#v", registers)
+	}
+	if _, ok := registers["Catalog"]; ok {
+		t.Fatalf("did not expect non-register kind in set, got %#v", registers)
+	}
+}
+
+func TestBuildDynamicListAttributeFieldIndexSeparatesFieldsByAttribute(t *testing.T) {
+	t.Parallel()
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(`<?xml version="1.0" encoding="UTF-8"?>
+<Form>
+  <ChildItems>
+    <Table>
+      <DataPath>Список1</DataPath>
+      <ChildItems>
+        <InputField>
+          <DataPath>Список1.Наименование</DataPath>
+        </InputField>
+      </ChildItems>
+      <RowPictureDataPath>Список1.DefaultPicture</RowPictureDataPath>
+    </Table>
+    <Table>
+      <DataPath>Список2</DataPath>
+      <ChildItems>
+        <InputField>
+          <DataPath>Список2.Код</DataPath>
+        </InputField>
+      </ChildItems>
+    </Table>
+  </ChildItems>
+</Form>`); err != nil {
+		t.Fatalf("read form xml: %v", err)
+	}
+
+	index := buildDynamicListAttributeFieldIndex(doc.Root())
+	if _, ok := index["Список1"]["Наименование"]; !ok {
+		t.Fatalf("expected field for first attribute, got %#v", index)
+	}
+	if _, ok := index["Список1"]["DefaultPicture"]; !ok {
+		t.Fatalf("expected row picture field for first attribute, got %#v", index)
+	}
+	if _, ok := index["Список2"]["Код"]; !ok {
+		t.Fatalf("expected field for second attribute, got %#v", index)
+	}
+	if _, ok := index["Список2"]["Наименование"]; ok {
+		t.Fatalf("did not expect fields to leak between attributes, got %#v", index)
+	}
+}
+
+func TestBlockContainsSearchResultMarkerPreservesPerLineSemantics(t *testing.T) {
+	t.Parallel()
+
+	if !blockContainsSearchResultMarker([]string{"//{EPM}", "Процедура Тест()"}, []string{"//{EPM}"}) {
+		t.Fatalf("expected direct marker match")
+	}
+	if blockContainsSearchResultMarker([]string{"ab", "cd"}, []string{"b\x00c"}) {
+		t.Fatalf("did not expect cross-line marker match")
+	}
 }
