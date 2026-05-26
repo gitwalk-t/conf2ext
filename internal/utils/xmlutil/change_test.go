@@ -1415,6 +1415,211 @@ func TestCleanupFormDocumentIndexedNativeKeepsTelegramUserMappingCommandWithComm
 	}
 }
 
+func TestCleanupFormDocumentIndexedKeepsIssue22NativeCharacteristicTypeCommandItem(t *testing.T) {
+	t.Parallel()
+
+	const ownerKey = "ChartOfCharacteristicTypes.упо_СвойстваАгрегированныхХарактеристикТабличныхЧастей"
+	const commandRef = ownerKey + ".Command.РедакторАлгоритмаПостобработки"
+
+	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform">
+  <ChildItems>
+    <Table name="Владельцы">
+      <ContextMenu name="ВладельцыКонтекстноеМеню">
+        <ChildItems>
+          <Button name="ВладельцыКонтекстноеМенюРедакторАлгоритмаПостобработки">
+            <Type>CommandBarButton</Type>
+            <CommandName>` + commandRef + `</CommandName>
+          </Button>
+        </ChildItems>
+      </ContextMenu>
+    </Table>
+  </ChildItems>
+  <Commands>
+    <Command name="РедакторАлгоритмаПостобработки">
+      <Action>РедакторАлгоритмаПостобработки</Action>
+    </Command>
+  </Commands>
+</Form>`)
+	ownerDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <ChartOfCharacteristicTypes>
+    <Properties>
+      <Name>упо_СвойстваАгрегированныхХарактеристикТабличныхЧастей</Name>
+    </Properties>
+    <ChildObjects/>
+  </ChartOfCharacteristicTypes>
+</MetaDataObject>`)
+
+	formCtx := &FileProcessingContext{
+		Doc:       formDoc,
+		OwnerKey:  ownerKey,
+		OwnerKind: "ChartOfCharacteristicTypes",
+		FileName:  "Form.xml",
+		RelPath:   "ChartsOfCharacteristicTypes/упо_СвойстваАгрегированныхХарактеристикТабличныхЧастей/Forms/ФормаЭлемента/Ext/Form.xml",
+	}
+	contexts := []*FileProcessingContext{
+		{
+			Doc:       ownerDoc,
+			Metadata:  true,
+			OwnerKey:  ownerKey,
+			OwnerKind: "ChartOfCharacteristicTypes",
+			RelPath:   "ChartsOfCharacteristicTypes/упо_СвойстваАгрегированныхХарактеристикТабличныхЧастей.xml",
+		},
+		formCtx,
+	}
+	indexes := buildContextIndexes(contexts)
+	decisions := map[string]objectDecision{
+		ownerKey: {Belonging: "Native"},
+	}
+
+	if cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
+		t.Fatalf("expected native characteristic-type form cleanup to preserve command item composition")
+	}
+	if !hasFormElementWithName(formDoc, "Button", "ВладельцыКонтекстноеМенюРедакторАлгоритмаПостобработки") {
+		t.Fatalf("expected issue #22 native form item to remain")
+	}
+	if commandName := formElementCommandName(formDoc, "ВладельцыКонтекстноеМенюРедакторАлгоритмаПостобработки"); commandName != commandRef {
+		t.Fatalf("expected issue #22 native form item to keep command reference %q, got %q", commandRef, commandName)
+	}
+	if !hasFormCommandDefinition(formDoc, "РедакторАлгоритмаПостобработки") {
+		t.Fatalf("expected issue #22 native form command definition to remain")
+	}
+}
+
+func TestCleanupFormDocumentIndexedKeepsIssue22NativeStandardCommandFlags(t *testing.T) {
+	t.Parallel()
+
+	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform">
+  <ChildItems>
+    <Table name="Список">
+      <ChoiceMode>true</ChoiceMode>
+      <DataPath>Список</DataPath>
+      <CommandSet>
+        <ExcludedCommand>Change</ExcludedCommand>
+        <ExcludedCommand>Copy</ExcludedCommand>
+        <ExcludedCommand>Create</ExcludedCommand>
+        <ExcludedCommand>Delete</ExcludedCommand>
+      </CommandSet>
+    </Table>
+  </ChildItems>
+</Form>`)
+
+	formCtx := &FileProcessingContext{
+		Doc:       formDoc,
+		OwnerKey:  "InformationRegister.упо_ДиспетчерыРесурсовИтоговые",
+		OwnerKind: "InformationRegister",
+		FileName:  "Form.xml",
+		RelPath:   "InformationRegisters/упо_ДиспетчерыРесурсовИтоговые/Forms/ФормаСписка/Ext/Form.xml",
+	}
+	contexts := []*FileProcessingContext{formCtx}
+	indexes := buildContextIndexes(contexts)
+	decisions := map[string]objectDecision{
+		"InformationRegister.упо_ДиспетчерыРесурсовИтоговые": {Belonging: "Native"},
+	}
+
+	if cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
+		t.Fatalf("expected native register form cleanup to preserve standard command flags")
+	}
+
+	commandSet := formDoc.Root().FindElement(".//*[local-name()='Table']/*[local-name()='CommandSet']")
+	if commandSet == nil {
+		t.Fatalf("expected native register table command set to remain")
+	}
+	remaining := collectExcludedCommands(commandSet)
+	for _, command := range []string{"Change", "Copy", "Create", "Delete"} {
+		if _, ok := remaining[command]; !ok {
+			t.Fatalf("expected issue #22 native standard command flag %q to remain", command)
+		}
+	}
+}
+
+func TestCleanupFormDocumentIndexedKeepsNativeShadowedChangeExcludedCommands(t *testing.T) {
+	t.Parallel()
+
+	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable">
+  <CommandSet>
+    <ExcludedCommand>Change</ExcludedCommand>
+    <ExcludedCommand>Copy</ExcludedCommand>
+  </CommandSet>
+  <ChildItems>
+    <Table name="ДеревоСоставаОпцийНабора">
+      <DataPath>ДеревоСоставаОпцийНабора</DataPath>
+      <CommandSet>
+        <ExcludedCommand>Change</ExcludedCommand>
+        <ExcludedCommand>Copy</ExcludedCommand>
+      </CommandSet>
+      <ContextMenu name="КонтекстноеМеню">
+        <ChildItems>
+          <Button name="КомандаИзменитьЗначениеНабора">
+            <Type>CommandBarButton</Type>
+            <CommandName>Form.Command.КомандаИзменитьЗначениеНабора</CommandName>
+          </Button>
+        </ChildItems>
+      </ContextMenu>
+    </Table>
+  </ChildItems>
+  <Commands>
+    <Command name="КомандаИзменитьЗначениеНабора">
+      <Picture>
+        <xr:Ref>StdPicture.Change</xr:Ref>
+      </Picture>
+      <Action>КомандаИзменитьЗначениеНабора</Action>
+    </Command>
+  </Commands>
+</Form>`)
+
+	formCtx := &FileProcessingContext{
+		Doc:       formDoc,
+		OwnerKey:  "Catalog.упо_НаборыПроектныхОпций",
+		OwnerKind: "Catalog",
+		FileName:  "Form.xml",
+		RelPath:   "Catalogs/упо_НаборыПроектныхОпций/Forms/ФормаЭлемента/Ext/Form.xml",
+	}
+	contexts := []*FileProcessingContext{formCtx}
+	indexes := buildContextIndexes(contexts)
+	decisions := map[string]objectDecision{
+		"Catalog.упо_НаборыПроектныхОпций": {Belonging: "Native"},
+	}
+
+	if cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
+		t.Fatalf("expected native form cleanup to preserve shadowed standard Change flags")
+	}
+
+	rootCommandSet := formDoc.Root().FindElement("./*[local-name()='CommandSet']")
+	if rootCommandSet == nil {
+		t.Fatalf("expected root command set to remain")
+	}
+	rootRemaining := collectExcludedCommands(rootCommandSet)
+	if _, ok := rootRemaining["Change"]; !ok {
+		t.Fatalf("expected native root Change flag to remain")
+	}
+	if _, ok := rootRemaining["Copy"]; !ok {
+		t.Fatalf("expected unrelated root Copy flag to remain")
+	}
+
+	tableCommandSet := formDoc.Root().FindElement(".//*[local-name()='Table']/*[local-name()='CommandSet']")
+	if tableCommandSet == nil {
+		t.Fatalf("expected table command set to remain")
+	}
+	tableRemaining := collectExcludedCommands(tableCommandSet)
+	if _, ok := tableRemaining["Change"]; !ok {
+		t.Fatalf("expected native table Change flag to remain")
+	}
+	if _, ok := tableRemaining["Copy"]; !ok {
+		t.Fatalf("expected unrelated table Copy flag to remain")
+	}
+
+	if !hasFormCommandDefinition(formDoc, "КомандаИзменитьЗначениеНабора") {
+		t.Fatalf("expected local replacement command to remain")
+	}
+	if !formDocContainsText(formDoc, "Form.Command.КомандаИзменитьЗначениеНабора") {
+		t.Fatalf("expected local replacement command reference to remain")
+	}
+}
+
 func TestCleanupFormDocumentIndexedRemovesForbiddenStandardCommandsForNativeForms(t *testing.T) {
 	t.Parallel()
 
@@ -1487,6 +1692,45 @@ func TestCleanupFormDocumentIndexedRemovesForbiddenStandardCommandsForNativeForm
 	}
 }
 
+func TestRemoveForbiddenStandardCommandsKeepsLocalFormCommandsWithStdPictureChange(t *testing.T) {
+	t.Parallel()
+
+	doc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable">
+  <ChildItems>
+    <Button name="ЛокальнаяКоманда">
+      <Type>CommandBarButton</Type>
+      <CommandName>Form.Command.ЛокальнаяКоманда</CommandName>
+    </Button>
+    <Button name="Удаляемая">
+      <Type>CommandBarButton</Type>
+      <CommandName>Form.Item.Список.StandardCommand.Change</CommandName>
+    </Button>
+  </ChildItems>
+  <Commands>
+    <Command name="ЛокальнаяКоманда" id="1">
+      <Picture>
+        <xr:Ref>StdPicture.Change</xr:Ref>
+      </Picture>
+      <Action>ЛокальнаяКоманда</Action>
+    </Command>
+  </Commands>
+</Form>`)
+
+	if !removeForbiddenStandardCommands(doc) {
+		t.Fatalf("expected forbidden standard command cleanup")
+	}
+	if !hasFormCommandDefinition(doc, "ЛокальнаяКоманда") {
+		t.Fatalf("expected local form command with StdPicture.Change to remain")
+	}
+	if !formDocContainsText(doc, "Form.Command.ЛокальнаяКоманда") {
+		t.Fatalf("expected local form command reference to remain")
+	}
+	if formDocContainsText(doc, "Form.Item.Список.StandardCommand.Change") {
+		t.Fatalf("expected standard command reference to be removed")
+	}
+}
+
 func TestCleanupFormDocumentIndexedRemovesOnlyRootFormExcludedStandardCommands(t *testing.T) {
 	t.Parallel()
 
@@ -1546,7 +1790,7 @@ func TestCleanupFormDocumentIndexedRemovesOnlyRootFormExcludedStandardCommands(t
 	}
 }
 
-func TestCleanupFormDocumentIndexedRemovesInvalidChoiceTableExcludedCommandsInOrdinaryForms(t *testing.T) {
+func TestCleanupFormDocumentIndexedKeepsNativeChoiceTableExcludedCommandsInOrdinaryForms(t *testing.T) {
 	t.Parallel()
 
 	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
@@ -1624,8 +1868,8 @@ func TestCleanupFormDocumentIndexedRemovesInvalidChoiceTableExcludedCommandsInOr
 		"Catalog.Пользователи": {Belonging: "Native"},
 	}
 
-	if !cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
-		t.Fatalf("expected invalid choice-table excluded commands in ordinary forms to be removed")
+	if cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
+		t.Fatalf("expected native ordinary form cleanup to preserve choice-table command flags")
 	}
 
 	findTableCommandSetByName := func(name string) *etree.Element {
@@ -1639,28 +1883,26 @@ func TestCleanupFormDocumentIndexedRemovesInvalidChoiceTableExcludedCommandsInOr
 	}
 
 	groupTableCommandSet := findTableCommandSetByName("ГруппыПользователей")
-	if groupTableCommandSet != nil {
-		t.Fatalf("expected empty users choice-table command set to be removed")
+	if groupTableCommandSet == nil {
+		t.Fatalf("expected users choice-table command set to remain in native form")
+	}
+	if _, ok := collectExcludedCommands(groupTableCommandSet)["Delete"]; !ok {
+		t.Fatalf("expected native users choice-table Delete flag to remain")
 	}
 
 	fileTableCommandSet := findTableCommandSetByName("Список")
 	if fileTableCommandSet == nil {
-		t.Fatalf("expected file list command set to remain with non-problematic commands")
+		t.Fatalf("expected file list command set to remain in native form")
 	}
 	remaining := collectExcludedCommands(fileTableCommandSet)
-	for _, command := range []string{"Change", "Copy", "Create", "Delete", "MoveItem"} {
-		if _, ok := remaining[command]; ok {
-			t.Fatalf("expected orphaned choice-table command %q to be removed", command)
-		}
-	}
-	for _, command := range []string{"CancelSearch", "Choose", "CopyToClipboard", "DynamicListStandardSettings", "Find", "Refresh"} {
+	for _, command := range []string{"CancelSearch", "Change", "Choose", "Copy", "CopyToClipboard", "Create", "Delete", "DynamicListStandardSettings", "Find", "MoveItem", "Refresh"} {
 		if _, ok := remaining[command]; !ok {
-			t.Fatalf("expected non-problematic choice-table command %q to remain", command)
+			t.Fatalf("expected native choice-table command %q to remain", command)
 		}
 	}
 }
 
-func TestCleanupFormDocumentIndexedKeepsChoiceTableExcludedCommandsInSelectionForms(t *testing.T) {
+func TestCleanupFormDocumentIndexedKeepsNativeSelectionFormCommandFlags(t *testing.T) {
 	t.Parallel()
 
 	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
@@ -1708,12 +1950,16 @@ func TestCleanupFormDocumentIndexedKeepsChoiceTableExcludedCommandsInSelectionFo
 		"Catalog.упо_Показатели": {Belonging: "Native"},
 	}
 
-	if !cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
-		t.Fatalf("expected selection form cleanup to update only the root command set")
+	if cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
+		t.Fatalf("expected native selection form cleanup to preserve command flags")
 	}
 
-	if formDoc.Root().FindElement("./*[local-name()='CommandSet']") != nil {
-		t.Fatalf("expected root form command set to be removed after cleanup")
+	rootCommandSet := formDoc.Root().FindElement("./*[local-name()='CommandSet']")
+	if rootCommandSet == nil {
+		t.Fatalf("expected selection-form root command set to remain")
+	}
+	if _, ok := collectExcludedCommands(rootCommandSet)["Create"]; !ok {
+		t.Fatalf("expected selection-form root Create flag to remain")
 	}
 
 	tableCommandSet := formDoc.Root().FindElement(".//*[local-name()='Table']/*[local-name()='CommandSet']")
@@ -3914,6 +4160,35 @@ func hasFormElementWithName(doc *etree.Document, tag string, name string) bool {
 	return false
 }
 
+func formElementCommandName(doc *etree.Document, name string) string {
+	if doc == nil {
+		return ""
+	}
+	for _, el := range doc.FindElements("//*") {
+		if el.SelectAttrValue("name", "") != name {
+			continue
+		}
+		commandName := el.FindElement("./*[local-name()='CommandName']")
+		if commandName == nil {
+			return ""
+		}
+		return strings.TrimSpace(commandName.Text())
+	}
+	return ""
+}
+
+func hasFormCommandDefinition(doc *etree.Document, name string) bool {
+	if doc == nil || name == "" {
+		return false
+	}
+	for _, el := range doc.FindElements("//*[local-name()='Commands']/*[local-name()='Command']") {
+		if el.SelectAttrValue("name", "") == name {
+			return true
+		}
+	}
+	return false
+}
+
 func TestCleanupNonNativeFormStandardCommandsAndEvents(t *testing.T) {
 	t.Parallel()
 
@@ -3953,6 +4228,61 @@ func TestCleanupNonNativeFormStandardCommandsAndEvents(t *testing.T) {
 	}
 	if !formDocContainsText(doc, "WriteAndClose") {
 		t.Fatalf("expected excluded command composition to remain untouched")
+	}
+}
+
+func TestCleanupFinalNonNativeFormNoiseRemovesAdoptedChoiceTableExcludedCommands(t *testing.T) {
+	t.Parallel()
+
+	tempPath := filepath.Join(t.TempDir(), "Form.xml")
+	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform">
+  <ChildItems>
+    <Table name="ДеревоРеквизитов">
+      <ChoiceMode>true</ChoiceMode>
+      <DataPath>ДеревоРеквизитов</DataPath>
+      <CommandSet>
+        <ExcludedCommand>Add</ExcludedCommand>
+        <ExcludedCommand>Change</ExcludedCommand>
+        <ExcludedCommand>Copy</ExcludedCommand>
+        <ExcludedCommand>Delete</ExcludedCommand>
+      </CommandSet>
+    </Table>
+  </ChildItems>
+</Form>`)
+	formCtx := &FileProcessingContext{
+		Doc:       formDoc,
+		OwnerKey:  "Catalog.ПравилаИнтеграцииС1СДокументооборотом",
+		OwnerKind: "Catalog",
+		FileName:  "Form.xml",
+		Path:      tempPath,
+		RelPath:   "Catalogs/ПравилаИнтеграцииС1СДокументооборотом/Forms/ВыборРеквизитаПотребителя/Ext/Form.xml",
+	}
+	contexts := []*FileProcessingContext{formCtx}
+	decisions := map[string]objectDecision{
+		"Catalog.ПравилаИнтеграцииС1СДокументооборотом": {Belonging: "Adopted"},
+	}
+
+	changedFiles, writtenFiles, err := cleanupFinalNonNativeFormNoise(contexts, buildContextIndexes(contexts), decisions)
+	if err != nil {
+		t.Fatalf("cleanupFinalNonNativeFormNoise returned error: %v", err)
+	}
+	if changedFiles != 1 || writtenFiles != 1 {
+		t.Fatalf("expected one adopted form to be rewritten, got changed=%d written=%d", changedFiles, writtenFiles)
+	}
+
+	tableCommandSet := formDoc.Root().FindElement(".//*[local-name()='Table']/*[local-name()='CommandSet']")
+	if tableCommandSet == nil {
+		t.Fatalf("expected non-invalid adopted command set content to remain")
+	}
+	remaining := collectExcludedCommands(tableCommandSet)
+	if _, ok := remaining["Add"]; !ok {
+		t.Fatalf("expected allowed adopted command flag to remain")
+	}
+	for _, command := range []string{"Change", "Copy", "Delete"} {
+		if _, ok := remaining[command]; ok {
+			t.Fatalf("expected adopted command flag %q to be removed from final form cleanup", command)
+		}
 	}
 }
 
@@ -4145,6 +4475,17 @@ func TestRemoveInvalidChoiceTableExcludedStandardCommandsKeepsSelectionFormComma
 	}
 }
 
+func TestIsSelectionFormRelPath(t *testing.T) {
+	t.Parallel()
+
+	if !isSelectionFormRelPath("Catalogs/упо_Показатели/Forms/ФормаВыбора/Ext/Form.xml") {
+		t.Fatalf("expected canonical selection form path to be detected")
+	}
+	if isSelectionFormRelPath("Catalogs/ПравилаИнтеграцииС1СДокументооборотом/Forms/ВыборРеквизитаПотребителя/Ext/Form.xml") {
+		t.Fatalf("expected helper form with 'Выбор' in name to not be treated as canonical selection form")
+	}
+}
+
 func TestRemoveInvalidChoiceTableExcludedStandardCommandsMarksChangedWhenRemovingEmptyCommandSet(t *testing.T) {
 	t.Parallel()
 
@@ -4167,6 +4508,42 @@ func TestRemoveInvalidChoiceTableExcludedStandardCommandsMarksChangedWhenRemovin
 
 	if doc.Root().FindElement(".//*[local-name()='Table']/*[local-name()='CommandSet']") != nil {
 		t.Fatalf("expected empty choice-table command set container to be removed")
+	}
+}
+
+func TestRemoveInvalidNonNativeCommandSetExcludedStandardCommands(t *testing.T) {
+	t.Parallel()
+
+	doc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform">
+  <ChildItems>
+    <Table name="Список">
+      <CommandSet>
+        <ExcludedCommand>Add</ExcludedCommand>
+        <ExcludedCommand>Change</ExcludedCommand>
+        <ExcludedCommand>Copy</ExcludedCommand>
+        <ExcludedCommand>Delete</ExcludedCommand>
+      </CommandSet>
+    </Table>
+  </ChildItems>
+</Form>`)
+
+	if !removeInvalidNonNativeCommandSetExcludedStandardCommands(doc) {
+		t.Fatalf("expected non-native command-set cleanup to report change")
+	}
+
+	tableCommandSet := doc.Root().FindElement(".//*[local-name()='Table']/*[local-name()='CommandSet']")
+	if tableCommandSet == nil {
+		t.Fatalf("expected command set with allowed entries to remain")
+	}
+	remaining := collectExcludedCommands(tableCommandSet)
+	if _, ok := remaining["Add"]; !ok {
+		t.Fatalf("expected allowed command to remain")
+	}
+	for _, command := range []string{"Change", "Copy", "Delete"} {
+		if _, ok := remaining[command]; ok {
+			t.Fatalf("expected invalid non-native command %q to be removed", command)
+		}
 	}
 }
 
