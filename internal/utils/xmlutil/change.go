@@ -423,7 +423,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 	applyTargetCompatibilitySet(decisions, contexts, targetCompatibilitySet, forbiddenAdoptedStubObjects)
 	logXMLStepCompleted("collect subsystem decisions", collectSubsystemDecisionsStartedAt, fmt.Sprintf("decisions=%d", len(decisions)))
 
-	searchResultState, err := collectSearchResultState(cfg, dir, contexts, decisions, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects)
+	searchResultState, err := collectSearchResultState(cfg, dir, contexts, indexes, decisions, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects)
 	if err != nil {
 		return err
 	}
@@ -464,6 +464,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 	}
 	excludedRefs := collectExcludedReferences(decisions)
 	blockedForbiddenObjectKeys := collectBlockedForbiddenObjectKeys(decisions, forbiddenAdoptedStubObjects)
+	forbiddenRegisters := buildForbiddenRegisterSet(blockedForbiddenObjectKeys)
 	forbiddenChildMetadataPaths := collectForbiddenChildMetadataPaths(blockedForbiddenObjectKeys)
 	blockedForbiddenRefs := collectReferenceMapFromObjectKeys(blockedForbiddenObjectKeys)
 	excludedRefs = mergeReferenceMaps(excludedRefs, blockedForbiddenRefs)
@@ -620,7 +621,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 			changed = updated || changed
 		}
 
-		changed = cleanupForbiddenRegisterMovements(ctx.Doc, blockedForbiddenObjectKeys) || changed
+		changed = cleanupForbiddenRegisterMovements(ctx.Doc, forbiddenRegisters) || changed
 		if ctx.OwnerKind != "DefinedType" && ctx.OwnerKind != "EventSubscription" && !isAdoptedStubExtMetaData(ctx, decision) {
 			changed = cleanupExcludedReferences(ctx.Doc, excludedRefs, excludedMetadataPrefixes, truncatedKeys, truncatedChildPrefixes) || changed
 		}
@@ -920,7 +921,7 @@ func buildChangeFilesState(cfg *config.Configuration, dir string) (*changeFilesS
 	applyTargetCompatibilitySet(decisions, contexts, targetCompatibilitySet, forbiddenAdoptedStubObjects)
 	logXMLStepCompleted("collect subsystem decisions", collectSubsystemDecisionsStartedAt, fmt.Sprintf("decisions=%d", len(decisions)))
 
-	searchResultState, err := collectSearchResultState(cfg, dir, contexts, decisions, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects)
+	searchResultState, err := collectSearchResultState(cfg, dir, contexts, indexes, decisions, primaryNativeObjects, excludedObjects, forbiddenAdoptedStubObjects)
 	if err != nil {
 		return nil, err
 	}
@@ -1061,13 +1062,15 @@ func logXMLStepCompleted(step string, startedAt time.Time, details ...string) {
 
 func removeExcludedFiles(root string, excludedPaths map[string]struct{}) (int, error) {
 	removedCount := 0
+	cleanupCandidates := make(map[string]struct{})
 	for path := range excludedPaths {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return removedCount, fmt.Errorf("ошибка удаления исключенного файла %s: %w", path, err)
 		}
-		cleanupEmptyParents(filepath.Dir(path), root)
+		cleanupCandidates[filepath.Clean(filepath.Dir(path))] = struct{}{}
 		removedCount++
 	}
+	cleanupEmptyParentDirs(root, cleanupCandidates)
 
 	return removedCount, nil
 }
@@ -3437,24 +3440,25 @@ func collectReferenceMapFromObjectKeys(keys map[string]struct{}) map[string]map[
 	return result
 }
 
-func cleanupForbiddenRegisterMovements(doc *etree.Document, forbiddenObjects map[string]struct{}) bool {
-	root := doc.Root()
-	if root == nil || len(forbiddenObjects) == 0 {
-		return false
-	}
-
-	forbiddenRegisters := make(map[string]map[string]struct{})
+func buildForbiddenRegisterSet(forbiddenObjects map[string]struct{}) map[string]map[string]struct{} {
+	result := make(map[string]map[string]struct{})
 	for key := range forbiddenObjects {
 		kind, name := splitObjectKey(key)
 		if !isRegisterKind(kind) || kind == "" || name == "" {
 			continue
 		}
-		if _, ok := forbiddenRegisters[kind]; !ok {
-			forbiddenRegisters[kind] = make(map[string]struct{})
+		if _, ok := result[kind]; !ok {
+			result[kind] = make(map[string]struct{})
 		}
-		forbiddenRegisters[kind][name] = struct{}{}
+		result[kind][name] = struct{}{}
 	}
-	if len(forbiddenRegisters) == 0 {
+
+	return result
+}
+
+func cleanupForbiddenRegisterMovements(doc *etree.Document, forbiddenRegisters map[string]map[string]struct{}) bool {
+	root := doc.Root()
+	if root == nil || len(forbiddenRegisters) == 0 {
 		return false
 	}
 
@@ -3502,15 +3506,14 @@ func shouldRemoveForbiddenRegisterMovement(parent, child *etree.Element, forbidd
 		return false
 	}
 
-	for kind, names := range forbiddenRegisters {
-		for ref := range collectMetadataReferences(child) {
-			refKind, refName := splitObjectKey(ref)
-			if !strings.EqualFold(refKind, kind) {
-				continue
-			}
-			if _, ok := names[refName]; ok {
-				return true
-			}
+	for ref := range collectMetadataReferences(child) {
+		refKind, refName := splitObjectKey(ref)
+		names := forbiddenRegisters[refKind]
+		if len(names) == 0 {
+			continue
+		}
+		if _, ok := names[refName]; ok {
+			return true
 		}
 	}
 
@@ -4328,6 +4331,7 @@ func collectFormDynamicListContracts(contexts []*FileProcessingContext, decision
 		}
 
 		root := ctx.Doc.Root()
+		attributeFields := buildDynamicListAttributeFieldIndex(root)
 		for _, attr := range root.FindElements(".//Attribute") {
 			attrName := strings.TrimSpace(attr.SelectAttrValue("name", ""))
 			if attrName == "" || !isDynamicListAttribute(attr) {
@@ -4349,7 +4353,7 @@ func collectFormDynamicListContracts(contexts []*FileProcessingContext, decision
 			if contract.RequiredFields == nil {
 				contract.RequiredFields = make(map[string]struct{})
 			}
-			for field := range collectDynamicListAttributeFields(root, attrName) {
+			for field := range collectDynamicListAttributeFieldsFromIndex(attributeFields, attrName) {
 				contract.RequiredFields[field] = struct{}{}
 			}
 			for field := range collectDynamicListDeclaredFields(attr) {
@@ -4396,18 +4400,25 @@ func textOfFirst(parent *etree.Element, path string) string {
 }
 
 func collectDynamicListAttributeFields(root *etree.Element, attrName string) map[string]struct{} {
-	result := make(map[string]struct{})
-	if root == nil || attrName == "" {
+	return collectDynamicListAttributeFieldsFromIndex(buildDynamicListAttributeFieldIndex(root), attrName)
+}
+
+func buildDynamicListAttributeFieldIndex(root *etree.Element) map[string]map[string]struct{} {
+	result := make(map[string]map[string]struct{})
+	if root == nil {
 		return result
 	}
 
 	var walk func(*etree.Element)
 	walk = func(node *etree.Element) {
-		tag := strings.ToLower(localName(node.Tag))
-		switch tag {
+		switch strings.ToLower(localName(node.Tag)) {
 		case "field", "datapath", "rowpicturedatapath", "keyfield", "typesfilterfield", "objectfield", "typefield", "valuefield", "datapathfield":
-			if field, ok := extractDynamicListFieldName(strings.TrimSpace(node.Text()), attrName); ok {
-				result[field] = struct{}{}
+			attrName, field, ok := extractDynamicListAttributeField(strings.TrimSpace(node.Text()))
+			if ok {
+				if result[attrName] == nil {
+					result[attrName] = make(map[string]struct{})
+				}
+				result[attrName][field] = struct{}{}
 			}
 		}
 		for _, child := range node.ChildElements() {
@@ -4417,6 +4428,17 @@ func collectDynamicListAttributeFields(root *etree.Element, attrName string) map
 
 	walk(root)
 	return result
+}
+
+func collectDynamicListAttributeFieldsFromIndex(index map[string]map[string]struct{}, attrName string) map[string]struct{} {
+	attrName = strings.TrimSpace(attrName)
+	if len(index) == 0 || attrName == "" {
+		return map[string]struct{}{}
+	}
+	if fields := index[attrName]; len(fields) > 0 {
+		return fields
+	}
+	return map[string]struct{}{}
 }
 
 func collectDynamicListVirtualFields(attr *etree.Element) map[string]struct{} {
@@ -4564,6 +4586,26 @@ func extractDynamicListFieldName(value, attrName string) (string, bool) {
 	}
 
 	return field, true
+}
+
+func extractDynamicListAttributeField(value string) (string, string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", "", false
+	}
+
+	idx := strings.Index(value, ".")
+	if idx <= 0 || idx >= len(value)-1 {
+		return "", "", false
+	}
+
+	attrName := strings.TrimSpace(value[:idx])
+	field, ok := extractDynamicListFieldName(value, attrName)
+	if !ok {
+		return "", "", false
+	}
+
+	return attrName, field, true
 }
 
 func applyFormDynamicListContracts(decisions map[string]objectDecision, contracts map[string]formDynamicListContract, forbidden map[string]struct{}) {
@@ -4853,6 +4895,7 @@ func collectSearchResultState(
 	cfg *config.Configuration,
 	dir string,
 	contexts []*FileProcessingContext,
+	indexes *contextIndexes,
 	decisions map[string]objectDecision,
 	primaryNativeObjects map[string]struct{},
 	excludedObjects map[string]struct{},
@@ -4895,7 +4938,7 @@ func collectSearchResultState(
 			continue
 		}
 
-		topCtx := findTopLevelMetadataContextByOwnerKeyIndexed(nil, contexts, key)
+		topCtx := findTopLevelMetadataContextByOwnerKeyIndexed(indexes, contexts, key)
 		if topCtx == nil {
 			return nil, fmt.Errorf("упо_SearchResult ссылается на отсутствующий объект %s", key)
 		}
@@ -5544,11 +5587,23 @@ func writeSearchResultDiagnostics(path string, message string) {
 }
 
 func blockContainsSearchResultMarker(lines []string, markers []string) bool {
-	for _, line := range lines {
-		for _, marker := range markers {
-			if strings.Contains(line, marker) {
-				return true
+	if len(lines) == 0 || len(markers) == 0 {
+		return false
+	}
+
+	const lineSeparator = "\x00"
+	blockText := strings.Join(lines, lineSeparator)
+	for _, marker := range markers {
+		if strings.Contains(marker, lineSeparator) {
+			for _, line := range lines {
+				if strings.Contains(line, marker) {
+					return true
+				}
 			}
+			continue
+		}
+		if strings.Contains(blockText, marker) {
+			return true
 		}
 	}
 	return false
@@ -6949,6 +7004,7 @@ func collectMissingFormCommonAttributeDynamicListFields(root *etree.Element, con
 		return result
 	}
 
+	attributeFields := buildDynamicListAttributeFieldIndex(root)
 	for _, attr := range root.FindElements(".//Attribute") {
 		if !isDynamicListAttribute(attr) {
 			continue
@@ -6971,7 +7027,7 @@ func collectMissingFormCommonAttributeDynamicListFields(root *etree.Element, con
 		targetCtx := findTopLevelMetadataContextByOwnerKeyIndexed(indexes, contexts, refs[0])
 		available := collectAvailableDynamicListFields(targetCtx)
 		requiredFields := collectDynamicListDeclaredFields(attr)
-		for field := range collectDynamicListAttributeFields(root, attrName) {
+		for field := range collectDynamicListAttributeFieldsFromIndex(attributeFields, attrName) {
 			requiredFields[field] = struct{}{}
 		}
 		for field := range requiredFields {
@@ -7319,6 +7375,7 @@ func normalizeManualQueryWithoutMainTable(doc *etree.Document) bool {
 
 	attrsWithoutMainTable := make(map[string]map[string]struct{})
 	changed := false
+	attributeFields := buildDynamicListAttributeFieldIndex(root)
 
 	for _, attr := range root.FindElements(".//Attribute") {
 		if !isDynamicListAttribute(attr) || !isDynamicListManualQuery(attr) {
@@ -7334,7 +7391,7 @@ func normalizeManualQueryWithoutMainTable(doc *etree.Document) bool {
 		}
 
 		declaredFields := collectDynamicListDeclaredFields(attr)
-		for field := range collectDynamicListAttributeFields(root, attrName) {
+		for field := range collectDynamicListAttributeFieldsFromIndex(attributeFields, attrName) {
 			declaredFields[field] = struct{}{}
 		}
 		if queryEl := attr.FindElement(".//Settings/QueryText"); queryEl != nil {
@@ -11844,6 +11901,42 @@ func cleanupEmptyParents(path, root string) {
 		}
 		current = filepath.Dir(current)
 	}
+}
+
+func cleanupEmptyParentDirs(root string, dirs map[string]struct{}) {
+	if len(dirs) == 0 {
+		return
+	}
+
+	ordered := make([]string, 0, len(dirs))
+	for dir := range dirs {
+		dir = filepath.Clean(dir)
+		if dir == "" {
+			continue
+		}
+		ordered = append(ordered, dir)
+	}
+
+	sort.Slice(ordered, func(i, j int) bool {
+		leftDepth := pathDepth(ordered[i])
+		rightDepth := pathDepth(ordered[j])
+		if leftDepth != rightDepth {
+			return leftDepth > rightDepth
+		}
+		return ordered[i] > ordered[j]
+	})
+
+	for _, dir := range ordered {
+		cleanupEmptyParents(dir, root)
+	}
+}
+
+func pathDepth(path string) int {
+	path = filepath.Clean(path)
+	if path == "" {
+		return 0
+	}
+	return strings.Count(path, string(os.PathSeparator))
 }
 
 func splitObjectKey(key string) (string, string) {

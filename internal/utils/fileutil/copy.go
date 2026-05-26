@@ -77,17 +77,17 @@ func CopyDirWithStats(src, dest string) (CopyStats, error) {
 		}
 		destPath := filepath.Join(dest, relPath)
 
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-
 		if d.IsDir() {
-			if err := os.MkdirAll(destPath, info.Mode()); err != nil {
+			if err := os.MkdirAll(destPath, 0o755); err != nil {
 				return err
 			}
 			stats.Dirs++
 			return nil
+		}
+
+		info, err := d.Info()
+		if err != nil {
+			return err
 		}
 
 		written, err := copyFileWithInfo(path, destPath, info)
