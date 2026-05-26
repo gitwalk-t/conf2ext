@@ -6627,61 +6627,6 @@ func removeInvalidNonNativeCommandSetExcludedStandardCommands(doc *etree.Documen
 	return changed
 }
 
-func hasLocalFormCommandWithStdPictureChange(root *etree.Element) bool {
-	if root == nil {
-		return false
-	}
-
-	commands := root.FindElement("./*[local-name()='Commands']")
-	if commands == nil {
-		return false
-	}
-
-	for _, command := range commands.ChildElements() {
-		if !strings.EqualFold(localName(command.Tag), "Command") {
-			continue
-		}
-		for _, ref := range command.FindElements(".//*[local-name()='Ref']") {
-			if strings.TrimSpace(ref.Text()) == "StdPicture.Change" {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-func removeNativeShadowedChangeExcludedCommands(doc *etree.Document) bool {
-	root := doc.Root()
-	if root == nil || !hasLocalFormCommandWithStdPictureChange(root) {
-		return false
-	}
-
-	changed := false
-	for _, commandSet := range root.FindElements(".//*[local-name()='CommandSet']") {
-		for _, child := range append([]*etree.Element(nil), commandSet.ChildElements()...) {
-			if !strings.EqualFold(localName(child.Tag), "ExcludedCommand") {
-				continue
-			}
-			if strings.TrimSpace(child.Text()) != "Change" {
-				continue
-			}
-			commandSet.RemoveChild(child)
-			changed = true
-		}
-
-		if len(commandSet.ChildElements()) != 0 {
-			continue
-		}
-		if parent := commandSet.Parent(); parent != nil {
-			parent.RemoveChild(commandSet)
-			changed = true
-		}
-	}
-
-	return changed
-}
-
 func cleanupMissingFormCommandReferences(doc *etree.Document, ownerKey string, contexts []*FileProcessingContext) bool {
 	return cleanupMissingFormCommandReferencesWithResolver(doc, formCommandReferenceResolver(ownerKey, func(name string) bool {
 		return roleMetadataTargetExists(name, contexts)
@@ -6725,7 +6670,6 @@ func cleanupFormDocumentIndexed(
 	changed = removeForbiddenStandardCommands(ctx.Doc) || changed
 
 	if decision.Belonging == "Native" {
-		changed = removeNativeShadowedChangeExcludedCommands(ctx.Doc) || changed
 		changed = cleanupNativeFormNonNativeReferences(ctx.Doc, nonNativeKeys) || changed
 		return changed
 	}

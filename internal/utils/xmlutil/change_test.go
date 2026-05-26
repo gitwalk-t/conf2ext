@@ -1535,7 +1535,7 @@ func TestCleanupFormDocumentIndexedKeepsIssue22NativeStandardCommandFlags(t *tes
 	}
 }
 
-func TestCleanupFormDocumentIndexedRemovesNativeShadowedChangeExcludedCommands(t *testing.T) {
+func TestCleanupFormDocumentIndexedKeepsNativeShadowedChangeExcludedCommands(t *testing.T) {
 	t.Parallel()
 
 	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
@@ -1584,8 +1584,8 @@ func TestCleanupFormDocumentIndexedRemovesNativeShadowedChangeExcludedCommands(t
 		"Catalog.упо_НаборыПроектныхОпций": {Belonging: "Native"},
 	}
 
-	if !cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
-		t.Fatalf("expected native form cleanup to remove shadowed standard Change flags")
+	if cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
+		t.Fatalf("expected native form cleanup to preserve shadowed standard Change flags")
 	}
 
 	rootCommandSet := formDoc.Root().FindElement("./*[local-name()='CommandSet']")
@@ -1593,8 +1593,8 @@ func TestCleanupFormDocumentIndexedRemovesNativeShadowedChangeExcludedCommands(t
 		t.Fatalf("expected root command set to remain")
 	}
 	rootRemaining := collectExcludedCommands(rootCommandSet)
-	if _, ok := rootRemaining["Change"]; ok {
-		t.Fatalf("expected shadowed root Change flag to be removed")
+	if _, ok := rootRemaining["Change"]; !ok {
+		t.Fatalf("expected native root Change flag to remain")
 	}
 	if _, ok := rootRemaining["Copy"]; !ok {
 		t.Fatalf("expected unrelated root Copy flag to remain")
@@ -1605,8 +1605,8 @@ func TestCleanupFormDocumentIndexedRemovesNativeShadowedChangeExcludedCommands(t
 		t.Fatalf("expected table command set to remain")
 	}
 	tableRemaining := collectExcludedCommands(tableCommandSet)
-	if _, ok := tableRemaining["Change"]; ok {
-		t.Fatalf("expected shadowed table Change flag to be removed")
+	if _, ok := tableRemaining["Change"]; !ok {
+		t.Fatalf("expected native table Change flag to remain")
 	}
 	if _, ok := tableRemaining["Copy"]; !ok {
 		t.Fatalf("expected unrelated table Copy flag to remain")
