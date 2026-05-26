@@ -6524,14 +6524,7 @@ func removeInvalidFormLevelExcludedStandardCommands(doc *etree.Document) bool {
 		return false
 	}
 
-	invalid := map[string]struct{}{
-		"Change":        {},
-		"Copy":          {},
-		"Create":        {},
-		"Delete":        {},
-		"MoveItem":      {},
-		"WriteAndClose": {},
-	}
+	invalid := invalidExcludedFormCommands()
 
 	changed := false
 	for _, child := range append([]*etree.Element(nil), commandSet.ChildElements()...) {
@@ -6593,14 +6586,7 @@ func removeInvalidChoiceTableExcludedStandardCommands(doc *etree.Document, keepC
 		return false
 	}
 
-	invalid := map[string]struct{}{
-		"Change":        {},
-		"Copy":          {},
-		"Create":        {},
-		"Delete":        {},
-		"MoveItem":      {},
-		"WriteAndClose": {},
-	}
+	invalid := invalidExcludedFormCommands()
 
 	changed := false
 	for _, table := range root.FindElements(".//*[local-name()='Table']") {
@@ -6639,23 +6625,23 @@ func removeInvalidChoiceTableExcludedStandardCommands(doc *etree.Document, keepC
 	return changed
 }
 
-func removeInvalidNonNativeCommandSetExcludedStandardCommands(doc *etree.Document) bool {
+func removeInvalidNonNativeCommandSetExcludedStandardCommands(doc *etree.Document, keepChoiceTableCommands bool) bool {
 	root := doc.Root()
 	if root == nil {
 		return false
 	}
 
-	invalid := map[string]struct{}{
-		"Change":        {},
-		"Copy":          {},
-		"Create":        {},
-		"Delete":        {},
-		"MoveItem":      {},
-		"WriteAndClose": {},
-	}
+	invalid := invalidExcludedFormCommands()
 
 	changed := false
 	for _, commandSet := range root.FindElements(".//*[local-name()='CommandSet']") {
+		if commandSet.Parent() == root {
+			continue
+		}
+		if keepChoiceTableCommands && isChoiceTableCommandSet(commandSet) {
+			continue
+		}
+
 		for _, child := range append([]*etree.Element(nil), commandSet.ChildElements()...) {
 			if !strings.EqualFold(localName(child.Tag), "ExcludedCommand") {
 				continue
@@ -6680,6 +6666,76 @@ func removeInvalidNonNativeCommandSetExcludedStandardCommands(doc *etree.Documen
 	}
 
 	return changed
+}
+
+func invalidExcludedFormCommands() map[string]struct{} {
+	return map[string]struct{}{
+		"Change":        {},
+		"ChangeHistory": {},
+		"Copy":          {},
+		"Create":        {},
+		"Delete":        {},
+		"GetURL":        {},
+		"MoveItem":      {},
+		"WriteAndClose": {},
+	}
+}
+
+func removeForbiddenExcludedStandardCommands(doc *etree.Document, keepChoiceTableCommands bool) bool {
+	root := doc.Root()
+	if root == nil {
+		return false
+	}
+
+	forbidden := map[string]struct{}{
+		"Change":        {},
+		"ChangeHistory": {},
+		"GetURL":        {},
+	}
+
+	changed := false
+	for _, commandSet := range root.FindElements(".//*[local-name()='CommandSet']") {
+		if keepChoiceTableCommands && isChoiceTableCommandSet(commandSet) {
+			continue
+		}
+
+		for _, child := range append([]*etree.Element(nil), commandSet.ChildElements()...) {
+			if !strings.EqualFold(localName(child.Tag), "ExcludedCommand") {
+				continue
+			}
+
+			name := strings.TrimSpace(child.Text())
+			if _, bad := forbidden[name]; !bad {
+				continue
+			}
+
+			commandSet.RemoveChild(child)
+			changed = true
+		}
+
+		if len(commandSet.ChildElements()) != 0 {
+			continue
+		}
+		if parent := commandSet.Parent(); parent != nil {
+			parent.RemoveChild(commandSet)
+			changed = true
+		}
+	}
+
+	return changed
+}
+
+func isChoiceTableCommandSet(commandSet *etree.Element) bool {
+	if commandSet == nil {
+		return false
+	}
+
+	parent := commandSet.Parent()
+	if parent == nil || !strings.EqualFold(localName(parent.Tag), "Table") {
+		return false
+	}
+
+	return strings.EqualFold(strings.TrimSpace(textOf(parent, "ChoiceMode")), "true")
 }
 
 func cleanupMissingFormCommandReferences(doc *etree.Document, ownerKey string, contexts []*FileProcessingContext) bool {
@@ -6725,6 +6781,7 @@ func cleanupFormDocumentIndexed(
 	changed = removeForbiddenStandardCommands(ctx.Doc) || changed
 
 	if decision.Belonging == "Native" {
+		changed = removeForbiddenExcludedStandardCommands(ctx.Doc, false) || changed
 		changed = cleanupNativeFormNonNativeReferences(ctx.Doc, nonNativeKeys) || changed
 		return changed
 	}
@@ -7930,7 +7987,7 @@ func cleanupFinalNonNativeFormNoise(contexts []*FileProcessingContext, indexes *
 		changed = cleanupMissingFormOwnerObjectReferences(ctx.Doc, ownerCtx) || changed
 		changed = removeInvalidFormLevelExcludedStandardCommands(ctx.Doc) || changed
 		changed = removeInvalidChoiceTableExcludedStandardCommands(ctx.Doc, isSelectionFormRelPath(ctx.RelPath)) || changed
-		changed = removeInvalidNonNativeCommandSetExcludedStandardCommands(ctx.Doc) || changed
+		changed = removeInvalidNonNativeCommandSetExcludedStandardCommands(ctx.Doc, isSelectionFormRelPath(ctx.RelPath)) || changed
 		changed = cleanupNonNativeFormLifecycleEvents(ctx.Doc) || changed
 		changed = cleanupNonNativeFormStandardCommands(ctx.Doc) || changed
 		if !changed {
