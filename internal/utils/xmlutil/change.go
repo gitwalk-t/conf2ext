@@ -293,6 +293,7 @@ type searchResultState struct {
 	ExpectedAdoptedObjects  map[string]struct{}
 	PreservedPaths          map[string]struct{}
 	PreservedConfigDumpInfo map[string]struct{}
+	TargetBorrowedFormPaths map[string]struct{}
 }
 
 type changeFilesState struct {
@@ -449,6 +450,10 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 	if err != nil {
 		return err
 	}
+	contexts, indexes, searchResultState, err = applyTargetBorrowedAdoptedForms(cfg, dir, contexts, indexes, decisions, searchResultState)
+	if err != nil {
+		return err
+	}
 	retainedOwnerCommandCandidates := collectOwnerCommandCandidates(contexts, decisions)
 	logXMLStepCompleted("promote referenced objects", promoteReferencedObjectsStartedAt, fmt.Sprintf("decisions=%d", len(decisions)))
 
@@ -566,7 +571,9 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 		}
 
 		if isFormCleanupContext(ctx) {
-			changed = cleanupFormDocumentIndexed(ctx, contexts, indexes, decisions, nonNativeKeys) || changed
+			if !isTargetBorrowedAdoptedFormPath(searchResultState, ctx.Path) {
+				changed = cleanupFormDocumentIndexed(ctx, contexts, indexes, decisions, nonNativeKeys) || changed
+			}
 		}
 
 		if ctx.OwnerKind == "FunctionalOptionsParameter" && ctx.Properties != nil {
@@ -622,13 +629,14 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 		}
 
 		changed = cleanupForbiddenRegisterMovements(ctx.Doc, forbiddenRegisters) || changed
-		if ctx.OwnerKind != "DefinedType" && ctx.OwnerKind != "EventSubscription" && !isAdoptedStubExtMetaData(ctx, decision) {
+		if ctx.OwnerKind != "DefinedType" && ctx.OwnerKind != "EventSubscription" &&
+			!isAdoptedStubExtMetaData(ctx, decision) && !isTargetBorrowedAdoptedFormPath(searchResultState, ctx.Path) {
 			changed = cleanupExcludedReferences(ctx.Doc, excludedRefs, excludedMetadataPrefixes, truncatedKeys, truncatedChildPrefixes) || changed
 		}
 		bindingTargets := bindingTargetsByDoc[ctx.Doc]
 		changed = replaceGUIDsInDoc(ctx.Doc, guidReplacements) || changed
 		changed = replaceBaseBindingGUIDsInDoc(ctx.Doc, baseBindingReplacements) || changed
-		if decision.Belonging != "Native" && ctx.Metadata && isTopLevelMetadataFile(ctx) &&
+		if decision.Belonging != "Native" && ctx.Metadata && (isTopLevelMetadataFile(ctx) || isStandaloneObjectFormMetadataContext(ctx)) &&
 			ctx.OwnerKey != "Configuration" && ctx.OwnerKey != "Language.Русский" {
 			changed = ensureAdoptedExtendedConfigurationObjects(ctx.Doc, bindingTargets) || changed
 		}
@@ -649,7 +657,7 @@ func ChangeFiles(cfg *config.Configuration, dir string) error {
 	log.Printf("xml progress: apply object changes %d/%d file=done", len(contexts), len(contexts))
 	logXMLStepCompleted("apply object changes", applyObjectChangesStartedAt, fmt.Sprintf("changed_files=%d written_files=%d", changedFilesCount, writtenFilesCount))
 
-	postFormCleanupChanged, postFormCleanupWritten, err := cleanupFinalNonNativeFormNoise(contexts, indexes, decisions)
+	postFormCleanupChanged, postFormCleanupWritten, err := cleanupFinalNonNativeFormNoise(contexts, indexes, decisions, searchResultState)
 	if err != nil {
 		return err
 	}
@@ -1292,13 +1300,19 @@ func collectGUIDReplacementsFromConfigDump(
 	sourceMetadataUUIDs := make(map[string]string)
 	for _, candidate := range contexts {
 		if candidate == nil || candidate.Doc == nil || candidate.OwnerKey == "" || !candidate.Metadata || !isTopLevelMetadataFile(candidate) {
-			continue
+			if candidate == nil || candidate.Doc == nil || candidate.OwnerKey == "" || !candidate.Metadata {
+				continue
+			}
 		}
 		target := metadataTargetElement(candidate.Doc)
 		if target == nil {
 			continue
 		}
 		if uuid := normalizeGUIDValue(target.SelectAttrValue("uuid", "")); uuid != "" {
+			metadataPath := contextMetadataPath(candidate)
+			if metadataPath != "" {
+				sourceMetadataUUIDs[metadataPath] = uuid
+			}
 			sourceMetadataUUIDs[candidate.OwnerKey] = uuid
 		}
 	}
@@ -1309,8 +1323,12 @@ func collectGUIDReplacementsFromConfigDump(
 			name := strings.TrimSpace(el.SelectAttrValue("name", ""))
 			id := strings.TrimSpace(el.SelectAttrValue("id", ""))
 			if shouldTrackIdentityMetadataPath(name, decisions, adoptedStubMetaDataRules) {
-				topKey, _, _ := parseMetadataPath(name)
-				ensureIdentityReplacement(replacements, identityMap, name, id, sourceMetadataUUIDs[topKey])
+				sourceMetadataUUID := sourceMetadataUUIDs[name]
+				if sourceMetadataUUID == "" {
+					topKey, _, _ := parseMetadataPath(name)
+					sourceMetadataUUID = sourceMetadataUUIDs[topKey]
+				}
+				ensureIdentityReplacement(replacements, identityMap, name, id, sourceMetadataUUID)
 			} else if identityMap.Objects != nil {
 				delete(identityMap.Objects, name)
 			}
@@ -2429,6 +2447,576 @@ func mergeTargetMetadataComposition(
 	)
 
 	return contexts, indexes, nil
+}
+
+type targetBorrowedFormCandidate struct {
+	Name        string
+	MetadataDoc *etree.Document
+	ExtDoc      *etree.Document
+	UUID        string
+}
+
+type targetBorrowedFormSet struct {
+	OwnerMetadataDoc *etree.Document
+	ByMetadataPath   map[string]*targetBorrowedFormCandidate
+	ByUUID           map[string]*targetBorrowedFormCandidate
+}
+
+func applyTargetBorrowedAdoptedForms(
+	cfg *config.Configuration,
+	root string,
+	contexts []*FileProcessingContext,
+	indexes *contextIndexes,
+	decisions map[string]objectDecision,
+	state *searchResultState,
+) ([]*FileProcessingContext, *contextIndexes, *searchResultState, error) {
+	if cfg == nil || state == nil || len(state.ObjectOverlays) == 0 {
+		return contexts, indexes, state, nil
+	}
+	if strings.TrimSpace(cfg.Target.XMLDump) == "" {
+		return contexts, indexes, state, nil
+	}
+
+	info, err := os.Stat(cfg.Target.XMLDump)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("не удалось получить доступ к XML-дампу конфигурации-приемника %s: %w", cfg.Target.XMLDump, err)
+	}
+	if !info.IsDir() {
+		return nil, nil, nil, fmt.Errorf("путь xml_dump должен указывать на каталог XML-выгрузки конфигурации-приемника: %s", cfg.Target.XMLDump)
+	}
+
+	startedAt := time.Now()
+	log.Printf("xml step: apply target borrowed adopted forms")
+
+	targetFormsByOwner := make(map[string]*targetBorrowedFormSet)
+	ownerKeys := make([]string, 0, len(state.ObjectOverlays))
+	for ownerKey := range state.ObjectOverlays {
+		ownerKeys = append(ownerKeys, ownerKey)
+	}
+	sort.Strings(ownerKeys)
+
+	rewrittenForms := 0
+	skippedForms := 0
+
+	for _, ownerKey := range ownerKeys {
+		decision, ok := decisions[ownerKey]
+		if !ok || decision.Excluded || decision.Belonging == "Native" {
+			continue
+		}
+
+		overlay := state.ObjectOverlays[ownerKey]
+		if len(overlay.PreserveForms) == 0 {
+			continue
+		}
+
+		topCtx := findTopLevelMetadataContextByOwnerKeyIndexed(indexes, contexts, ownerKey)
+		if topCtx == nil || topCtx.Doc == nil {
+			return nil, nil, nil, fmt.Errorf("не найден top-level XML объекта %s для target-based borrowing форм", ownerKey)
+		}
+
+		targetForms, ok := targetFormsByOwner[ownerKey]
+		if !ok {
+			targetForms, err = loadTargetBorrowedFormsForOwner(cfg.Target.XMLDump, topCtx)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			targetFormsByOwner[ownerKey] = targetForms
+		}
+
+		formNames := make([]string, 0, len(overlay.PreserveForms))
+		for formName := range overlay.PreserveForms {
+			formNames = append(formNames, formName)
+		}
+		sort.Strings(formNames)
+
+		for _, formName := range formNames {
+			formMetaRelPath := objectFormMetadataRelPath(topCtx.RelPath, formName)
+			formExtRelPath := objectFormExtRelPath(topCtx.RelPath, formName)
+
+			formMetaCtx := findContextByRelPath(indexes, contexts, formMetaRelPath)
+			formExtCtx := findContextByRelPath(indexes, contexts, formExtRelPath)
+			if formMetaCtx == nil || formMetaCtx.Doc == nil || formExtCtx == nil || formExtCtx.Doc == nil {
+				removePreservedAdoptedForm(state, ownerKey, root, topCtx.RelPath, formName)
+				skippedForms++
+				continue
+			}
+
+			candidate := matchTargetBorrowedFormCandidate(ownerKey, formName, formMetaCtx.Doc, targetForms)
+			if candidate == nil {
+				removePreservedAdoptedForm(state, ownerKey, root, topCtx.RelPath, formName)
+				skippedForms++
+				continue
+			}
+
+			formMetaCtx.Doc = candidate.MetadataDoc.Copy()
+			formMetaCtx.Properties = findProperties(formMetaCtx.Doc)
+			rewriteBorrowedTargetFormMetadata(formMetaCtx.Doc, candidate.UUID)
+			if err := formMetaCtx.Doc.WriteToFile(formMetaCtx.Path); err != nil {
+				return nil, nil, nil, fmt.Errorf("ошибка при записи target-based form metadata %s: %w", formMetaCtx.Path, err)
+			}
+
+			formExtCtx.Doc = candidate.ExtDoc.Copy()
+			formExtCtx.Properties = findProperties(formExtCtx.Doc)
+			rewriteBorrowedTargetFormDocument(formExtCtx.Doc, targetForms.OwnerMetadataDoc, formExtCtx.RelPath)
+			if err := formExtCtx.Doc.WriteToFile(formExtCtx.Path); err != nil {
+				return nil, nil, nil, fmt.Errorf("ошибка при записи target-based Form.xml %s: %w", formExtCtx.Path, err)
+			}
+			state.TargetBorrowedFormPaths[formExtCtx.Path] = struct{}{}
+
+			rewrittenForms++
+		}
+	}
+
+	logXMLStepCompleted("apply target borrowed adopted forms", startedAt, fmt.Sprintf("rewritten=%d skipped=%d", rewrittenForms, skippedForms))
+	return contexts, indexes, state, nil
+}
+
+func loadTargetBorrowedFormsForOwner(targetRoot string, topCtx *FileProcessingContext) (*targetBorrowedFormSet, error) {
+	result := &targetBorrowedFormSet{
+		ByMetadataPath: make(map[string]*targetBorrowedFormCandidate),
+		ByUUID:         make(map[string]*targetBorrowedFormCandidate),
+	}
+	if strings.TrimSpace(targetRoot) == "" || topCtx == nil {
+		return result, nil
+	}
+
+	ownerMetadataPath := filepath.Join(targetRoot, filepath.FromSlash(topCtx.RelPath))
+	ownerMetadataInfo, err := os.Stat(ownerMetadataPath)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("не удалось прочитать target metadata %s: %w", ownerMetadataPath, err)
+		}
+	} else if ownerMetadataInfo.IsDir() {
+		return nil, fmt.Errorf("ожидался XML-файл target metadata, а не каталог: %s", ownerMetadataPath)
+	} else {
+		result.OwnerMetadataDoc, err = readXMLFile(ownerMetadataPath)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	objectRelPath := filepath.ToSlash(strings.TrimSuffix(topCtx.RelPath, filepath.Ext(topCtx.RelPath)))
+	if objectRelPath == "" {
+		return result, nil
+	}
+
+	formsDir := filepath.Join(targetRoot, filepath.FromSlash(objectRelPath), "Forms")
+	entries, err := os.ReadDir(formsDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return result, nil
+		}
+		return nil, fmt.Errorf("не удалось прочитать каталог forms в target.xml_dump %s: %w", formsDir, err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".xml") {
+			continue
+		}
+
+		formName := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
+		if strings.TrimSpace(formName) == "" {
+			continue
+		}
+
+		metadataPath := filepath.Join(formsDir, entry.Name())
+		metadataDoc, err := readXMLFile(metadataPath)
+		if err != nil {
+			return nil, err
+		}
+		extPath := filepath.Join(formsDir, formName, "Ext", "Form.xml")
+		extInfo, err := os.Stat(extPath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, fmt.Errorf("не удалось прочитать target Form.xml %s: %w", extPath, err)
+		}
+		if extInfo.IsDir() {
+			return nil, fmt.Errorf("ожидался XML-файл формы target, а не каталог: %s", extPath)
+		}
+		extDoc, err := readXMLFile(extPath)
+		if err != nil {
+			return nil, err
+		}
+
+		target := metadataTargetElement(metadataDoc)
+		uuid := ""
+		if target != nil {
+			uuid = normalizeGUIDValue(target.SelectAttrValue("uuid", ""))
+		}
+		name := strings.TrimSpace(propertyName(findProperties(metadataDoc)))
+		if name == "" {
+			name = formName
+		}
+
+		candidate := &targetBorrowedFormCandidate{
+			Name:        name,
+			MetadataDoc: metadataDoc,
+			ExtDoc:      extDoc,
+			UUID:        uuid,
+		}
+		metadataName := topCtx.OwnerKey + ".Form." + name
+		result.ByMetadataPath[metadataName] = candidate
+		if uuid != "" {
+			result.ByUUID[uuid] = candidate
+		}
+	}
+
+	return result, nil
+}
+
+func matchTargetBorrowedFormCandidate(ownerKey, formName string, currentDoc *etree.Document, forms *targetBorrowedFormSet) *targetBorrowedFormCandidate {
+	if forms == nil {
+		return nil
+	}
+
+	target := metadataTargetElement(currentDoc)
+	if target != nil {
+		if uuid := normalizeGUIDValue(target.SelectAttrValue("uuid", "")); uuid != "" {
+			if candidate := forms.ByUUID[uuid]; candidate != nil {
+				return candidate
+			}
+		}
+	}
+
+	metadataPath := ownerKey + ".Form." + strings.TrimSpace(formName)
+	if candidate := forms.ByMetadataPath[metadataPath]; candidate != nil {
+		return candidate
+	}
+
+	return nil
+}
+
+func removePreservedAdoptedForm(state *searchResultState, ownerKey, root, ownerRelPath, formName string) {
+	if state == nil {
+		return
+	}
+
+	overlay := state.ObjectOverlays[ownerKey]
+	delete(overlay.PreserveForms, formName)
+	state.ObjectOverlays[ownerKey] = overlay
+	formMetadataRelPath := objectFormMetadataRelPath(ownerRelPath, formName)
+	formExtRelPath := objectFormExtRelPath(ownerRelPath, formName)
+	if formMetadataRelPath != "" {
+		delete(state.PreservedPaths, filepath.Join(root, filepath.FromSlash(formMetadataRelPath)))
+	}
+	if formExtRelPath != "" {
+		delete(state.PreservedPaths, filepath.Join(root, filepath.FromSlash(formExtRelPath)))
+		delete(state.TargetBorrowedFormPaths, filepath.Join(root, filepath.FromSlash(formExtRelPath)))
+	}
+	delete(state.PreservedConfigDumpInfo, ownerKey+".Form."+formName)
+	delete(state.PreservedConfigDumpInfo, ownerKey+".Form."+formName+".Form")
+}
+
+func objectFormMetadataRelPath(ownerRelPath, formName string) string {
+	ownerRelPath = filepath.ToSlash(ownerRelPath)
+	objectDir := strings.TrimSuffix(ownerRelPath, filepath.Ext(ownerRelPath))
+	if objectDir == "" || strings.TrimSpace(formName) == "" {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Join(objectDir, "Forms", formName+".xml"))
+}
+
+func objectFormExtRelPath(ownerRelPath, formName string) string {
+	ownerRelPath = filepath.ToSlash(ownerRelPath)
+	objectDir := strings.TrimSuffix(ownerRelPath, filepath.Ext(ownerRelPath))
+	if objectDir == "" || strings.TrimSpace(formName) == "" {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Join(objectDir, "Forms", formName, "Ext", "Form.xml"))
+}
+
+func contextMetadataPath(ctx *FileProcessingContext) string {
+	if ctx == nil {
+		return ""
+	}
+
+	if formName, ok := standaloneObjectFormNameFromRelPath(ctx.RelPath); ok && ctx.OwnerKey != "" {
+		return ctx.OwnerKey + ".Form." + formName
+	}
+
+	return ctx.OwnerKey
+}
+
+func standaloneObjectFormNameFromRelPath(relPath string) (string, bool) {
+	parts := strings.Split(filepath.ToSlash(relPath), "/")
+	if len(parts) != 4 || !strings.EqualFold(parts[2], "Forms") {
+		return "", false
+	}
+
+	formFile := parts[3]
+	if !strings.EqualFold(filepath.Ext(formFile), ".xml") {
+		return "", false
+	}
+
+	formName := strings.TrimSuffix(formFile, filepath.Ext(formFile))
+	if strings.TrimSpace(formName) == "" {
+		return "", false
+	}
+
+	return formName, true
+}
+
+func isStandaloneObjectFormMetadataContext(ctx *FileProcessingContext) bool {
+	if ctx == nil || !ctx.Metadata {
+		return false
+	}
+	_, ok := standaloneObjectFormNameFromRelPath(ctx.RelPath)
+	return ok
+}
+
+func rewriteBorrowedTargetFormMetadata(doc *etree.Document, baseFormUUID string) bool {
+	target := metadataTargetElement(doc)
+	if target == nil {
+		return false
+	}
+
+	properties := target.FindElement("./Properties")
+	if properties == nil {
+		properties = target.CreateElement("Properties")
+	}
+
+	name := strings.TrimSpace(propertyName(properties))
+	comment := textOf(properties, "Comment")
+	formType := textOf(properties, "FormType")
+	if formType == "" {
+		formType = "Managed"
+	}
+
+	removeAllChildren(properties)
+	addSimpleElement(properties, "ObjectBelonging", "Adopted")
+	addSimpleElement(properties, "Name", name)
+	addSimpleElement(properties, "Comment", comment)
+	addSimpleElement(properties, "ExtendedConfigurationObject", baseFormUUID)
+	addSimpleElement(properties, "FormType", formType)
+
+	for _, child := range append([]etree.Token(nil), target.Child...) {
+		el, ok := child.(*etree.Element)
+		if !ok {
+			continue
+		}
+		tag := localName(el.Tag)
+		if tag == "InternalInfo" || tag == "Properties" {
+			continue
+		}
+		target.RemoveChild(el)
+	}
+
+	internalInfo := target.FindElement("./InternalInfo")
+	if internalInfo == nil {
+		internalInfo = etree.NewElement("InternalInfo")
+		target.InsertChildAt(0, internalInfo)
+	}
+	ensureRootPropertyState(internalInfo, "Form")
+	return true
+}
+
+func rewriteBorrowedTargetFormDocument(doc *etree.Document, ownerMetadataDoc *etree.Document, relPath string) bool {
+	root := doc.Root()
+	if root == nil {
+		return false
+	}
+
+	changed := false
+	formAttributeIDs, mainAttributeName, mainAttributeID := collectBorrowedTargetFormAttributeIDs(root)
+	ownerAttributeUUIDs := collectBorrowedTargetOwnerAttributeUUIDs(ownerMetadataDoc)
+	removeCollections := map[string]struct{}{
+		"CommandInterface": {},
+		"Commands":         {},
+		"Events":           {},
+	}
+	removeLeafs := map[string]struct{}{
+		"Field":              {},
+		"FooterDataPath":     {},
+		"MainTable":          {},
+		"RowPictureDataPath": {},
+		"TitleDataPath":      {},
+	}
+
+	var walk func(*etree.Element)
+	walk = func(el *etree.Element) {
+		for _, child := range append([]etree.Token(nil), el.Child...) {
+			childEl, ok := child.(*etree.Element)
+			if !ok {
+				continue
+			}
+
+			tag := localName(childEl.Tag)
+			if tag == "Attributes" {
+				if len(childEl.Child) != 0 {
+					removeAllChildren(childEl)
+					changed = true
+				}
+				continue
+			}
+			if _, remove := removeCollections[tag]; remove {
+				el.RemoveChild(childEl)
+				changed = true
+				continue
+			}
+			if tag == "DataPath" && childEl.Space == "" && !strings.Contains(childEl.Tag, ":") {
+				el.RemoveChild(childEl)
+				changed = true
+				continue
+			}
+			if _, remove := removeLeafs[tag]; remove {
+				el.RemoveChild(childEl)
+				changed = true
+				continue
+			}
+			if tag == "CommandName" && strings.TrimSpace(childEl.Text()) != "0" {
+				childEl.SetText("0")
+				changed = true
+			}
+			if tag == "DataPath" && (childEl.Space == "xr" || strings.Contains(childEl.Tag, ":")) {
+				value := strings.TrimSpace(childEl.Text())
+				rewritten := rewriteBorrowedTargetXRDataPath(value, formAttributeIDs, mainAttributeName, mainAttributeID, ownerAttributeUUIDs)
+				if rewritten != value {
+					childEl.SetText(rewritten)
+					changed = true
+				} else if !isBorrowedTargetInternalXRDataPath(value) {
+					if strings.EqualFold(localName(el.Tag), "Link") {
+						if parent := el.Parent(); parent != nil {
+							parent.RemoveChild(el)
+							changed = true
+							return
+						}
+					}
+					el.RemoveChild(childEl)
+					changed = true
+					continue
+				}
+			}
+
+			walk(childEl)
+		}
+	}
+
+	walk(root)
+	keepChoiceTableCommands := isSelectionFormRelPath(relPath)
+	changed = removeFormLevelExcludedStandardCommandsBySet(doc, invalidBorrowedAdoptedFormLevelExcludedFormCommands()) || changed
+	changed = removeChoiceTableExcludedStandardCommandsBySet(doc, keepChoiceTableCommands, invalidBorrowedAdoptedNestedExcludedFormCommands()) || changed
+	changed = removeCommandSetExcludedStandardCommandsBySet(doc, keepChoiceTableCommands, invalidBorrowedAdoptedNestedExcludedFormCommands()) || changed
+	return changed
+}
+
+func isBorrowedTargetInternalXRDataPath(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+
+	i := 0
+	for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+		i++
+	}
+	if i == 0 {
+		return false
+	}
+	if i == len(value) {
+		return true
+	}
+
+	return value[i] == '/' || value[i] == ':'
+}
+
+func collectBorrowedTargetFormAttributeIDs(root *etree.Element) (map[string]string, string, string) {
+	result := make(map[string]string)
+	if root == nil {
+		return result, "", ""
+	}
+
+	mainName := ""
+	mainID := ""
+	for _, attr := range root.FindElements(".//*[local-name()='Attribute']") {
+		name := strings.TrimSpace(attr.SelectAttrValue("name", ""))
+		id := strings.TrimSpace(attr.SelectAttrValue("id", ""))
+		if name == "" || id == "" {
+			continue
+		}
+		result[name] = id
+		if strings.EqualFold(strings.TrimSpace(textOfFirst(attr, "./*[local-name()='MainAttribute']")), "true") {
+			mainName = name
+			mainID = id
+		}
+	}
+
+	if mainName == "" {
+		mainName = "Объект"
+		mainID = result[mainName]
+	}
+
+	return result, mainName, mainID
+}
+
+func collectBorrowedTargetOwnerAttributeUUIDs(ownerMetadataDoc *etree.Document) map[string]string {
+	result := make(map[string]string)
+	if ownerMetadataDoc == nil || ownerMetadataDoc.Root() == nil {
+		return result
+	}
+
+	for _, attr := range ownerMetadataDoc.FindElements(".//*[local-name()='Attribute']") {
+		uuid := normalizeGUIDValue(attr.SelectAttrValue("uuid", ""))
+		if uuid == "" {
+			continue
+		}
+		name := strings.TrimSpace(textOfFirst(attr, "./*[local-name()='Properties']/*[local-name()='Name']"))
+		if name == "" {
+			continue
+		}
+		result[name] = uuid
+	}
+
+	return result
+}
+
+func rewriteBorrowedTargetXRDataPath(
+	value string,
+	formAttributeIDs map[string]string,
+	mainAttributeName string,
+	mainAttributeID string,
+	ownerAttributeUUIDs map[string]string,
+) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return value
+	}
+
+	if id := strings.TrimSpace(formAttributeIDs[value]); id != "" {
+		return id
+	}
+
+	if mainAttributeName == "" || mainAttributeID == "" {
+		return value
+	}
+
+	prefix := mainAttributeName + "."
+	if !strings.HasPrefix(value, prefix) {
+		return value
+	}
+
+	name := strings.TrimSpace(strings.TrimPrefix(value, prefix))
+	if name == "" || strings.Contains(name, ".") {
+		return value
+	}
+	if uuid := strings.TrimSpace(ownerAttributeUUIDs[name]); uuid != "" {
+		return mainAttributeID + "/0:" + uuid
+	}
+	if standardID := borrowedTargetStandardXRDataPathID(name); standardID != "" {
+		return mainAttributeID + "/" + standardID
+	}
+
+	return value
+}
+
+func borrowedTargetStandardXRDataPathID(name string) string {
+	switch strings.TrimSpace(name) {
+	case "Date":
+		return "-3"
+	default:
+		return ""
+	}
 }
 
 func collectMetadataValueContainerRefs(
@@ -4851,6 +5439,7 @@ func newSearchResultState() *searchResultState {
 		ExpectedAdoptedObjects:  make(map[string]struct{}),
 		PreservedPaths:          make(map[string]struct{}),
 		PreservedConfigDumpInfo: make(map[string]struct{}),
+		TargetBorrowedFormPaths: make(map[string]struct{}),
 	}
 }
 
@@ -4859,6 +5448,14 @@ func searchResultPreservesPath(state *searchResultState, path string) bool {
 		return false
 	}
 	_, ok := state.PreservedPaths[path]
+	return ok
+}
+
+func isTargetBorrowedAdoptedFormPath(state *searchResultState, path string) bool {
+	if state == nil || len(state.TargetBorrowedFormPaths) == 0 {
+		return false
+	}
+	_, ok := state.TargetBorrowedFormPaths[path]
 	return ok
 }
 
@@ -6514,6 +7111,10 @@ func removeForbiddenStandardCommands(doc *etree.Document) bool {
 }
 
 func removeInvalidFormLevelExcludedStandardCommands(doc *etree.Document) bool {
+	return removeFormLevelExcludedStandardCommandsBySet(doc, invalidExcludedFormCommands())
+}
+
+func removeFormLevelExcludedStandardCommandsBySet(doc *etree.Document, invalid map[string]struct{}) bool {
 	root := doc.Root()
 	if root == nil {
 		return false
@@ -6523,8 +7124,6 @@ func removeInvalidFormLevelExcludedStandardCommands(doc *etree.Document) bool {
 	if commandSet == nil {
 		return false
 	}
-
-	invalid := invalidExcludedFormCommands()
 
 	changed := false
 	for _, child := range append([]*etree.Element(nil), commandSet.ChildElements()...) {
@@ -6581,12 +7180,14 @@ func isSelectionFormRelPath(relPath string) bool {
 }
 
 func removeInvalidChoiceTableExcludedStandardCommands(doc *etree.Document, keepChoiceTableCommands bool) bool {
+	return removeChoiceTableExcludedStandardCommandsBySet(doc, keepChoiceTableCommands, invalidExcludedFormCommands())
+}
+
+func removeChoiceTableExcludedStandardCommandsBySet(doc *etree.Document, keepChoiceTableCommands bool, invalid map[string]struct{}) bool {
 	root := doc.Root()
 	if root == nil {
 		return false
 	}
-
-	invalid := invalidExcludedFormCommands()
 
 	changed := false
 	for _, table := range root.FindElements(".//*[local-name()='Table']") {
@@ -6626,12 +7227,14 @@ func removeInvalidChoiceTableExcludedStandardCommands(doc *etree.Document, keepC
 }
 
 func removeInvalidNonNativeCommandSetExcludedStandardCommands(doc *etree.Document, keepChoiceTableCommands bool) bool {
+	return removeCommandSetExcludedStandardCommandsBySet(doc, keepChoiceTableCommands, invalidExcludedFormCommands())
+}
+
+func removeCommandSetExcludedStandardCommandsBySet(doc *etree.Document, keepChoiceTableCommands bool, invalid map[string]struct{}) bool {
 	root := doc.Root()
 	if root == nil {
 		return false
 	}
-
-	invalid := invalidExcludedFormCommands()
 
 	changed := false
 	for _, commandSet := range root.FindElements(".//*[local-name()='CommandSet']") {
@@ -6668,16 +7271,61 @@ func removeInvalidNonNativeCommandSetExcludedStandardCommands(doc *etree.Documen
 	return changed
 }
 
+func invalidLoadErrorExcludedFormCommands() map[string]struct{} {
+	invalid := invalidExcludedFormCommands()
+	delete(invalid, "Create")
+	return invalid
+}
+
+func invalidBorrowedAdoptedFormLevelExcludedFormCommands() map[string]struct{} {
+	invalid := invalidExcludedFormCommands()
+	for _, name := range []string{
+		"ClearTableMarksAppearance",
+		"CreateFolder",
+		"FindByCurrentValue",
+		"Pickup",
+		"Choose",
+		"Refresh",
+		"SearchEverywhere",
+		"SearchHistory",
+	} {
+		invalid[name] = struct{}{}
+	}
+	return invalid
+}
+
+func invalidBorrowedAdoptedNestedExcludedFormCommands() map[string]struct{} {
+	invalid := invalidBorrowedAdoptedFormLevelExcludedFormCommands()
+	invalid["SetDeletionMark"] = struct{}{}
+	return invalid
+}
+
 func invalidExcludedFormCommands() map[string]struct{} {
 	return map[string]struct{}{
-		"Change":        {},
-		"ChangeHistory": {},
-		"Copy":          {},
-		"Create":        {},
-		"Delete":        {},
-		"GetURL":        {},
-		"MoveItem":      {},
-		"WriteAndClose": {},
+		"Add":                   {},
+		"CancelSearch":          {},
+		"Change":                {},
+		"ChangeHistory":         {},
+		"Copy":                  {},
+		"CopyToClipboard":       {},
+		"Create":                {},
+		"Delete":                {},
+		"EndEdit":               {},
+		"Find":                  {},
+		"GetURL":                {},
+		"HierarchicalList":      {},
+		"List":                  {},
+		"MoveDown":              {},
+		"MoveItem":              {},
+		"MoveUp":                {},
+		"OutputList":            {},
+		"SelectAll":             {},
+		"ShowMultipleSelection": {},
+		"ShowRowRearrangement":  {},
+		"SortListAsc":           {},
+		"SortListDesc":          {},
+		"Tree":                  {},
+		"WriteAndClose":         {},
 	}
 }
 
@@ -6757,6 +7405,9 @@ func isFormCleanupContext(ctx *FileProcessingContext) bool {
 	return ctx.OwnerKind == "CommonForm" && strings.EqualFold(ctx.FileName, "Form.xml")
 }
 
+// TODO: temporary safety switch. Native forms must stay untouched until a provably safe minimal cleanup exists.
+const enableNativeFormCleanup = false
+
 func cleanupFormDocumentIndexed(
 	ctx *FileProcessingContext,
 	contexts []*FileProcessingContext,
@@ -6774,6 +7425,15 @@ func cleanupFormDocumentIndexed(
 	if !ok {
 		changed = removeInvalidChoiceTableExcludedStandardCommands(ctx.Doc, isSelectionFormRelPath(ctx.RelPath)) || changed
 		changed = removeInvalidFormLevelExcludedStandardCommands(ctx.Doc) || changed
+		return changed
+	}
+
+	if decision.Belonging == "Native" && !enableNativeFormCleanup {
+		invalid := invalidLoadErrorExcludedFormCommands()
+		keepChoiceTableCommands := isSelectionFormRelPath(ctx.RelPath)
+		changed = removeChoiceTableExcludedStandardCommandsBySet(ctx.Doc, keepChoiceTableCommands, invalid) || changed
+		changed = removeCommandSetExcludedStandardCommandsBySet(ctx.Doc, keepChoiceTableCommands, invalid) || changed
+		changed = removeFormLevelExcludedStandardCommandsBySet(ctx.Doc, invalid) || changed
 		return changed
 	}
 
@@ -7966,12 +8626,15 @@ func cleanupNonNativeFormStandardCommands(doc *etree.Document) bool {
 	return changed
 }
 
-func cleanupFinalNonNativeFormNoise(contexts []*FileProcessingContext, indexes *contextIndexes, decisions map[string]objectDecision) (changedFiles int, writtenFiles int, err error) {
+func cleanupFinalNonNativeFormNoise(contexts []*FileProcessingContext, indexes *contextIndexes, decisions map[string]objectDecision, searchResultState *searchResultState) (changedFiles int, writtenFiles int, err error) {
 	for _, ctx := range contexts {
 		if ctx == nil || ctx.Doc == nil {
 			continue
 		}
 		if !isFormCleanupContext(ctx) {
+			continue
+		}
+		if isTargetBorrowedAdoptedFormPath(searchResultState, ctx.Path) {
 			continue
 		}
 
@@ -8367,7 +9030,7 @@ func collectMetadataBindingTargetsByDoc(
 		if ctx == nil || ctx.Doc == nil || ctx.OwnerKey == "" {
 			continue
 		}
-		targets := collectMetadataBindingTargets(ctx.Doc, ctx.OwnerKey, baseBindings, decisions, adoptedStubMetaDataRules)
+		targets := collectMetadataBindingTargets(ctx.Doc, contextMetadataPath(ctx), baseBindings, decisions, adoptedStubMetaDataRules)
 		if len(targets) == 0 {
 			continue
 		}
@@ -11087,6 +11750,9 @@ func finalizeRetainedOwnerCommands(
 			continue
 		}
 		if !isFormCleanupContext(ctx) {
+			continue
+		}
+		if isTargetBorrowedAdoptedFormPath(searchResultState, ctx.Path) {
 			continue
 		}
 		if _, excluded := excludedPaths[ctx.Path]; excluded {

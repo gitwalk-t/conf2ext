@@ -1,5 +1,5 @@
 {
-    "platform_version": "8.3.27",
+    "platform_version": "8.5.1",
     "keep_xml_dump": true,
     "stop_after_xml_dump": true,
     "enable_form_validation": false,

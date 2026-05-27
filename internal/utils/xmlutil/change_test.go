@@ -1191,14 +1191,26 @@ func TestCleanupFormDocumentIndexedNonNativeStillRemovesMissingDynamicListFields
 	}
 }
 
-func TestCleanupFormDocumentIndexedNativeStillRemovesBlockedNonNativeReferences(t *testing.T) {
+func TestCleanupFormDocumentIndexedNativeSafetySwitchOnlyRemovesLoadErrorExcludedCommands(t *testing.T) {
 	t.Parallel()
 
 	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
 <Form xmlns="http://v8.1c.ru/8.3/xcf/logform" xmlns:v8="http://v8.1c.ru/8.1/data/core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <CommandSet>
+    <ExcludedCommand>Change</ExcludedCommand>
+    <ExcludedCommand>Create</ExcludedCommand>
+  </CommandSet>
   <ChildItems>
+    <Button name="Открыть">
+      <Type>CommandBarButton</Type>
+      <CommandName>Catalog.НенативныйСписок.Command.Открыть</CommandName>
+    </Button>
     <Table name="ВнешнийСписок">
       <DataPath>ВнешнийСписок</DataPath>
+      <CommandSet>
+        <ExcludedCommand>Add</ExcludedCommand>
+        <ExcludedCommand>Create</ExcludedCommand>
+      </CommandSet>
     </Table>
   </ChildItems>
   <Attributes>
@@ -1208,9 +1220,17 @@ func TestCleanupFormDocumentIndexedNativeStillRemovesBlockedNonNativeReferences(
       </Type>
       <Settings xsi:type="DynamicList">
         <MainTable>Catalog.НенативныйСписок</MainTable>
+        <Fields>
+          <Field>Ref</Field>
+        </Fields>
       </Settings>
     </Attribute>
   </Attributes>
+  <Commands>
+    <Command name="ЛокальнаяКоманда">
+      <Action>ЛокальнаяКоманда</Action>
+    </Command>
+  </Commands>
 </Form>`)
 	formCtx := &FileProcessingContext{
 		Doc:       formDoc,
@@ -1226,10 +1246,44 @@ func TestCleanupFormDocumentIndexedNativeStillRemovesBlockedNonNativeReferences(
 	}
 
 	if !cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
-		t.Fatalf("expected native cleanup to remove blocked non-native dynamic list reference")
+		t.Fatalf("expected native safety switch to remove load-error excluded commands")
 	}
-	if formDocHasDataPath(formDoc, "ВнешнийСписок") {
-		t.Fatalf("expected blocked non-native table to be removed from native form")
+
+	commandSet := formDoc.Root().FindElement("./*[local-name()='CommandSet']")
+	if commandSet == nil {
+		t.Fatalf("expected root command set to remain")
+	}
+	rootCommands := collectExcludedCommands(commandSet)
+	if _, ok := rootCommands["Create"]; !ok {
+		t.Fatalf("expected root Create flag to remain in native safety mode")
+	}
+	if _, ok := rootCommands["Change"]; ok {
+		t.Fatalf("expected root invalid Change flag to be removed in native safety mode")
+	}
+
+	tableCommandSet := formDoc.Root().FindElement(".//*[local-name()='Table']/*[local-name()='CommandSet']")
+	if tableCommandSet == nil {
+		t.Fatalf("expected nested table command set to remain")
+	}
+	tableCommands := collectExcludedCommands(tableCommandSet)
+	if _, ok := tableCommands["Create"]; !ok {
+		t.Fatalf("expected nested Create flag to remain in native safety mode")
+	}
+	if _, ok := tableCommands["Add"]; ok {
+		t.Fatalf("expected nested invalid Add flag to be removed in native safety mode")
+	}
+
+	if commandName := formElementCommandName(formDoc, "Открыть"); commandName != "Catalog.НенативныйСписок.Command.Открыть" {
+		t.Fatalf("expected command name to remain unchanged, got %q", commandName)
+	}
+	if !hasFormCommandDefinition(formDoc, "ЛокальнаяКоманда") {
+		t.Fatalf("expected local command definition to remain")
+	}
+	if !formDocHasDataPath(formDoc, "ВнешнийСписок") {
+		t.Fatalf("expected DataPath to remain unchanged")
+	}
+	if !dynamicListFieldDeclared(formDoc, "ВнешнийСписок", "Ref") {
+		t.Fatalf("expected dynamic-list declared field to remain unchanged")
 	}
 }
 
@@ -1291,8 +1345,8 @@ func TestCleanupFormDocumentIndexedNativeKeepsPM5CommandsWithCommonPictureAndFun
 		"Catalog.НенативныйСправочник":                {Belonging: "AdoptedStub"},
 	}
 
-	if !cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
-		t.Fatalf("expected native form cleanup to keep PM5 commands while removing unrelated non-native refs")
+	if cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
+		t.Fatalf("expected native safety mode to keep form unchanged when there are no invalid excluded commands")
 	}
 
 	for _, value := range []string{
@@ -1309,8 +1363,8 @@ func TestCleanupFormDocumentIndexedNativeKeepsPM5CommandsWithCommonPictureAndFun
 		}
 	}
 
-	if formDocContainsText(formDoc, "Catalog.НенативныйСправочник.Command.ОткрытьНенативнуюФорму") {
-		t.Fatalf("expected unrelated blocked metadata command reference to be removed")
+	if !formDocContainsText(formDoc, "Catalog.НенативныйСправочник.Command.ОткрытьНенативнуюФорму") {
+		t.Fatalf("expected unrelated metadata command reference to remain in native safety mode")
 	}
 }
 
@@ -1376,7 +1430,7 @@ func TestCleanupFormDocumentIndexedNativeKeepsTelegramUserMappingCommandWithComm
 	}
 
 	if !cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
-		t.Fatalf("expected native form cleanup to keep telegram user mapping command")
+		t.Fatalf("expected native safety switch to remove load-error excluded commands")
 	}
 
 	for _, value := range []string{
@@ -1404,14 +1458,11 @@ func TestCleanupFormDocumentIndexedNativeKeepsTelegramUserMappingCommandWithComm
 		telegramTableCommandSet = table.FindElement("./*[local-name()='CommandSet']")
 		break
 	}
-	if telegramTableCommandSet == nil {
-		t.Fatalf("expected telegram user-mapping table command set to remain")
+	if telegramTableCommandSet != nil {
+		t.Fatalf("expected telegram user-mapping table command set with only invalid commands to be removed")
 	}
-	if _, ok := collectExcludedCommands(telegramTableCommandSet)["Copy"]; !ok {
-		t.Fatalf("expected telegram user-mapping table copy command to remain")
-	}
-	if formDocContainsText(formDoc, "Catalog.НенативныйСправочник.Command.ОткрытьНенативнуюФорму") {
-		t.Fatalf("expected unrelated blocked metadata command reference to be removed")
+	if !formDocContainsText(formDoc, "Catalog.НенативныйСправочник.Command.ОткрытьНенативнуюФорму") {
+		t.Fatalf("expected unrelated metadata command reference to remain in native safety mode")
 	}
 }
 
@@ -1487,7 +1538,7 @@ func TestCleanupFormDocumentIndexedKeepsIssue22NativeCharacteristicTypeCommandIt
 	}
 }
 
-func TestCleanupFormDocumentIndexedRemovesForbiddenChoiceTableFlagsForNativeForms(t *testing.T) {
+func TestCleanupFormDocumentIndexedRemovesForbiddenChoiceTableFlagsForNonNativeForms(t *testing.T) {
 	t.Parallel()
 
 	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
@@ -1516,29 +1567,25 @@ func TestCleanupFormDocumentIndexedRemovesForbiddenChoiceTableFlagsForNativeForm
 	contexts := []*FileProcessingContext{formCtx}
 	indexes := buildContextIndexes(contexts)
 	decisions := map[string]objectDecision{
-		"InformationRegister.упо_ДиспетчерыРесурсовИтоговые": {Belonging: "Native"},
+		"InformationRegister.упо_ДиспетчерыРесурсовИтоговые": {Belonging: "AdoptedStub"},
 	}
 
 	if !cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
-		t.Fatalf("expected native register choice-table forbidden command flags to be cleaned")
+		t.Fatalf("expected non-native register choice-table forbidden command flags to be cleaned")
 	}
 
 	commandSet := formDoc.Root().FindElement(".//*[local-name()='Table']/*[local-name()='CommandSet']")
-	if commandSet == nil {
-		t.Fatalf("expected native register table command set to remain")
+	if commandSet != nil {
+		t.Fatalf("expected non-native choice-table command set with only invalid commands to be removed")
 	}
-	remaining := collectExcludedCommands(commandSet)
-	if _, ok := remaining["Change"]; ok {
-		t.Fatalf("expected native choice-table forbidden command flag Change to be removed")
-	}
-	for _, command := range []string{"Copy", "Create", "Delete"} {
-		if _, ok := remaining[command]; !ok {
-			t.Fatalf("expected native choice-table standard command flag %q to remain", command)
+	for _, command := range []string{"Change", "Copy", "Create", "Delete"} {
+		if formDocContainsText(formDoc, command) {
+			t.Fatalf("expected non-native invalid choice-table command %q to be removed", command)
 		}
 	}
 }
 
-func TestCleanupFormDocumentIndexedRemovesNativeShadowedForbiddenExcludedCommands(t *testing.T) {
+func TestCleanupFormDocumentIndexedRemovesShadowedForbiddenExcludedCommandsForNonNativeForms(t *testing.T) {
 	t.Parallel()
 
 	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
@@ -1584,23 +1631,16 @@ func TestCleanupFormDocumentIndexedRemovesNativeShadowedForbiddenExcludedCommand
 	contexts := []*FileProcessingContext{formCtx}
 	indexes := buildContextIndexes(contexts)
 	decisions := map[string]objectDecision{
-		"Catalog.упо_НаборыПроектныхОпций": {Belonging: "Native"},
+		"Catalog.упо_НаборыПроектныхОпций": {Belonging: "AdoptedStub"},
 	}
 
 	if !cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
-		t.Fatalf("expected native form cleanup to remove forbidden standard Change flags")
+		t.Fatalf("expected non-native form cleanup to remove forbidden standard Change flags")
 	}
 
 	rootCommandSet := formDoc.Root().FindElement("./*[local-name()='CommandSet']")
-	if rootCommandSet == nil {
-		t.Fatalf("expected root command set to remain")
-	}
-	rootRemaining := collectExcludedCommands(rootCommandSet)
-	if _, ok := rootRemaining["Change"]; ok {
-		t.Fatalf("expected native root Change flag to be removed")
-	}
-	if _, ok := rootRemaining["Copy"]; !ok {
-		t.Fatalf("expected unrelated root Copy flag to remain")
+	if rootCommandSet != nil {
+		t.Fatalf("expected root command set with only invalid commands to be removed")
 	}
 
 	tableCommandSet := formDoc.Root().FindElement(".//*[local-name()='Table']/*[local-name()='CommandSet']")
@@ -1608,11 +1648,10 @@ func TestCleanupFormDocumentIndexedRemovesNativeShadowedForbiddenExcludedCommand
 		t.Fatalf("expected table command set to remain")
 	}
 	tableRemaining := collectExcludedCommands(tableCommandSet)
-	if _, ok := tableRemaining["Change"]; ok {
-		t.Fatalf("expected native table Change flag to be removed")
-	}
-	if _, ok := tableRemaining["Copy"]; !ok {
-		t.Fatalf("expected unrelated table Copy flag to remain")
+	for _, command := range []string{"Change", "Copy"} {
+		if _, ok := tableRemaining[command]; !ok {
+			t.Fatalf("expected nested excluded command %q to remain until final non-native cleanup", command)
+		}
 	}
 
 	if !hasFormCommandDefinition(formDoc, "КомандаИзменитьЗначениеНабора") {
@@ -1623,7 +1662,7 @@ func TestCleanupFormDocumentIndexedRemovesNativeShadowedForbiddenExcludedCommand
 	}
 }
 
-func TestCleanupFormDocumentIndexedRemovesForbiddenStandardCommandsForNativeForms(t *testing.T) {
+func TestCleanupFormDocumentIndexedRemovesForbiddenStandardCommandsForNonNativeForms(t *testing.T) {
 	t.Parallel()
 
 	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
@@ -1665,11 +1704,11 @@ func TestCleanupFormDocumentIndexedRemovesForbiddenStandardCommandsForNativeForm
 	contexts := []*FileProcessingContext{formCtx}
 	indexes := buildContextIndexes(contexts)
 	decisions := map[string]objectDecision{
-		"Catalog.упо_ДокументыОбязательств": {Belonging: "Native"},
+		"Catalog.упо_ДокументыОбязательств": {Belonging: "AdoptedStub"},
 	}
 
 	if !cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
-		t.Fatalf("expected native form cleanup to remove forbidden standard command references")
+		t.Fatalf("expected non-native form cleanup to remove forbidden standard command references")
 	}
 
 	for _, forbidden := range []string{
@@ -1686,12 +1725,9 @@ func TestCleanupFormDocumentIndexedRemovesForbiddenStandardCommandsForNativeForm
 		t.Fatalf("expected table command set to remain")
 	}
 	remaining := collectExcludedCommands(commandSet)
-	if _, ok := remaining["Change"]; ok {
-		t.Fatalf("expected excluded command Change to be removed")
-	}
-	for _, command := range []string{"Copy", "Delete"} {
+	for _, command := range []string{"Change", "Copy", "Delete"} {
 		if _, ok := remaining[command]; !ok {
-			t.Fatalf("expected excluded command %q to remain", command)
+			t.Fatalf("expected excluded command %q to remain before final non-native cleanup", command)
 		}
 	}
 	if !formDocContainsText(formDoc, "Form.Item.СопоставлениеРеквизитов.StandardCommand.Refresh") {
@@ -1797,7 +1833,7 @@ func TestCleanupFormDocumentIndexedRemovesOnlyRootFormExcludedStandardCommands(t
 	}
 }
 
-func TestCleanupFormDocumentIndexedRemovesForbiddenNativeChoiceTableExcludedCommandsInOrdinaryForms(t *testing.T) {
+func TestCleanupFormDocumentIndexedRemovesForbiddenChoiceTableExcludedCommandsInNonNativeOrdinaryForms(t *testing.T) {
 	t.Parallel()
 
 	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
@@ -1872,11 +1908,11 @@ func TestCleanupFormDocumentIndexedRemovesForbiddenNativeChoiceTableExcludedComm
 	contexts := []*FileProcessingContext{formCtx}
 	indexes := buildContextIndexes(contexts)
 	decisions := map[string]objectDecision{
-		"Catalog.Пользователи": {Belonging: "Native"},
+		"Catalog.Пользователи": {Belonging: "AdoptedStub"},
 	}
 
 	if !cleanupFormDocumentIndexed(formCtx, contexts, indexes, decisions, collectNonNativeKeys(decisions)) {
-		t.Fatalf("expected native ordinary form cleanup to remove forbidden choice-table command flags")
+		t.Fatalf("expected non-native ordinary form cleanup to remove forbidden choice-table command flags")
 	}
 
 	findTableCommandSetByName := func(name string) *etree.Element {
@@ -1890,24 +1926,26 @@ func TestCleanupFormDocumentIndexedRemovesForbiddenNativeChoiceTableExcludedComm
 	}
 
 	groupTableCommandSet := findTableCommandSetByName("ГруппыПользователей")
-	if groupTableCommandSet == nil {
-		t.Fatalf("expected users choice-table command set to remain in native form")
-	}
-	if _, ok := collectExcludedCommands(groupTableCommandSet)["Delete"]; !ok {
-		t.Fatalf("expected native users choice-table Delete flag to remain")
+	if groupTableCommandSet != nil {
+		t.Fatalf("expected users choice-table command set with only invalid commands to be removed")
 	}
 
 	fileTableCommandSet := findTableCommandSetByName("Список")
 	if fileTableCommandSet == nil {
-		t.Fatalf("expected file list command set to remain in native form")
+		t.Fatalf("expected file list command set to remain in non-native form")
 	}
 	remaining := collectExcludedCommands(fileTableCommandSet)
 	if _, ok := remaining["Change"]; ok {
-		t.Fatalf("expected native choice-table command Change to be removed")
+		t.Fatalf("expected non-native choice-table command Change to be removed")
 	}
-	for _, command := range []string{"CancelSearch", "Choose", "Copy", "CopyToClipboard", "Create", "Delete", "DynamicListStandardSettings", "Find", "MoveItem", "Refresh"} {
+	for _, command := range []string{"Choose", "DynamicListStandardSettings", "Refresh"} {
 		if _, ok := remaining[command]; !ok {
-			t.Fatalf("expected native choice-table command %q to remain", command)
+			t.Fatalf("expected non-native choice-table command %q to remain", command)
+		}
+	}
+	for _, command := range []string{"CancelSearch", "Copy", "CopyToClipboard", "Create", "Delete", "Find", "MoveItem"} {
+		if _, ok := remaining[command]; ok {
+			t.Fatalf("expected non-native invalid choice-table command %q to be removed", command)
 		}
 	}
 }
@@ -4252,6 +4290,7 @@ func TestCleanupFinalNonNativeFormNoiseRemovesAdoptedChoiceTableExcludedCommands
       <ChoiceMode>true</ChoiceMode>
       <DataPath>ДеревоРеквизитов</DataPath>
       <CommandSet>
+        <ExcludedCommand>Choose</ExcludedCommand>
         <ExcludedCommand>Add</ExcludedCommand>
         <ExcludedCommand>Change</ExcludedCommand>
         <ExcludedCommand>Copy</ExcludedCommand>
@@ -4273,7 +4312,7 @@ func TestCleanupFinalNonNativeFormNoiseRemovesAdoptedChoiceTableExcludedCommands
 		"Catalog.ПравилаИнтеграцииС1СДокументооборотом": {Belonging: "Adopted"},
 	}
 
-	changedFiles, writtenFiles, err := cleanupFinalNonNativeFormNoise(contexts, buildContextIndexes(contexts), decisions)
+	changedFiles, writtenFiles, err := cleanupFinalNonNativeFormNoise(contexts, buildContextIndexes(contexts), decisions, nil)
 	if err != nil {
 		t.Fatalf("cleanupFinalNonNativeFormNoise returned error: %v", err)
 	}
@@ -4286,13 +4325,50 @@ func TestCleanupFinalNonNativeFormNoiseRemovesAdoptedChoiceTableExcludedCommands
 		t.Fatalf("expected non-invalid adopted command set content to remain")
 	}
 	remaining := collectExcludedCommands(tableCommandSet)
-	if _, ok := remaining["Add"]; !ok {
+	if _, ok := remaining["Choose"]; !ok {
 		t.Fatalf("expected allowed adopted command flag to remain")
 	}
-	for _, command := range []string{"Change", "Copy", "Delete"} {
+	for _, command := range []string{"Add", "Change", "Copy", "Delete"} {
 		if _, ok := remaining[command]; ok {
 			t.Fatalf("expected adopted command flag %q to be removed from final form cleanup", command)
 		}
+	}
+}
+
+func TestCleanupFinalNonNativeFormNoiseSkipsTargetBorrowedForms(t *testing.T) {
+	t.Parallel()
+
+	tempPath := filepath.Join(t.TempDir(), "Form.xml")
+	formDoc := mustReadTestXML(t, `<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform">
+  <CommandSet>
+    <ExcludedCommand>Change</ExcludedCommand>
+  </CommandSet>
+</Form>`)
+	formCtx := &FileProcessingContext{
+		Doc:       formDoc,
+		OwnerKey:  "Document.ЗаказПокупателя",
+		OwnerKind: "Document",
+		FileName:  "Form.xml",
+		Path:      tempPath,
+		RelPath:   "Documents/ЗаказПокупателя/Forms/ФормаДокумента/Ext/Form.xml",
+	}
+	contexts := []*FileProcessingContext{formCtx}
+	decisions := map[string]objectDecision{
+		"Document.ЗаказПокупателя": {Belonging: "Adopted"},
+	}
+	state := newSearchResultState()
+	state.TargetBorrowedFormPaths[tempPath] = struct{}{}
+
+	changedFiles, writtenFiles, err := cleanupFinalNonNativeFormNoise(contexts, buildContextIndexes(contexts), decisions, state)
+	if err != nil {
+		t.Fatalf("cleanupFinalNonNativeFormNoise returned error: %v", err)
+	}
+	if changedFiles != 0 || writtenFiles != 0 {
+		t.Fatalf("expected target-borrowed form to skip final cleanup, got changed=%d written=%d", changedFiles, writtenFiles)
+	}
+	if got := collectExcludedCommands(formDoc.Root().FindElement("./CommandSet")); len(got) != 1 {
+		t.Fatalf("expected target-borrowed command set to stay intact, got %#v", got)
 	}
 }
 
@@ -4573,6 +4649,7 @@ func TestRemoveInvalidNonNativeCommandSetExcludedStandardCommands(t *testing.T) 
   <ChildItems>
     <Table name="Список">
       <CommandSet>
+        <ExcludedCommand>Choose</ExcludedCommand>
         <ExcludedCommand>Add</ExcludedCommand>
         <ExcludedCommand>Change</ExcludedCommand>
         <ExcludedCommand>Copy</ExcludedCommand>
@@ -4591,10 +4668,10 @@ func TestRemoveInvalidNonNativeCommandSetExcludedStandardCommands(t *testing.T) 
 		t.Fatalf("expected command set with allowed entries to remain")
 	}
 	remaining := collectExcludedCommands(tableCommandSet)
-	if _, ok := remaining["Add"]; !ok {
+	if _, ok := remaining["Choose"]; !ok {
 		t.Fatalf("expected allowed command to remain")
 	}
-	for _, command := range []string{"Change", "Copy", "Delete"} {
+	for _, command := range []string{"Add", "Change", "Copy", "Delete"} {
 		if _, ok := remaining[command]; ok {
 			t.Fatalf("expected invalid non-native command %q to be removed", command)
 		}
@@ -9256,6 +9333,479 @@ func TestCollectSearchResultStatePromotesExcludedObjectAndPreservesFormPaths(t *
 	}
 	if !strings.Contains(write.Content, `&После("ОткрытьФорму")`) || !strings.Contains(write.Content, "Процедура упо_ОткрытьФорму()") {
 		t.Fatalf("unexpected generated module content:\n%s", write.Content)
+	}
+}
+
+func TestApplyTargetBorrowedAdoptedFormsRewritesPreservedFormUsingTarget(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	targetRoot := filepath.Join(root, "target")
+
+	ownerRelPath := "Documents/ЗаказПокупателя.xml"
+	formMetaRelPath := "Documents/ЗаказПокупателя/Forms/ФормаДокумента.xml"
+	formExtRelPath := "Documents/ЗаказПокупателя/Forms/ФормаДокумента/Ext/Form.xml"
+
+	ownerPath := filepath.Join(root, filepath.FromSlash(ownerRelPath))
+	formMetaPath := filepath.Join(root, filepath.FromSlash(formMetaRelPath))
+	formExtPath := filepath.Join(root, filepath.FromSlash(formExtRelPath))
+	targetOwnerPath := filepath.Join(targetRoot, filepath.FromSlash(ownerRelPath))
+	targetMetaPath := filepath.Join(targetRoot, filepath.FromSlash(formMetaRelPath))
+	targetExtPath := filepath.Join(targetRoot, filepath.FromSlash(formExtRelPath))
+
+	for _, path := range []string{ownerPath, formMetaPath, formExtPath, targetOwnerPath, targetMetaPath, targetExtPath} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+
+	if err := os.WriteFile(ownerPath, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Document uuid="00000000-0000-0000-0000-000000000001">
+    <Properties>
+      <Name>ЗаказПокупателя</Name>
+    </Properties>
+  </Document>
+</MetaDataObject>`), 0o644); err != nil {
+		t.Fatalf("write owner xml: %v", err)
+	}
+	if err := os.WriteFile(formMetaPath, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Form uuid="11111111-1111-1111-1111-111111111111">
+    <Properties>
+      <Name>ФормаДокумента</Name>
+    </Properties>
+  </Form>
+</MetaDataObject>`), 0o644); err != nil {
+		t.Fatalf("write form metadata xml: %v", err)
+	}
+	if err := os.WriteFile(formExtPath, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform"/>`), 0o644); err != nil {
+		t.Fatalf("write form ext xml: %v", err)
+	}
+	if err := os.WriteFile(targetMetaPath, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Form uuid="11111111-1111-1111-1111-111111111111">
+    <Properties>
+      <Name>ФормаДокумента</Name>
+      <Synonym/>
+      <Comment/>
+      <FormType>Managed</FormType>
+      <IncludeHelpInContents>false</IncludeHelpInContents>
+      <UsePurposes/>
+      <UseInInterfaceCompatibilityMode>Any</UseInInterfaceCompatibilityMode>
+    </Properties>
+  </Form>
+</MetaDataObject>`), 0o644); err != nil {
+		t.Fatalf("write target form metadata: %v", err)
+	}
+	if err := os.WriteFile(targetOwnerPath, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses">
+  <Document>
+    <Properties>
+      <Name>ЗаказПокупателя</Name>
+      <StandardAttributes>
+        <xr:StandardAttribute xmlns:xr="http://v8.1c.ru/8.3/xcf/readable" name="Date"/>
+      </StandardAttributes>
+    </Properties>
+    <Attribute uuid="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa">
+      <Properties>
+        <Name>Организация</Name>
+      </Properties>
+    </Attribute>
+  </Document>
+</MetaDataObject>`), 0o644); err != nil {
+		t.Fatalf("write target owner metadata: %v", err)
+	}
+	if err := os.WriteFile(targetExtPath, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <CommandSet>
+    <ExcludedCommand>Post</ExcludedCommand>
+    <ExcludedCommand>SetDeletionMark</ExcludedCommand>
+    <ExcludedCommand>CreateFolder</ExcludedCommand>
+  </CommandSet>
+  <Events>
+    <Event name="OnOpen">ПриОткрытии</Event>
+  </Events>
+  <ChildItems>
+    <Button name="Кнопка">
+      <CommandName>Form.Command.Открыть</CommandName>
+      <TitleDataPath>Объект.Номер</TitleDataPath>
+      <DataPath>Items.Ссылка</DataPath>
+      <ChoiceParameterLinks>
+        <xr:Link>
+          <xr:Name>Отбор.Банк</xr:Name>
+          <xr:DataPath xsi:type="xs:string">Банк</xr:DataPath>
+        </xr:Link>
+        <xr:Link>
+          <xr:Name>Отбор.Организация</xr:Name>
+          <xr:DataPath xsi:type="xs:string">Объект.Организация</xr:DataPath>
+        </xr:Link>
+        <xr:Link>
+          <xr:Name>Отбор.Дата</xr:Name>
+          <xr:DataPath xsi:type="xs:string">Объект.Date</xr:DataPath>
+        </xr:Link>
+        <xr:Link>
+          <xr:Name>Отбор.ТекущаяСтрока</xr:Name>
+          <xr:DataPath xsi:type="xs:string">Items.Список.CurrentData.Номенклатура</xr:DataPath>
+        </xr:Link>
+      </ChoiceParameterLinks>
+    </Button>
+    <Table name="Список">
+      <FooterDataPath>Объект.Список.TotalСумма</FooterDataPath>
+      <CommandSet>
+        <ExcludedCommand>Add</ExcludedCommand>
+        <ExcludedCommand>ClearTableMarksAppearance</ExcludedCommand>
+        <ExcludedCommand>Change</ExcludedCommand>
+        <ExcludedCommand>Choose</ExcludedCommand>
+        <ExcludedCommand>FindByCurrentValue</ExcludedCommand>
+        <ExcludedCommand>Pickup</ExcludedCommand>
+        <ExcludedCommand>Refresh</ExcludedCommand>
+        <ExcludedCommand>SearchEverywhere</ExcludedCommand>
+        <ExcludedCommand>SearchHistory</ExcludedCommand>
+        <ExcludedCommand>SetDeletionMark</ExcludedCommand>
+        <ExcludedCommand>SortListAsc</ExcludedCommand>
+      </CommandSet>
+    </Table>
+  </ChildItems>
+  <Commands>
+    <Command name="Открыть"/>
+  </Commands>
+  <CommandInterface>
+    <NavigationPanel>
+      <Item>
+        <Command>Document.ЗаказПокупателя.StandardCommand.Post</Command>
+      </Item>
+    </NavigationPanel>
+  </CommandInterface>
+  <Attributes>
+    <Attribute name="Объект" id="1">
+      <MainAttribute>true</MainAttribute>
+    </Attribute>
+    <Attribute name="Банк" id="161"/>
+    <Attribute name="Список">
+      <MainTable>Document.ЗаказПокупателя</MainTable>
+      <Columns>
+        <Column>
+          <Field>Список.Ссылка</Field>
+        </Column>
+      </Columns>
+    </Attribute>
+  </Attributes>
+</Form>`), 0o644); err != nil {
+		t.Fatalf("write target ext form: %v", err)
+	}
+
+	ownerDoc, err := readXMLFile(ownerPath)
+	if err != nil {
+		t.Fatalf("read owner doc: %v", err)
+	}
+	formMetaDoc, err := readXMLFile(formMetaPath)
+	if err != nil {
+		t.Fatalf("read form metadata doc: %v", err)
+	}
+	formExtDoc, err := readXMLFile(formExtPath)
+	if err != nil {
+		t.Fatalf("read form ext doc: %v", err)
+	}
+
+	contexts := []*FileProcessingContext{
+		{
+			Doc:              ownerDoc,
+			Path:             ownerPath,
+			RelPath:          ownerRelPath,
+			FileName:         filepath.Base(ownerPath),
+			Metadata:         true,
+			TopLevelMetadata: true,
+			Properties:       findProperties(ownerDoc),
+			OwnerKey:         "Document.ЗаказПокупателя",
+			OwnerKind:        "Document",
+			OwnerName:        "ЗаказПокупателя",
+		},
+		{
+			Doc:        formMetaDoc,
+			Path:       formMetaPath,
+			RelPath:    formMetaRelPath,
+			FileName:   filepath.Base(formMetaPath),
+			Metadata:   true,
+			Properties: findProperties(formMetaDoc),
+			OwnerKey:   "Document.ЗаказПокупателя",
+			OwnerKind:  "Document",
+			OwnerName:  "ЗаказПокупателя",
+		},
+		{
+			Doc:       formExtDoc,
+			Path:      formExtPath,
+			RelPath:   formExtRelPath,
+			FileName:  filepath.Base(formExtPath),
+			OwnerKey:  "Document.ЗаказПокупателя",
+			OwnerKind: "Document",
+			OwnerName: "ЗаказПокупателя",
+		},
+	}
+	indexes := buildContextIndexes(contexts)
+	decisions := map[string]objectDecision{
+		"Document.ЗаказПокупателя": {Belonging: "AdoptedStub", SearchResultCode: true},
+	}
+	state := newSearchResultState()
+	state.ObjectOverlays["Document.ЗаказПокупателя"] = searchResultObjectOverlay{
+		PreserveForms: map[string]struct{}{"ФормаДокумента": {}},
+	}
+	state.PreservedPaths[formMetaPath] = struct{}{}
+	state.PreservedPaths[formExtPath] = struct{}{}
+	state.PreservedConfigDumpInfo["Document.ЗаказПокупателя.Form.ФормаДокумента"] = struct{}{}
+	state.PreservedConfigDumpInfo["Document.ЗаказПокупателя.Form.ФормаДокумента.Form"] = struct{}{}
+
+	cfg := &config.Configuration{}
+	cfg.Target.XMLDump = targetRoot
+
+	contexts, indexes, state, err = applyTargetBorrowedAdoptedForms(cfg, root, contexts, indexes, decisions, state)
+	if err != nil {
+		t.Fatalf("apply target borrowed forms: %v", err)
+	}
+
+	formMetaCtx := findContextByRelPath(indexes, contexts, formMetaRelPath)
+	if got := textOf(formMetaCtx.Properties, "ObjectBelonging"); got != "Adopted" {
+		t.Fatalf("expected adopted form metadata, got %q", got)
+	}
+	if got := textOf(formMetaCtx.Properties, "ExtendedConfigurationObject"); got != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("unexpected ExtendedConfigurationObject: %q", got)
+	}
+	if formMetaCtx.Properties.FindElement("./Synonym") != nil {
+		t.Fatalf("expected borrowed form metadata to drop Synonym")
+	}
+	if formMetaCtx.Properties.FindElement("./UsePurposes") != nil {
+		t.Fatalf("expected borrowed form metadata to drop UsePurposes")
+	}
+	if got := textOfFirst(formMetaCtx.Doc.Root(), ".//*[local-name()='InternalInfo']/*[local-name()='PropertyState']/*[local-name()='Property']"); got != "Form" {
+		t.Fatalf("expected InternalInfo PropertyState(Form), got %q", got)
+	}
+
+	formExtCtx := findContextByRelPath(indexes, contexts, formExtRelPath)
+	commandNames := formExtCtx.Doc.FindElements(".//*[local-name()='CommandName']")
+	if len(commandNames) == 0 {
+		t.Fatalf("expected borrowed form to keep command placeholders")
+	}
+	for _, commandName := range commandNames {
+		if strings.TrimSpace(commandName.Text()) != "0" {
+			t.Fatalf("expected command name to be zeroed, got %q", commandName.Text())
+		}
+	}
+	for _, pattern := range []string{
+		".//*[local-name()='CommandInterface']",
+		".//*[local-name()='Commands']",
+		".//*[local-name()='Events']",
+		".//*[local-name()='Field']",
+		".//*[local-name()='FooterDataPath']",
+		".//*[local-name()='MainTable']",
+		".//*[local-name()='RowPictureDataPath']",
+		".//*[local-name()='TitleDataPath']",
+	} {
+		if found := formExtCtx.Doc.FindElements(pattern); len(found) != 0 {
+			t.Fatalf("expected borrowed form to remove %s, found %d nodes", pattern, len(found))
+		}
+	}
+	formExtSnapshot, err := formExtCtx.Doc.WriteToString()
+	if err != nil {
+		t.Fatalf("snapshot borrowed form ext xml: %v", err)
+	}
+	if strings.Contains(formExtSnapshot, "<DataPath>") {
+		t.Fatalf("expected borrowed form to remove plain DataPath nodes, got:\n%s", formExtSnapshot)
+	}
+	for _, expected := range []string{
+		">161</xr:DataPath>",
+		">1/0:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa</xr:DataPath>",
+		">1/-3</xr:DataPath>",
+	} {
+		if !strings.Contains(formExtSnapshot, expected) {
+			t.Fatalf("expected borrowed form xr:DataPath rewrite %s, got:\n%s", expected, formExtSnapshot)
+		}
+	}
+	for _, unexpected := range []string{
+		"<ExcludedCommand>Add</ExcludedCommand>",
+		"<ExcludedCommand>ClearTableMarksAppearance</ExcludedCommand>",
+		"<ExcludedCommand>Change</ExcludedCommand>",
+		"<ExcludedCommand>Choose</ExcludedCommand>",
+		"<ExcludedCommand>CreateFolder</ExcludedCommand>",
+		"<ExcludedCommand>FindByCurrentValue</ExcludedCommand>",
+		"Items.Список.CurrentData.Номенклатура",
+		"<ExcludedCommand>Pickup</ExcludedCommand>",
+		"<ExcludedCommand>Refresh</ExcludedCommand>",
+		"<ExcludedCommand>SearchEverywhere</ExcludedCommand>",
+		"<ExcludedCommand>SearchHistory</ExcludedCommand>",
+		"<ExcludedCommand>SortListAsc</ExcludedCommand>",
+	} {
+		if strings.Contains(formExtSnapshot, unexpected) {
+			t.Fatalf("expected borrowed form to remove invalid excluded command %s, got:\n%s", unexpected, formExtSnapshot)
+		}
+	}
+	if !strings.Contains(formExtSnapshot, "<ExcludedCommand>Post</ExcludedCommand>") {
+		t.Fatalf("expected borrowed form to keep valid form-level excluded command, got:\n%s", formExtSnapshot)
+	}
+	if !strings.Contains(formExtSnapshot, "<ExcludedCommand>SetDeletionMark</ExcludedCommand>") {
+		t.Fatalf("expected borrowed form to keep allowed adopted excluded command SetDeletionMark, got:\n%s", formExtSnapshot)
+	}
+	rootCommandSet := formExtCtx.Doc.Root().FindElement("./CommandSet")
+	if _, ok := collectExcludedCommands(rootCommandSet)["SetDeletionMark"]; !ok {
+		t.Fatalf("expected borrowed form root command set to keep SetDeletionMark, got %#v", collectExcludedCommands(rootCommandSet))
+	}
+	tableCommandSet := formExtCtx.Doc.FindElement(".//*[local-name()='Table']/*[local-name()='CommandSet']")
+	if _, ok := collectExcludedCommands(tableCommandSet)["SetDeletionMark"]; ok {
+		t.Fatalf("expected borrowed form nested command set to drop SetDeletionMark, got %#v", collectExcludedCommands(tableCommandSet))
+	}
+	attributes := formExtCtx.Doc.FindElements(".//*[local-name()='Attributes']")
+	if len(attributes) == 0 {
+		t.Fatalf("expected borrowed form to keep empty Attributes containers")
+	}
+	for _, attrs := range attributes {
+		if len(attrs.ChildElements()) != 0 {
+			t.Fatalf("expected borrowed form Attributes to be empty, got %d children", len(attrs.ChildElements()))
+		}
+	}
+	if _, ok := state.ObjectOverlays["Document.ЗаказПокупателя"].PreserveForms["ФормаДокумента"]; !ok {
+		t.Fatalf("expected matched target form to stay preserved")
+	}
+	if _, ok := state.TargetBorrowedFormPaths[formExtPath]; !ok {
+		t.Fatalf("expected matched target form path to be marked as target-borrowed")
+	}
+}
+
+func TestApplyTargetBorrowedAdoptedFormsFallsBackToFullName(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	targetRoot := filepath.Join(root, "target")
+	ownerRelPath := "Documents/ЗаказПокупателя.xml"
+	formMetaRelPath := "Documents/ЗаказПокупателя/Forms/ФормаДокумента.xml"
+	formExtRelPath := "Documents/ЗаказПокупателя/Forms/ФормаДокумента/Ext/Form.xml"
+
+	for _, path := range []string{
+		filepath.Join(root, filepath.FromSlash(ownerRelPath)),
+		filepath.Join(root, filepath.FromSlash(formMetaRelPath)),
+		filepath.Join(root, filepath.FromSlash(formExtRelPath)),
+		filepath.Join(targetRoot, filepath.FromSlash(formMetaRelPath)),
+		filepath.Join(targetRoot, filepath.FromSlash(formExtRelPath)),
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(ownerRelPath)), []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><Document><Properties><Name>ЗаказПокупателя</Name></Properties></Document></MetaDataObject>`), 0o644); err != nil {
+		t.Fatalf("write owner xml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(formMetaRelPath)), []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><Form uuid="22222222-2222-2222-2222-222222222222"><Properties><Name>ФормаДокумента</Name></Properties></Form></MetaDataObject>`), 0o644); err != nil {
+		t.Fatalf("write current form xml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(formExtRelPath)), []byte(`<?xml version="1.0" encoding="UTF-8"?><Form xmlns="http://v8.1c.ru/8.3/xcf/logform"/>`), 0o644); err != nil {
+		t.Fatalf("write current ext form: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(targetRoot, filepath.FromSlash(formMetaRelPath)), []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><Form uuid="33333333-3333-3333-3333-333333333333"><Properties><Name>ФормаДокумента</Name><Comment/></Properties></Form></MetaDataObject>`), 0o644); err != nil {
+		t.Fatalf("write target form xml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(targetRoot, filepath.FromSlash(formExtRelPath)), []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Form xmlns="http://v8.1c.ru/8.3/xcf/logform"><ChildItems><Button><CommandName>Form.Command.Тест</CommandName></Button></ChildItems></Form>`), 0o644); err != nil {
+		t.Fatalf("write target ext form: %v", err)
+	}
+
+	ownerDoc, _ := readXMLFile(filepath.Join(root, filepath.FromSlash(ownerRelPath)))
+	formMetaDoc, _ := readXMLFile(filepath.Join(root, filepath.FromSlash(formMetaRelPath)))
+	formExtDoc, _ := readXMLFile(filepath.Join(root, filepath.FromSlash(formExtRelPath)))
+	contexts := []*FileProcessingContext{
+		{Doc: ownerDoc, Path: filepath.Join(root, filepath.FromSlash(ownerRelPath)), RelPath: ownerRelPath, FileName: "ЗаказПокупателя.xml", Metadata: true, TopLevelMetadata: true, Properties: findProperties(ownerDoc), OwnerKey: "Document.ЗаказПокупателя", OwnerKind: "Document", OwnerName: "ЗаказПокупателя"},
+		{Doc: formMetaDoc, Path: filepath.Join(root, filepath.FromSlash(formMetaRelPath)), RelPath: formMetaRelPath, FileName: "ФормаДокумента.xml", Metadata: true, Properties: findProperties(formMetaDoc), OwnerKey: "Document.ЗаказПокупателя", OwnerKind: "Document", OwnerName: "ЗаказПокупателя"},
+		{Doc: formExtDoc, Path: filepath.Join(root, filepath.FromSlash(formExtRelPath)), RelPath: formExtRelPath, FileName: "Form.xml", OwnerKey: "Document.ЗаказПокупателя", OwnerKind: "Document", OwnerName: "ЗаказПокупателя"},
+	}
+	indexes := buildContextIndexes(contexts)
+	state := newSearchResultState()
+	state.ObjectOverlays["Document.ЗаказПокупателя"] = searchResultObjectOverlay{PreserveForms: map[string]struct{}{"ФормаДокумента": {}}}
+	state.PreservedPaths[filepath.Join(root, filepath.FromSlash(formMetaRelPath))] = struct{}{}
+	state.PreservedPaths[filepath.Join(root, filepath.FromSlash(formExtRelPath))] = struct{}{}
+	decisions := map[string]objectDecision{"Document.ЗаказПокупателя": {Belonging: "AdoptedStub", SearchResultCode: true}}
+	cfg := &config.Configuration{}
+	cfg.Target.XMLDump = targetRoot
+
+	contexts, indexes, _, err := applyTargetBorrowedAdoptedForms(cfg, root, contexts, indexes, decisions, state)
+	if err != nil {
+		t.Fatalf("apply target borrowed forms: %v", err)
+	}
+
+	formMetaCtx := findContextByRelPath(indexes, contexts, formMetaRelPath)
+	if got := textOf(formMetaCtx.Properties, "ExtendedConfigurationObject"); got != "33333333-3333-3333-3333-333333333333" {
+		t.Fatalf("expected full-name fallback to target form uuid, got %q", got)
+	}
+}
+
+func TestApplyTargetBorrowedAdoptedFormsDropsPreservedFormWithoutTargetMatch(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	targetRoot := filepath.Join(root, "target")
+	ownerRelPath := "Documents/ЗаказПокупателя.xml"
+	formMetaRelPath := "Documents/ЗаказПокупателя/Forms/ФормаДокумента.xml"
+	formExtRelPath := "Documents/ЗаказПокупателя/Forms/ФормаДокумента/Ext/Form.xml"
+
+	for _, path := range []string{
+		filepath.Join(root, filepath.FromSlash(ownerRelPath)),
+		filepath.Join(root, filepath.FromSlash(formMetaRelPath)),
+		filepath.Join(root, filepath.FromSlash(formExtRelPath)),
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(ownerRelPath)), []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><Document><Properties><Name>ЗаказПокупателя</Name></Properties></Document></MetaDataObject>`), 0o644); err != nil {
+		t.Fatalf("write owner xml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(formMetaRelPath)), []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses"><Form uuid="44444444-4444-4444-4444-444444444444"><Properties><Name>ФормаДокумента</Name></Properties></Form></MetaDataObject>`), 0o644); err != nil {
+		t.Fatalf("write form metadata xml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(formExtRelPath)), []byte(`<?xml version="1.0" encoding="UTF-8"?><Form xmlns="http://v8.1c.ru/8.3/xcf/logform"/>`), 0o644); err != nil {
+		t.Fatalf("write form ext xml: %v", err)
+	}
+	if err := os.MkdirAll(targetRoot, 0o755); err != nil {
+		t.Fatalf("mkdir target root: %v", err)
+	}
+
+	ownerDoc, _ := readXMLFile(filepath.Join(root, filepath.FromSlash(ownerRelPath)))
+	formMetaDoc, _ := readXMLFile(filepath.Join(root, filepath.FromSlash(formMetaRelPath)))
+	formExtDoc, _ := readXMLFile(filepath.Join(root, filepath.FromSlash(formExtRelPath)))
+	contexts := []*FileProcessingContext{
+		{Doc: ownerDoc, Path: filepath.Join(root, filepath.FromSlash(ownerRelPath)), RelPath: ownerRelPath, FileName: "ЗаказПокупателя.xml", Metadata: true, TopLevelMetadata: true, Properties: findProperties(ownerDoc), OwnerKey: "Document.ЗаказПокупателя", OwnerKind: "Document", OwnerName: "ЗаказПокупателя"},
+		{Doc: formMetaDoc, Path: filepath.Join(root, filepath.FromSlash(formMetaRelPath)), RelPath: formMetaRelPath, FileName: "ФормаДокумента.xml", Metadata: true, Properties: findProperties(formMetaDoc), OwnerKey: "Document.ЗаказПокупателя", OwnerKind: "Document", OwnerName: "ЗаказПокупателя"},
+		{Doc: formExtDoc, Path: filepath.Join(root, filepath.FromSlash(formExtRelPath)), RelPath: formExtRelPath, FileName: "Form.xml", OwnerKey: "Document.ЗаказПокупателя", OwnerKind: "Document", OwnerName: "ЗаказПокупателя"},
+	}
+	indexes := buildContextIndexes(contexts)
+	state := newSearchResultState()
+	state.ObjectOverlays["Document.ЗаказПокупателя"] = searchResultObjectOverlay{PreserveForms: map[string]struct{}{"ФормаДокумента": {}}}
+	formMetaPath := filepath.Join(root, filepath.FromSlash(formMetaRelPath))
+	formExtPath := filepath.Join(root, filepath.FromSlash(formExtRelPath))
+	state.PreservedPaths[formMetaPath] = struct{}{}
+	state.PreservedPaths[formExtPath] = struct{}{}
+	state.PreservedConfigDumpInfo["Document.ЗаказПокупателя.Form.ФормаДокумента"] = struct{}{}
+	state.PreservedConfigDumpInfo["Document.ЗаказПокупателя.Form.ФормаДокумента.Form"] = struct{}{}
+	decisions := map[string]objectDecision{"Document.ЗаказПокупателя": {Belonging: "AdoptedStub", SearchResultCode: true}}
+	cfg := &config.Configuration{}
+	cfg.Target.XMLDump = targetRoot
+
+	_, _, state, err := applyTargetBorrowedAdoptedForms(cfg, root, contexts, indexes, decisions, state)
+	if err != nil {
+		t.Fatalf("apply target borrowed forms: %v", err)
+	}
+
+	if _, ok := state.ObjectOverlays["Document.ЗаказПокупателя"].PreserveForms["ФормаДокумента"]; ok {
+		t.Fatalf("expected unmatched form to be dropped from preserve set")
+	}
+	if _, ok := state.PreservedPaths[formMetaPath]; ok {
+		t.Fatalf("expected unmatched form metadata path to be removed from preserved paths")
+	}
+	if _, ok := state.PreservedConfigDumpInfo["Document.ЗаказПокупателя.Form.ФормаДокумента"]; ok {
+		t.Fatalf("expected unmatched form metadata to be removed from preserved ConfigDumpInfo")
 	}
 }
 
