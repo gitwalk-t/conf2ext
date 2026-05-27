@@ -27,6 +27,12 @@ Task routing не хранится в этом skill.
 .codex/index.md
 ```
 
+GitHub operations:
+
+```text
+.codex/skills/github-operations.md
+```
+
 ## Canonical issue template
 
 Основной шаблон задачи:
@@ -54,59 +60,10 @@ Task routing не хранится в этом skill.
 
 ## Выполнение задачи из issue
 
-Стандартный flow:
+Использовать:
 
 ```text
-1. Прочитать issue.
-2. Сформулировать краткий план в рабочем сообщении.
-3. Проверить актуальность локального репозитория через .codex/skills/update-repo-from-git.md, если работа идет в локальном worktree.
-4. Создать или выбрать branch под issue.
-5. Внести минимальные изменения.
-6. Запустить минимальные проверки.
-7. Зафиксировать результат commit/PR.
-8. Оставить комментарий в issue.
-```
-
-Branch naming:
-
-```text
-codex/issue-<number>-<short-slug>
-```
-
-Commit message:
-
-```text
-<area>: <short change summary>
-
-Refs #<issue-number>
-```
-
-Если issue закрывается полностью, в PR или финальном commit можно использовать:
-
-```text
-Fixes #<issue-number>
-```
-
-## Комментарий в issue после выполнения
-
-Финальный комментарий должен быть коротким и проверяемым:
-
-```md
-## Результат
-- Что изменено.
-- Какие файлы затронуты.
-
-## Проверки
-- `go build ./...` — результат
-- `go test ./...` — результат
-- дополнительные прогоны — результат или причина пропуска
-
-## Git
-- branch: `...`
-- commit/PR: `...`
-
-## Остаточные риски
-- если есть
+.codex/skills/github-operations.md
 ```
 
 ## Если issue неполный
