@@ -17,6 +17,12 @@
 - не дублируют правило;
 - только ссылаются.
 
+GitHub workflow policy:
+
+```text
+.codex/skills/github-operations.md
+```
+
 ---
 
 ## Layering
@@ -24,7 +30,6 @@
 ### README.md
 
 Только human-facing информация:
-
 - назначение проекта;
 - quick start;
 - high-level architecture;
@@ -62,6 +67,14 @@ Skills не должны:
 - дублировать policy;
 - содержать архитектурный обзор;
 - повторять git/update workflow.
+
+GitHub workflow details не копировать между skills.
+
+Использовать:
+
+```text
+.codex/skills/github-operations.md
+```
 
 ---
 
