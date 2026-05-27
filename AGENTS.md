@@ -32,6 +32,7 @@
 ### GitHub Issue workflow
 
 - `.codex/skills/use-github-issue-task.md`
+- `.codex/skills/github-operations.md`
 
 ### Repository update
 
@@ -64,6 +65,8 @@
 - `forbidden_*` — hard exclude.
 - BSL не источник classification rules.
 - `configs/config.json` — основной локальный config.
+- GitHub connector — primary GitHub integration.
+- `gh` CLI не гарантирован.
 
 ---
 
