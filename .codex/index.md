@@ -65,6 +65,7 @@
 - `.codex/skills/check-run-status.md`
 - `.codex/skills/cleanup-run-tails.md`
 - `.codex/skills/use-github-issue-task.md`
+- `.codex/skills/github-operations.md`
 - `.codex/skills/update-repo-from-git.md`
 
 ---
